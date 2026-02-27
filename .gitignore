@@ -1,0 +1,16 @@
+# Config with local IPs, API keys, room assignments
+backend/config.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+backend/venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/

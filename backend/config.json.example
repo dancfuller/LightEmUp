@@ -1,0 +1,16 @@
+{
+  "hue_bridge_ip": null,
+  "hue_username": null,
+  "govee_api_key": null,
+  "rooms": {
+    "Living Room": {
+      "hue_light_ids": [],
+      "govee_devices": []
+    },
+    "Bedroom": {
+      "hue_light_ids": [],
+      "govee_devices": []
+    }
+  },
+  "nicknames": {}
+}
