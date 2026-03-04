@@ -145,6 +145,7 @@ async def get_hue_lights(ip: str, username: str) -> list[dict]:
                         "brightness": info.get("state", {}).get("bri", 0),
                         "hue": info.get("state", {}).get("hue"),
                         "saturation": info.get("state", {}).get("sat"),
+                        "xy": info.get("state", {}).get("xy"),
                         "color_temp": info.get("state", {}).get("ct"),
                         "color_mode": info.get("state", {}).get("colormode"),
                         "reachable": info.get("state", {}).get("reachable", False),
@@ -342,16 +343,36 @@ async def govee_lan_color_temp(ip: str, kelvin: int) -> Optional[dict]:
 
 async def govee_lan_get_state(ip: str) -> Optional[dict]:
     """Query a Govee device's current state via LAN."""
-    resp = await govee_lan_command(ip, "devStatus", {})
-    if resp and resp.get("msg", {}).get("cmd") == "devStatus":
-        data = resp["msg"].get("data", {})
-        return {
-            "on": data.get("onOff", 0) == 1,
-            "brightness": data.get("brightness", 0),
-            "color": data.get("color", {}),
-            "color_temp": data.get("colorTemInKelvin", 0),
-        }
-    return None
+    loop = asyncio.get_event_loop()
+
+    def _query():
+        message = json.dumps({"msg": {"cmd": "devStatus", "data": {}}})
+        send_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        send_sock.settimeout(2.0)
+        recv_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        recv_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        recv_sock.settimeout(2.0)
+        try:
+            recv_sock.bind(("", GOVEE_LISTEN_PORT))
+            send_sock.sendto(message.encode(), (ip, GOVEE_COMMAND_PORT))
+            resp_data, _ = recv_sock.recvfrom(4096)
+            resp = json.loads(resp_data.decode("utf-8"))
+            if resp.get("msg", {}).get("cmd") == "devStatus":
+                data = resp["msg"].get("data", {})
+                return {
+                    "on": data.get("onOff", 0) == 1,
+                    "brightness": data.get("brightness", 0),
+                    "color": data.get("color", {}),
+                    "color_temp": data.get("colorTemInKelvin", 0),
+                }
+        except (socket.timeout, OSError):
+            pass
+        finally:
+            send_sock.close()
+            recv_sock.close()
+        return None
+
+    return await loop.run_in_executor(None, _query)
 
 
 # ─── Govee Cloud API (fallback) ─────────────────────────────────────────────

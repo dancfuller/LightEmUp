@@ -146,9 +146,8 @@ async def discover_govee():
     """Discover Govee devices via LAN and fetch their current state."""
     devices = await discover_govee_lan()
 
-    # Fetch state for each device in parallel
-    import asyncio as _aio
-    async def _enrich(dev):
+    # Fetch state for each device sequentially (they all share port 4002)
+    for dev in devices:
         try:
             state = await govee_lan_get_state(dev["ip"])
             if state:
@@ -161,12 +160,10 @@ async def discover_govee():
                 }
             else:
                 dev["state"] = {"on": False, "brightness": 0, "reachable": True}
-        except:
+        except Exception:
             dev["state"] = {"on": False, "brightness": 0, "reachable": False}
-        return dev
 
-    devices = await _aio.gather(*[_enrich(d) for d in devices])
-    return {"devices": list(devices)}
+    return {"devices": devices}
 
 
 @app.get("/api/discover/govee/cloud")

@@ -21,6 +21,7 @@
       opacity: 1;
     }
     select { -webkit-appearance: auto; }
+    @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
   </style>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
@@ -91,6 +92,76 @@ function getDeviceDisplayName(device, nicknames) {
     ? (device.product_name || device.name || device.model || `Light ${device.id}`)
     : (GOVEE_SKU_NAMES[device.sku] || device.name || device.sku || "Govee Device");
   return { nickname, friendlyName, deviceKey };
+}
+
+// ─── Color Conversion Helpers ───────────────────────────────────────────────
+
+function hueXYToRGB(xy, bri) {
+  // Convert Hue CIE xy + brightness to RGB
+  if (!xy || xy.length < 2) return null;
+  const [x, y] = xy;
+  const z = 1.0 - x - y;
+  const Y = (bri || 254) / 254;
+  const X = (Y / y) * x;
+  const Z = (Y / y) * z;
+  // Wide RGB D65 conversion
+  let r = X * 1.656492 - Y * 0.354851 - Z * 0.255038;
+  let g = -X * 0.707196 + Y * 1.655397 + Z * 0.036152;
+  let b = X * 0.051713 - Y * 0.121364 + Z * 1.011530;
+  // Gamma correction
+  r = r <= 0.0031308 ? 12.92 * r : (1.0 + 0.055) * Math.pow(r, 1.0 / 2.4) - 0.055;
+  g = g <= 0.0031308 ? 12.92 * g : (1.0 + 0.055) * Math.pow(g, 1.0 / 2.4) - 0.055;
+  b = b <= 0.0031308 ? 12.92 * b : (1.0 + 0.055) * Math.pow(b, 1.0 / 2.4) - 0.055;
+  return {
+    r: Math.max(0, Math.min(255, Math.round(r * 255))),
+    g: Math.max(0, Math.min(255, Math.round(g * 255))),
+    b: Math.max(0, Math.min(255, Math.round(b * 255))),
+  };
+}
+
+function hueSatToRGB(hue, sat) {
+  // Convert Hue hue (0-65535) + sat (0-254) to RGB
+  if (hue == null || sat == null) return null;
+  const h = hue / 65535;
+  const s = sat / 254;
+  const v = 1;
+  const i = Math.floor(h * 6);
+  const f = h * 6 - i;
+  const p = v * (1 - s);
+  const q = v * (1 - f * s);
+  const t = v * (1 - (1 - f) * s);
+  let r, g, b;
+  switch (i % 6) {
+    case 0: r = v; g = t; b = p; break;
+    case 1: r = q; g = v; b = p; break;
+    case 2: r = p; g = v; b = t; break;
+    case 3: r = p; g = q; b = v; break;
+    case 4: r = t; g = p; b = v; break;
+    case 5: r = v; g = p; b = q; break;
+  }
+  return {
+    r: Math.max(0, Math.min(255, Math.round(r * 255))),
+    g: Math.max(0, Math.min(255, Math.round(g * 255))),
+    b: Math.max(0, Math.min(255, Math.round(b * 255))),
+  };
+}
+
+function getInitialColor(light) {
+  if (light.type === "govee" && light.state?.color) {
+    const c = light.state.color;
+    if (c.r != null) return { r: c.r, g: c.g, b: c.b };
+  }
+  if (light.type === "hue" && light.state) {
+    // Prefer xy if available
+    if (light.state.xy) {
+      return hueXYToRGB(light.state.xy, light.state.brightness);
+    }
+    // Fall back to hue/sat
+    if (light.state.hue != null && light.state.saturation != null) {
+      return hueSatToRGB(light.state.hue, light.state.saturation);
+    }
+  }
+  return null;
 }
 
 const STORAGE_KEY = "lightemup_fav_colors";
@@ -460,9 +531,18 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
   const [brightness, setBrightness] = useState(
     light.type === "hue" ? Math.round((light.state?.brightness || 0) / 254 * 100) : (light.state?.brightness ?? 50)
   );
-  const [lightColor, setLightColor] = useState(null);
+  const [lightColor, setLightColor] = useState(() => getInitialColor(light));
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState("");
+
+  // Sync state when light prop changes (e.g. after refresh)
+  useEffect(() => {
+    setBrightness(
+      light.type === "hue" ? Math.round((light.state?.brightness || 0) / 254 * 100) : (light.state?.brightness ?? 50)
+    );
+    const c = getInitialColor(light);
+    if (c) setLightColor(c);
+  }, [light.state?.on, light.state?.brightness, light.state?.hue, light.state?.saturation, light.state?.xy, light.state?.color?.r, light.state?.color?.g, light.state?.color?.b]);
   const isOn = light.state?.on ?? false;
   const isReachable = light.state?.reachable ?? true;
   const hasColor = light.capabilities?.has_color;
@@ -1369,6 +1449,7 @@ function App() {
   const [showHueSetup, setShowHueSetup] = useState(false);
   const [favoriteColors, setFavoriteColors] = useState(() => loadFavoriteColors());
   const [nicknames, setNicknames] = useState({});
+  const [refreshing, setRefreshing] = useState(false);
 
   const updateFavorites = (newFavs) => {
     setFavoriteColors(newFavs);
@@ -1419,6 +1500,15 @@ function App() {
   }, []);
 
   useEffect(() => { loadAll(); }, [loadAll]);
+
+  const refreshState = async () => {
+    setRefreshing(true);
+    try {
+      await loadAll();
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   const controlHueLight = async (light, cmd) => {
     api("/hue/light", {
@@ -1524,6 +1614,22 @@ function App() {
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <span style={{ fontSize: 28 }}>🔆</span>
           <h1 style={{ fontSize: 22, fontWeight: 800, margin: 0, letterSpacing: -0.5 }}>LightEmUp</h1>
+          <button
+            onClick={refreshState}
+            disabled={refreshing}
+            title="Refresh all device states"
+            style={{
+              width: 32, height: 32, borderRadius: "50%", border: "1px solid #334155",
+              background: refreshing ? "rgba(99,102,241,0.15)" : "transparent",
+              color: refreshing ? "#a5b4fc" : "#64748b",
+              cursor: refreshing ? "default" : "pointer",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              fontSize: 16, transition: "all 0.2s",
+              animation: refreshing ? "spin 1s linear infinite" : "none",
+            }}
+          >
+            ↻
+          </button>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <button
