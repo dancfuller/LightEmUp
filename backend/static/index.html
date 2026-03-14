@@ -1150,7 +1150,7 @@ function LightningPanel({ roomName, isActive, onStart, onStop, goveeDevices, seg
                 {settings.thunder_enabled ? "Thunder enabled" : "Off"}
               </span>
             </div>
-            {settings.thunder_enabled && (
+            {settings.thunder_enabled && (<React.Fragment>
               <div style={{ display: "flex", gap: 6 }}>
                 <button
                   onClick={() => updateSetting("thunder_immediate", false)}
@@ -1191,7 +1191,7 @@ function LightningPanel({ roomName, isActive, onStart, onStop, goveeDevices, seg
                   {settings.thunder_funny ? "Funny thunder (farts)" : "Funny thunder"}
                 </span>
               </div>
-            )}
+            </React.Fragment>)}
           </div>
 
           {/* Govee Segment Mode */}
@@ -1274,6 +1274,7 @@ function LightningPanel({ roomName, isActive, onStart, onStop, goveeDevices, seg
 }
 
 function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGovee, onControlRoom, favorites, onFavoritesChange, nicknames, onNicknameChange, lightningActive, onLightningStart, onLightningStop, segmentInfo }) {
+  const [collapsed, setCollapsed] = useState(false);
   const [showRoomControls, setShowRoomControls] = useState(false);
   const [showLightning, setShowLightning] = useState(false);
   const [roomBrightness, setRoomBrightness] = useState(75);
@@ -1303,7 +1304,11 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
         display: "flex", justifyContent: "space-between", alignItems: "center",
         marginBottom: 4, paddingBottom: 12, borderBottom: "1px solid #1e293b",
       }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div
+          onClick={() => setCollapsed(!collapsed)}
+          style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", userSelect: "none" }}
+        >
+          <span style={{ fontSize: 14, color: "#64748b", transition: "transform 0.2s", transform: collapsed ? "rotate(-90deg)" : "rotate(0deg)", display: "inline-block" }}>&#x25BC;</span>
           <h2 style={{ fontSize: 20, fontWeight: 700, color: "#f8fafc", margin: 0 }}>{name}</h2>
           <span style={{ fontSize: 12, color: "#64748b" }}>{allLights.length} lights</span>
         </div>
@@ -1344,68 +1349,70 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
         </div>
       </div>
 
-      {/* Lightning panel */}
-      {showLightning && (
-        <LightningPanel
-          roomName={name}
-          isActive={lightningActive}
-          onStart={onLightningStart}
-          onStop={onLightningStop}
-          goveeDevices={goveeDevices}
-          segmentInfo={segmentInfo}
-        />
-      )}
+      {!collapsed && (<React.Fragment>
+        {/* Lightning panel */}
+        {showLightning && (
+          <LightningPanel
+            roomName={name}
+            isActive={lightningActive}
+            onStart={onLightningStart}
+            onStop={onLightningStop}
+            goveeDevices={goveeDevices}
+            segmentInfo={segmentInfo}
+          />
+        )}
 
-      {/* Room-level controls panel */}
-      {showRoomControls && (
-        <div style={{
-          background: "linear-gradient(135deg, #1e293b 0%, #172033 100%)",
-          borderRadius: 16, padding: 20, marginBottom: 16,
-          border: "1px solid #334155",
-        }}>
+        {/* Room-level controls panel */}
+        {showRoomControls && (
           <div style={{
-            fontSize: 12, fontWeight: 600, color: "#a5b4fc", marginBottom: 14,
-            textTransform: "uppercase", letterSpacing: 0.8,
+            background: "linear-gradient(135deg, #1e293b 0%, #172033 100%)",
+            borderRadius: 16, padding: 20, marginBottom: 16,
+            border: "1px solid #334155",
           }}>
-            Override all lights in {name}
-          </div>
-
-          <Slider
-            label="Room Brightness" value={roomBrightness} min={0} max={100}
-            onChange={applyRoomBrightness}
-            color="#fbbf24" unit="%"
-          />
-
-          {anyColor && (
-            <div style={{ marginTop: 4 }}>
-              <ColorPicker
-                size={160}
-                currentColor={roomColor}
-                onColorSelect={applyRoomColor}
-                favorites={favorites}
-                onFavoritesChange={onFavoritesChange}
-              />
+            <div style={{
+              fontSize: 12, fontWeight: 600, color: "#a5b4fc", marginBottom: 14,
+              textTransform: "uppercase", letterSpacing: 0.8,
+            }}>
+              Override all lights in {name}
             </div>
-          )}
-        </div>
-      )}
 
-      {/* Individual light cards */}
-      <div style={{
-        display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 12,
-      }}>
-        {allLights.map((light, i) => (
-          <LightCard
-            key={`${light.type}-${light.id || light.ip}-${i}`}
-            light={light}
-            onControl={(l, cmd) => l._controlFn(l, cmd)}
-            favorites={favorites}
-            onFavoritesChange={onFavoritesChange}
-            nicknames={nicknames}
-            onNicknameChange={onNicknameChange}
-          />
-        ))}
-      </div>
+            <Slider
+              label="Room Brightness" value={roomBrightness} min={0} max={100}
+              onChange={applyRoomBrightness}
+              color="#fbbf24" unit="%"
+            />
+
+            {anyColor && (
+              <div style={{ marginTop: 4 }}>
+                <ColorPicker
+                  size={160}
+                  currentColor={roomColor}
+                  onColorSelect={applyRoomColor}
+                  favorites={favorites}
+                  onFavoritesChange={onFavoritesChange}
+                />
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Individual light cards */}
+        <div style={{
+          display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 12,
+        }}>
+          {allLights.map((light, i) => (
+            <LightCard
+              key={`${light.type}-${light.id || light.ip}-${i}`}
+              light={light}
+              onControl={(l, cmd) => l._controlFn(l, cmd)}
+              favorites={favorites}
+              onFavoritesChange={onFavoritesChange}
+              nicknames={nicknames}
+              onNicknameChange={onNicknameChange}
+            />
+          ))}
+        </div>
+      </React.Fragment>)}
     </div>
   );
 }
