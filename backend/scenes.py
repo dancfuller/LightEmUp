@@ -54,6 +54,7 @@ class LightningSettings(BaseModel):
     burst_count_min: int = 1
     burst_count_max: int = 2
     inter_burst_gap_ms: int = 80
+    thunder_enabled: bool = False
 
 
 # ─── Pattern Generation ───────────────────────────────────────────────────
@@ -163,6 +164,9 @@ class SceneManager:
         self.active_scenes: dict[str, dict] = {}
         # Hue bridge rate-limit guard (~10 req/s, allow max 8 concurrent).
         self._hue_semaphore = asyncio.Semaphore(8)
+        # Flash event subscribers for thunder SSE (room_name -> list of queues).
+        self._flash_subscribers: dict[str, list[asyncio.Queue]] = {}
+        self._last_flash_notify: dict[str, float] = {}
 
     # ── public API ─────────────────────────────────────────────────────
 
@@ -210,7 +214,7 @@ class SceneManager:
             for idx, light_id in enumerate(hue_ids):
                 pattern = generate_pattern(settings, seed=hash((room_name, "hue", light_id, idx)))
                 task = asyncio.create_task(
-                    self._run_hue_light(light_id, pattern, hue_ip, hue_username, settings, stop_event),
+                    self._run_hue_light(room_name, light_id, pattern, hue_ip, hue_username, settings, stop_event),
                     name=f"lightning-hue-{room_name}-{light_id}",
                 )
                 tasks.append(task)
@@ -236,7 +240,7 @@ class SceneManager:
                     for s in range(segment_count)
                 ]
                 task = asyncio.create_task(
-                    self._run_govee_segments(ip, seg_patterns, settings, stop_event),
+                    self._run_govee_segments(room_name, ip, seg_patterns, settings, stop_event),
                     name=f"lightning-govseg-{room_name}-{ip}",
                 )
                 tasks.append(task)
@@ -251,7 +255,7 @@ class SceneManager:
                 # Whole-device mode.
                 pattern = generate_pattern(settings, seed=hash((room_name, "govee", ip, idx)))
                 task = asyncio.create_task(
-                    self._run_govee_device(ip, pattern, settings, stop_event),
+                    self._run_govee_device(room_name, ip, pattern, settings, stop_event),
                     name=f"lightning-govee-{room_name}-{ip}",
                 )
                 tasks.append(task)
@@ -313,6 +317,33 @@ class SceneManager:
 
     def get_active_rooms(self) -> list[str]:
         return list(self.active_scenes.keys())
+
+    # ── flash event pub/sub (for thunder SSE) ─────────────────────────
+
+    def subscribe_flashes(self, room_name: str) -> asyncio.Queue:
+        """Add a subscriber queue for flash events in *room_name*."""
+        queue: asyncio.Queue = asyncio.Queue(maxsize=64)
+        self._flash_subscribers.setdefault(room_name, []).append(queue)
+        return queue
+
+    def unsubscribe_flashes(self, room_name: str, queue: asyncio.Queue) -> None:
+        """Remove a subscriber queue."""
+        subs = self._flash_subscribers.get(room_name, [])
+        if queue in subs:
+            subs.remove(queue)
+
+    def _notify_flash(self, room_name: str) -> None:
+        """Notify subscribers of a flash event, debounced per room (300ms)."""
+        now = asyncio.get_event_loop().time()
+        last = self._last_flash_notify.get(room_name, 0)
+        if now - last < 0.3:
+            return
+        self._last_flash_notify[room_name] = now
+        for queue in self._flash_subscribers.get(room_name, []):
+            try:
+                queue.put_nowait({"type": "flash"})
+            except asyncio.QueueFull:
+                pass
 
     # ── snapshot / restore ─────────────────────────────────────────────
 
@@ -419,6 +450,7 @@ class SceneManager:
 
     async def _run_hue_light(
         self,
+        room_name: str,
         light_id: str,
         pattern: list[Event],
         hue_ip: str,
@@ -489,11 +521,14 @@ class SceneManager:
                 try:
                     async with self._hue_semaphore:
                         await set_hue_light_state(hue_ip, username, light_id, state)
+                    if event.action == "flash":
+                        self._notify_flash(room_name)
                 except Exception as exc:
                     log.debug("Hue command failed for %s: %s", light_id, exc)
 
     async def _run_govee_device(
         self,
+        room_name: str,
         ip: str,
         pattern: list[Event],
         settings: LightningSettings,
@@ -529,6 +564,7 @@ class SceneManager:
                             await govee_lan_color(
                                 ip, settings.color_r, settings.color_g, settings.color_b
                             )
+                        self._notify_flash(room_name)
                     else:
                         # dim
                         await govee_lan_brightness(ip, settings.background_brightness)
@@ -543,6 +579,7 @@ class SceneManager:
 
     async def _run_govee_segments(
         self,
+        room_name: str,
         ip: str,
         segment_patterns: list[list[Event]],
         settings: LightningSettings,
@@ -624,6 +661,8 @@ class SceneManager:
 
                 try:
                     await govee_razer_set_segments(ip, colors)
+                    if tev.action == "flash":
+                        self._notify_flash(room_name)
                 except Exception as exc:
                     log.debug("Razer segment command failed for %s: %s", ip, exc)
 

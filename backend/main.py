@@ -2,6 +2,7 @@
 LightEmUp - FastAPI backend for controlling Hue and Govee lights.
 """
 
+import asyncio
 import json
 import os
 from pathlib import Path
@@ -10,7 +11,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import Optional
 
@@ -136,6 +137,8 @@ class LightningSettingsRequest(BaseModel):
     burst_count_min: Optional[int] = None
     burst_count_max: Optional[int] = None
     inter_burst_gap_ms: Optional[int] = None
+    govee_flash: Optional[bool] = None
+    thunder_enabled: Optional[bool] = None
 
 class GoveeSegmentModeRequest(BaseModel):
     room_name: str
@@ -456,6 +459,27 @@ async def save_lightning_settings(req: LightningSettingsRequest):
     config["lightning_scenes"][req.room_name] = existing
     save_config(config)
     return {"success": True, "settings": existing}
+
+
+@app.get("/api/scenes/lightning/events/{room_name}")
+async def lightning_events(room_name: str):
+    """SSE stream of flash events for thunder sound sync."""
+    async def event_stream():
+        queue = scene_manager.subscribe_flashes(room_name)
+        try:
+            while True:
+                data = await queue.get()
+                yield f"data: {json.dumps(data)}\n\n"
+        except asyncio.CancelledError:
+            pass
+        finally:
+            scene_manager.unsubscribe_flashes(room_name, queue)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.post("/api/govee/segment-mode")

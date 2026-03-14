@@ -700,6 +700,52 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
   );
 }
 
+// ─── Thunder Sound Synth ─────────────────────────────────────────────────────
+
+let _thunderCtx = null;
+
+function playThunder() {
+  // Reuse or create AudioContext (browsers limit the number of contexts).
+  if (!_thunderCtx || _thunderCtx.state === "closed") {
+    _thunderCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  const ctx = _thunderCtx;
+  if (ctx.state === "suspended") ctx.resume();
+
+  const duration = 1.5 + Math.random() * 2.5;
+  const sampleRate = ctx.sampleRate;
+  const numSamples = Math.floor(duration * sampleRate);
+  const buffer = ctx.createBuffer(1, numSamples, sampleRate);
+  const data = buffer.getChannelData(0);
+
+  // Brown noise with multi-layer envelope: sharp crack + long rumble.
+  let last = 0;
+  for (let i = 0; i < numSamples; i++) {
+    const t = i / sampleRate;
+    const crack = Math.exp(-t * 10) * 0.7;
+    const rumble = Math.exp(-t * 1.0) * (1.0 + 0.4 * Math.sin(t * 2.3));
+    const envelope = crack + rumble;
+    const white = Math.random() * 2 - 1;
+    last = (last + 0.02 * white) / 1.02;
+    data[i] = last * envelope * 35;
+  }
+
+  const source = ctx.createBufferSource();
+  source.buffer = buffer;
+
+  const lowpass = ctx.createBiquadFilter();
+  lowpass.type = "lowpass";
+  lowpass.frequency.value = 120 + Math.random() * 100;
+
+  const gain = ctx.createGain();
+  gain.gain.value = 0.8;
+
+  source.connect(lowpass);
+  lowpass.connect(gain);
+  gain.connect(ctx.destination);
+  source.start();
+}
+
 // ─── Lightning Scene Panel ────────────────────────────────────────────────────
 
 const LIGHTNING_PRESETS = {
@@ -734,7 +780,7 @@ function LightningPanel({ roomName, isActive, onStart, onStop, goveeDevices, seg
           color_temp_kelvin: 6500, use_color_temp: true,
           color_r: 220, color_g: 240, color_b: 255,
           background_brightness: 10, background_color_temp_k: 2700,
-          govee_flash: false,
+          govee_flash: false, thunder_enabled: false,
           min_gap_ms: 15000, max_gap_ms: 60000,
           flash_duration_min_ms: 50, flash_duration_max_ms: 200,
           burst_count_min: 1, burst_count_max: 2, inter_burst_gap_ms: 80,
@@ -742,6 +788,20 @@ function LightningPanel({ roomName, isActive, onStart, onStop, goveeDevices, seg
         setLoading(false);
       });
   }, [roomName]);
+
+  // SSE connection for thunder sound sync.
+  useEffect(() => {
+    if (!isActive || !settings?.thunder_enabled) return;
+    const es = new EventSource(`/api/scenes/lightning/events/${encodeURIComponent(roomName)}`);
+    es.onmessage = (e) => {
+      const data = JSON.parse(e.data);
+      if (data.type === "flash") {
+        const delay = 500 + Math.random() * 5500;
+        setTimeout(() => playThunder(), delay);
+      }
+    };
+    return () => es.close();
+  }, [isActive, settings?.thunder_enabled, roomName]);
 
   const updateSetting = (key, value) => {
     setSettings(prev => ({ ...prev, [key]: value }));
@@ -939,6 +999,33 @@ function LightningPanel({ roomName, isActive, onStart, onStop, goveeDevices, seg
                 <Slider label="Inter-burst Gap" value={settings.inter_burst_gap_ms} min={10} max={200} onChange={(v) => updateSetting("inter_burst_gap_ms", v)} color="#818cf8" unit="ms" />
               </div>
             )}
+          </div>
+
+          {/* Thunder Sound */}
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 600, color: "#a5b4fc", textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 8 }}>
+              Thunder Sound
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <button
+                onClick={() => updateSetting("thunder_enabled", !settings.thunder_enabled)}
+                style={{
+                  width: 40, height: 22, borderRadius: 11, border: "none", cursor: "pointer",
+                  background: settings.thunder_enabled ? "#6366f1" : "#334155",
+                  position: "relative", transition: "background 0.2s",
+                }}
+              >
+                <div style={{
+                  width: 16, height: 16, borderRadius: 8,
+                  background: "#fff", position: "absolute", top: 3,
+                  left: settings.thunder_enabled ? 21 : 3,
+                  transition: "left 0.2s",
+                }} />
+              </button>
+              <span style={{ fontSize: 12, color: "#94a3b8" }}>
+                {settings.thunder_enabled ? "Thunder plays 0.5–6s after each flash" : "Off"}
+              </span>
+            </div>
           </div>
 
           {/* Govee Segment Mode */}
