@@ -139,6 +139,7 @@ class LightningSettingsRequest(BaseModel):
     inter_burst_gap_ms: Optional[int] = None
     govee_flash: Optional[bool] = None
     thunder_enabled: Optional[bool] = None
+    thunder_immediate: Optional[bool] = None
 
 class GoveeSegmentModeRequest(BaseModel):
     room_name: str

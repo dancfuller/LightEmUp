@@ -780,7 +780,7 @@ function LightningPanel({ roomName, isActive, onStart, onStop, goveeDevices, seg
           color_temp_kelvin: 6500, use_color_temp: true,
           color_r: 220, color_g: 240, color_b: 255,
           background_brightness: 10, background_color_temp_k: 2700,
-          govee_flash: false, thunder_enabled: false,
+          govee_flash: false, thunder_enabled: false, thunder_immediate: false,
           min_gap_ms: 15000, max_gap_ms: 60000,
           flash_duration_min_ms: 50, flash_duration_max_ms: 200,
           burst_count_min: 1, burst_count_max: 2, inter_burst_gap_ms: 80,
@@ -792,16 +792,21 @@ function LightningPanel({ roomName, isActive, onStart, onStop, goveeDevices, seg
   // SSE connection for thunder sound sync.
   useEffect(() => {
     if (!isActive || !settings?.thunder_enabled) return;
+    const immediate = settings.thunder_immediate;
     const es = new EventSource(`/api/scenes/lightning/events/${encodeURIComponent(roomName)}`);
     es.onmessage = (e) => {
       const data = JSON.parse(e.data);
       if (data.type === "flash") {
-        const delay = 500 + Math.random() * 5500;
-        setTimeout(() => playThunder(), delay);
+        if (immediate) {
+          playThunder();
+        } else {
+          const delay = 500 + Math.random() * 5500;
+          setTimeout(() => playThunder(), delay);
+        }
       }
     };
     return () => es.close();
-  }, [isActive, settings?.thunder_enabled, roomName]);
+  }, [isActive, settings?.thunder_enabled, settings?.thunder_immediate, roomName]);
 
   const updateSetting = (key, value) => {
     setSettings(prev => ({ ...prev, [key]: value }));
@@ -1006,7 +1011,7 @@ function LightningPanel({ roomName, isActive, onStart, onStop, goveeDevices, seg
             <div style={{ fontSize: 11, fontWeight: 600, color: "#a5b4fc", textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 8 }}>
               Thunder Sound
             </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: settings.thunder_enabled ? 8 : 0 }}>
               <button
                 onClick={() => updateSetting("thunder_enabled", !settings.thunder_enabled)}
                 style={{
@@ -1023,9 +1028,31 @@ function LightningPanel({ roomName, isActive, onStart, onStop, goveeDevices, seg
                 }} />
               </button>
               <span style={{ fontSize: 12, color: "#94a3b8" }}>
-                {settings.thunder_enabled ? "Thunder plays 0.5–6s after each flash" : "Off"}
+                {settings.thunder_enabled ? "Thunder enabled" : "Off"}
               </span>
             </div>
+            {settings.thunder_enabled && (
+              <div style={{ display: "flex", gap: 6 }}>
+                <button
+                  onClick={() => updateSetting("thunder_immediate", false)}
+                  style={{
+                    padding: "5px 12px", borderRadius: 7, fontSize: 11, fontWeight: 600, cursor: "pointer",
+                    border: !settings.thunder_immediate ? "none" : "1px solid #334155",
+                    background: !settings.thunder_immediate ? "#6366f1" : "#1e293b",
+                    color: !settings.thunder_immediate ? "#fff" : "#94a3b8",
+                  }}
+                >Delayed (realistic)</button>
+                <button
+                  onClick={() => updateSetting("thunder_immediate", true)}
+                  style={{
+                    padding: "5px 12px", borderRadius: 7, fontSize: 11, fontWeight: 600, cursor: "pointer",
+                    border: settings.thunder_immediate ? "none" : "1px solid #334155",
+                    background: settings.thunder_immediate ? "#6366f1" : "#1e293b",
+                    color: settings.thunder_immediate ? "#fff" : "#94a3b8",
+                  }}
+                >Immediate</button>
+              </div>
+            )}
           </div>
 
           {/* Govee Segment Mode */}
