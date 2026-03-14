@@ -3,6 +3,7 @@ Device discovery module for Hue Bridge (mDNS/UPnP) and Govee LAN devices (UDP mu
 """
 
 import asyncio
+import base64
 import json
 import socket
 import struct
@@ -373,6 +374,77 @@ async def govee_lan_get_state(ip: str) -> Optional[dict]:
         return None
 
     return await loop.run_in_executor(None, _query)
+
+
+# ─── Govee Razer Protocol (Per-Segment) ──────────────────────────────────
+
+GOVEE_SEGMENT_INFO = {
+    "H6061": {"count": 7, "protocol": "razer", "name": "Glide Hexa Light Panels"},
+    "H7065": {"count": 2, "protocol": "unknown", "name": "Outdoor Spotlights 2-Pack"},
+    "H7066": {"count": 4, "protocol": "unknown", "name": "Outdoor Spotlights 4-Pack"},
+    "H70C1": {"count": None, "protocol": "unknown", "name": "Christmas String Lights 2"},
+    "H61D3": {"count": None, "protocol": "unknown", "name": "Neon Rope Light 2"},
+}
+
+
+def _build_razer_packet(command_byte: int, data: bytes) -> str:
+    """Build a Razer protocol packet and return its base64-encoded string.
+
+    Binary format: {0xBB, 0x00, data_size, command_byte, data..., checksum}
+    - data_size = len(data) + 1 (includes the command byte)
+    - Checksum = XOR of ALL preceding bytes in the packet
+    """
+    data_size = len(data) + 1
+    packet = bytes([0xBB, 0x00, data_size, command_byte]) + data
+    checksum = 0
+    for b in packet:
+        checksum ^= b
+    packet += bytes([checksum])
+    return base64.b64encode(packet).decode("ascii")
+
+
+async def _govee_lan_send(ip: str, cmd: str, data: dict) -> None:
+    """Send a command to a Govee device without waiting for response."""
+    loop = asyncio.get_event_loop()
+
+    def _send():
+        message = json.dumps({"msg": {"cmd": cmd, "data": data}})
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sock.sendto(message.encode(), (ip, GOVEE_COMMAND_PORT))
+        finally:
+            sock.close()
+
+    await loop.run_in_executor(None, _send)
+
+
+async def govee_razer_enable(ip: str) -> None:
+    """Enable Razer mode on a Govee device (fire-and-forget)."""
+    packet_b64 = _build_razer_packet(0xB1, b'\x01')
+    await _govee_lan_send(ip, "razer", {"pt": packet_b64})
+
+
+async def govee_razer_disable(ip: str) -> None:
+    """Disable Razer mode on a Govee device (fire-and-forget)."""
+    packet_b64 = _build_razer_packet(0xB1, b'\x00')
+    await _govee_lan_send(ip, "razer", {"pt": packet_b64})
+
+
+async def govee_razer_set_segments(ip: str, colors: list[tuple[int, int, int]]) -> None:
+    """Set per-segment colors via the Razer protocol (fire-and-forget).
+
+    colors: list of (R, G, B) tuples, one per segment.
+    """
+    data = bytes([0x00, len(colors)])
+    for r, g, b in colors:
+        data += bytes([r, g, b])
+    packet_b64 = _build_razer_packet(0xB0, data)
+    await _govee_lan_send(ip, "razer", {"pt": packet_b64})
+
+
+def govee_get_segment_info(sku: str) -> dict | None:
+    """Look up segment info for a Govee SKU. Returns the dict or None."""
+    return GOVEE_SEGMENT_INFO.get(sku)
 
 
 # ─── Govee Cloud API (fallback) ─────────────────────────────────────────────

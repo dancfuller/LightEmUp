@@ -46,13 +46,14 @@ class LightningSettings(BaseModel):
     color_b: int = 255
     background_brightness: int = 10  # percent 0-100
     background_color_temp_k: int = 2700
-    min_gap_ms: int = 5000
-    max_gap_ms: int = 20000
+    govee_flash: bool = False  # when False, Govee lights hold background color only
+    min_gap_ms: int = 15000
+    max_gap_ms: int = 60000
     flash_duration_min_ms: int = 50
     flash_duration_max_ms: int = 200
     burst_count_min: int = 1
     burst_count_max: int = 2
-    inter_burst_gap_ms: int = 60
+    inter_burst_gap_ms: int = 80
 
 
 # ─── Pattern Generation ───────────────────────────────────────────────────
@@ -216,13 +217,16 @@ class SceneManager:
 
         # ── Govee tasks ───────────────────────────────────────────────
         for idx, ip in enumerate(govee_ips):
+            if not settings.govee_flash:
+                # Background-only: set Govee lights to ambient background and leave them.
+                task = asyncio.create_task(
+                    self._set_govee_background(ip, settings),
+                    name=f"lightning-govbg-{room_name}-{ip}",
+                )
+                tasks.append(task)
+                continue
+
             # Determine if this is an H6061 that should use segment mode.
-            # We check if razer functions are available and the IP is in the
-            # room config with a marker (or we just run segments for all
-            # devices that have razer support).  For simplicity the caller
-            # can tag devices; here we check config for an optional
-            # "govee_segments" key.  If not present we fall back to
-            # whole-device mode.
             segment_count = room_config.get("govee_segments", {}).get(ip, 0)
 
             if segment_count > 0:
@@ -398,6 +402,20 @@ class SceneManager:
                 log.warning("Failed to restore Govee %s: %s", ip, exc)
 
     # ── per-light async runners ────────────────────────────────────────
+
+    async def _set_govee_background(
+        self, ip: str, settings: LightningSettings
+    ) -> None:
+        """Set a Govee device to the background color/brightness (no flashing)."""
+        try:
+            await govee_lan_turn(ip, True)
+            await govee_lan_brightness(ip, settings.background_brightness)
+            if settings.use_color_temp:
+                await govee_lan_color_temp(ip, settings.background_color_temp_k)
+            else:
+                await govee_lan_color(ip, *_GOVEE_BG_COLOR)
+        except Exception as exc:
+            log.warning("Failed to set Govee background for %s: %s", ip, exc)
 
     async def _run_hue_light(
         self,

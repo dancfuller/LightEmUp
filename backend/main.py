@@ -27,7 +27,10 @@ from discovery import (
     govee_lan_color_temp,
     govee_lan_get_state,
     govee_cloud_get_devices,
+    govee_get_segment_info,
+    GOVEE_SEGMENT_INFO,
 )
+from scenes import scene_manager, LightningSettings
 
 # ─── Config ──────────────────────────────────────────────────────────────────
 
@@ -110,6 +113,34 @@ class RoomStateRequest(BaseModel):
     r: Optional[int] = None
     g: Optional[int] = None
     b: Optional[int] = None
+
+class LightningStartRequest(BaseModel):
+    room_name: str
+
+class LightningStopRequest(BaseModel):
+    room_name: str
+
+class LightningSettingsRequest(BaseModel):
+    room_name: str
+    color_temp_kelvin: Optional[int] = None
+    use_color_temp: Optional[bool] = None
+    color_r: Optional[int] = None
+    color_g: Optional[int] = None
+    color_b: Optional[int] = None
+    background_brightness: Optional[int] = None
+    background_color_temp_k: Optional[int] = None
+    min_gap_ms: Optional[int] = None
+    max_gap_ms: Optional[int] = None
+    flash_duration_min_ms: Optional[int] = None
+    flash_duration_max_ms: Optional[int] = None
+    burst_count_min: Optional[int] = None
+    burst_count_max: Optional[int] = None
+    inter_burst_gap_ms: Optional[int] = None
+
+class GoveeSegmentModeRequest(BaseModel):
+    room_name: str
+    ip: str
+    enabled: bool
 
 
 # ─── Discovery Endpoints ────────────────────────────────────────────────────
@@ -349,6 +380,123 @@ def _rgb_to_hue_sat(r: int, g: int, b: int) -> tuple[int, int]:
     sat = 0 if max_c == 0 else diff / max_c
 
     return int(hue / 360 * 65535), int(sat * 254)
+
+
+# ─── Lightning Scene Endpoints ─────────────────────────────────────────────
+
+@app.post("/api/scenes/lightning/start")
+async def start_lightning(req: LightningStartRequest):
+    """Start lightning scene for a room."""
+    rooms = config.get("rooms", {})
+    room = rooms.get(req.room_name)
+    if not room:
+        raise HTTPException(404, f"Room '{req.room_name}' not found")
+
+    if scene_manager.is_active(req.room_name):
+        raise HTTPException(409, f"Lightning already active for '{req.room_name}'")
+
+    # Load saved settings or use defaults.
+    saved = config.get("lightning_scenes", {}).get(req.room_name, {})
+    settings = LightningSettings(**saved) if saved else LightningSettings()
+
+    # Build room_config with segment info.
+    room_config = dict(room)
+    govee_segments = {}
+    segment_mode = config.get("govee_segment_mode", {})
+    segment_counts = config.get("govee_segment_counts", {})
+    for ip in room.get("govee_devices", []):
+        if segment_mode.get(ip):
+            count = segment_counts.get(ip, 0)
+            if count > 0:
+                govee_segments[ip] = count
+    room_config["govee_segments"] = govee_segments
+
+    hue_ip = config.get("hue_bridge_ip")
+    hue_username = config.get("hue_username")
+
+    success = await scene_manager.start_lightning(
+        req.room_name, room_config, hue_ip, hue_username, settings
+    )
+    return {"success": success}
+
+
+@app.post("/api/scenes/lightning/stop")
+async def stop_lightning(req: LightningStopRequest):
+    """Stop lightning scene for a room, restore prior state."""
+    success = await scene_manager.stop_lightning(req.room_name)
+    if not success:
+        raise HTTPException(404, f"No active lightning scene for '{req.room_name}'")
+    return {"success": True}
+
+
+@app.get("/api/scenes/lightning/status")
+async def lightning_status():
+    """Get list of rooms with active lightning scenes."""
+    return {"active": scene_manager.get_active_rooms()}
+
+
+@app.get("/api/scenes/lightning/settings/{room_name}")
+async def get_lightning_settings(room_name: str):
+    """Get saved lightning settings for a room."""
+    saved = config.get("lightning_scenes", {}).get(room_name, {})
+    settings = LightningSettings(**saved) if saved else LightningSettings()
+    return settings.model_dump()
+
+
+@app.post("/api/scenes/lightning/settings")
+async def save_lightning_settings(req: LightningSettingsRequest):
+    """Save lightning settings for a room."""
+    if "lightning_scenes" not in config:
+        config["lightning_scenes"] = {}
+
+    # Merge with existing settings (only overwrite provided fields).
+    existing = config["lightning_scenes"].get(req.room_name, {})
+    updates = req.model_dump(exclude={"room_name"}, exclude_none=True)
+    existing.update(updates)
+    config["lightning_scenes"][req.room_name] = existing
+    save_config(config)
+    return {"success": True, "settings": existing}
+
+
+@app.post("/api/govee/segment-mode")
+async def set_govee_segment_mode(req: GoveeSegmentModeRequest):
+    """Toggle per-segment mode for a Govee device in a room."""
+    if "govee_segment_mode" not in config:
+        config["govee_segment_mode"] = {}
+    config["govee_segment_mode"][req.ip] = req.enabled
+
+    # If enabling, try to look up segment count from SKU table if not already stored.
+    if req.enabled and req.ip not in config.get("govee_segment_counts", {}):
+        # Try to find the SKU for this IP from discovered devices.
+        # The caller should supply the count separately, but we can try the SKU table.
+        pass  # Count must be set via /api/govee/segment-count
+
+    save_config(config)
+    return {"success": True, "segment_mode": req.enabled}
+
+
+class GoveeSegmentCountRequest(BaseModel):
+    ip: str
+    count: int
+
+@app.post("/api/govee/segment-count")
+async def set_govee_segment_count(req: GoveeSegmentCountRequest):
+    """Manually set segment count for a Govee device."""
+    if "govee_segment_counts" not in config:
+        config["govee_segment_counts"] = {}
+    config["govee_segment_counts"][req.ip] = req.count
+    save_config(config)
+    return {"success": True}
+
+
+@app.get("/api/govee/segment-info")
+async def get_segment_info():
+    """Get segment info for all known SKUs and configured devices."""
+    return {
+        "sku_table": GOVEE_SEGMENT_INFO,
+        "configured_counts": config.get("govee_segment_counts", {}),
+        "segment_mode": config.get("govee_segment_mode", {}),
+    }
 
 
 # ─── Config Endpoint ────────────────────────────────────────────────────────
