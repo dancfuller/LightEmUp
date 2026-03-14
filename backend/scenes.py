@@ -56,6 +56,7 @@ class LightningSettings(BaseModel):
     inter_burst_gap_ms: int = 80
     thunder_enabled: bool = False
     thunder_immediate: bool = False
+    thunder_funny: bool = False
 
 
 # ─── Pattern Generation ───────────────────────────────────────────────────

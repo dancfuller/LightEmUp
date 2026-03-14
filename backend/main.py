@@ -140,6 +140,7 @@ class LightningSettingsRequest(BaseModel):
     govee_flash: Optional[bool] = None
     thunder_enabled: Optional[bool] = None
     thunder_immediate: Optional[bool] = None
+    thunder_funny: Optional[bool] = None
 
 class GoveeSegmentModeRequest(BaseModel):
     room_name: str
