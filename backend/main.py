@@ -428,9 +428,7 @@ async def start_lightning(req: LightningStartRequest):
 @app.post("/api/scenes/lightning/stop")
 async def stop_lightning(req: LightningStopRequest):
     """Stop lightning scene for a room, restore prior state."""
-    success = await scene_manager.stop_lightning(req.room_name)
-    if not success:
-        raise HTTPException(404, f"No active lightning scene for '{req.room_name}'")
+    await scene_manager.stop_lightning(req.room_name)
     return {"success": True}
 
 
@@ -567,6 +565,8 @@ async def serve_frontend():
     if index.exists():
         return FileResponse(str(index))
     return {"message": "Frontend not found. Place index.html in /static/"}
+
+app.mount("/sounds", StaticFiles(directory=str(STATIC_DIR / "sounds")), name="sounds")
 
 
 if __name__ == "__main__":

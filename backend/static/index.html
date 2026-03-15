@@ -746,121 +746,27 @@ function playThunder() {
   source.start();
 }
 
-// ─── Fart Sound Synth ───────────────────────────────────────────────────────
+// ─── Fart Sounds ─────────────────────────────────────────────────────────────
 
-// 20 distinct fart presets: varying in length, pitch, wetness, and character.
-// Each preset defines synthesis parameters for a unique fart sound.
-//   baseFreq:  fundamental frequency (Hz) — lower = deeper
-//   modRate:   vibration speed (Hz) — the "flapping" frequency
-//   modDepth:  vibration intensity — how much the pitch wobbles
-//   dur:       duration in seconds
-//   wet:       noise mix (0 = dry, 0.4 = very wet)
-//   filt:      lowpass cutoff (Hz) — lower = more muffled
-//   wave:      oscillator waveform
-//   pitchDrop: how many Hz the pitch falls over the duration
-const FART_PRESETS = [
-  // ── Long farts ──
-  { baseFreq: 55,  modRate: 6,  modDepth: 25, dur: 3.5, wet: 0.08, filt: 180, wave: "sawtooth", pitchDrop: 10  },  // Long Rumbler
-  { baseFreq: 45,  modRate: 4,  modDepth: 15, dur: 4.0, wet: 0.05, filt: 150, wave: "square",   pitchDrop: 5   },  // Endless Drone
-  { baseFreq: 70,  modRate: 10, modDepth: 40, dur: 4.5, wet: 0.18, filt: 300, wave: "sawtooth", pitchDrop: 30  },  // Grand Finale
-  { baseFreq: 90,  modRate: 3,  modDepth: 10, dur: 3.0, wet: 0.12, filt: 250, wave: "sine",     pitchDrop: 20  },  // Slow Leak
-  // ── Short farts ──
-  { baseFreq: 120, modRate: 15, modDepth: 20, dur: 0.3, wet: 0.02, filt: 300, wave: "square",   pitchDrop: 0   },  // Quick Toot
-  { baseFreq: 100, modRate: 12, modDepth: 15, dur: 0.2, wet: 0.01, filt: 200, wave: "sine",     pitchDrop: 0   },  // Poot
-  { baseFreq: 150, modRate: 20, modDepth: 30, dur: 0.15,wet: 0.05, filt: 400, wave: "sawtooth", pitchDrop: 50  },  // Snap
-  { baseFreq: 95,  modRate: 30, modDepth: 50, dur: 0.8, wet: 0.08, filt: 300, wave: "square",   pitchDrop: 10  },  // Machine Gun
-  // ── Wet farts ──
-  { baseFreq: 65,  modRate: 8,  modDepth: 35, dur: 1.5, wet: 0.28, filt: 350, wave: "sawtooth", pitchDrop: 15  },  // Wet Splutter
-  { baseFreq: 80,  modRate: 12, modDepth: 45, dur: 2.0, wet: 0.35, filt: 400, wave: "sawtooth", pitchDrop: 10  },  // Bubble Bath
-  { baseFreq: 50,  modRate: 6,  modDepth: 20, dur: 2.5, wet: 0.38, filt: 250, wave: "square",   pitchDrop: 8   },  // Swamp Thing
-  { baseFreq: 75,  modRate: 9,  modDepth: 30, dur: 1.0, wet: 0.30, filt: 300, wave: "sawtooth", pitchDrop: 20  },  // Soggy
-  // ── Dry farts ──
-  { baseFreq: 180, modRate: 18, modDepth: 40, dur: 0.5, wet: 0.0,  filt: 500, wave: "sine",     pitchDrop: 30  },  // Dry Squeak
-  { baseFreq: 140, modRate: 14, modDepth: 25, dur: 0.8, wet: 0.0,  filt: 400, wave: "square",   pitchDrop: 0   },  // Trumpet
-  // ── High pitched ──
-  { baseFreq: 250, modRate: 22, modDepth: 50, dur: 0.4, wet: 0.02, filt: 600, wave: "sine",     pitchDrop: 80  },  // Squeaker
-  { baseFreq: 300, modRate: 25, modDepth: 60, dur: 0.25,wet: 0.01, filt: 700, wave: "sine",     pitchDrop: 100 },  // Mouse
-  { baseFreq: 350, modRate: 8,  modDepth: 20, dur: 2.0, wet: 0.03, filt: 500, wave: "sine",     pitchDrop: 200 },  // Deflating Balloon
-  // ── Classics ──
-  { baseFreq: 85,  modRate: 7,  modDepth: 35, dur: 2.5, wet: 0.10, filt: 250, wave: "sawtooth", pitchDrop: 25  },  // Whoopee Cushion
-  { baseFreq: 60,  modRate: 20, modDepth: 25, dur: 1.5, wet: 0.05, filt: 200, wave: "square",   pitchDrop: 5   },  // Motorboat
-  { baseFreq: 40,  modRate: 5,  modDepth: 15, dur: 1.8, wet: 0.02, filt: 120, wave: "sawtooth", pitchDrop: 0   },  // Tuba
+// 20 real fart sound MP3s served from /sounds/farts/, preloaded on page load.
+const FART_FILES = [
+  "fart-01.mp3", "fart-02.mp3", "fart-03.mp3", "fart-04.mp3",
+  "fart-05.mp3", "fart-06.mp3", "fart-07.mp3", "fart-08.mp3",
+  "fart-squeak-01.mp3", "fart-squeak-02.mp3", "fart-squeak-03.mp3",
+  "fart-big.mp3", "fart-bomb.mp3", "fart-dry.mp3", "fart-echo.mp3",
+  "fart-epic.mp3", "fart-long-wet.mp3", "fart-realistic.mp3",
+  "fart-squeak-reverb.mp3", "fart-wet-slow.mp3",
 ];
+const _fartAudios = FART_FILES.map(f => {
+  const a = new Audio(`/sounds/farts/${f}`);
+  a.preload = "auto";
+  return a;
+});
 
 function playFart() {
-  if (!_thunderCtx || _thunderCtx.state === "closed") {
-    _thunderCtx = new (window.AudioContext || window.webkitAudioContext)();
-  }
-  const ctx = _thunderCtx;
-  if (ctx.state === "suspended") ctx.resume();
-
-  const p = FART_PRESETS[Math.floor(Math.random() * FART_PRESETS.length)];
-  const now = ctx.currentTime;
-
-  // Add slight randomization so the same preset sounds different each time.
-  const freq = p.baseFreq * (0.9 + Math.random() * 0.2);
-  const dur = p.dur * (0.85 + Math.random() * 0.3);
-  const mr = p.modRate * (0.85 + Math.random() * 0.3);
-
-  // Main oscillator — the fundamental tone.
-  const osc = ctx.createOscillator();
-  osc.type = p.wave;
-  osc.frequency.setValueAtTime(freq, now);
-  osc.frequency.linearRampToValueAtTime(freq - p.pitchDrop, now + dur);
-
-  // Modulator — vibrates the main frequency for the "flapping" quality.
-  const mod = ctx.createOscillator();
-  mod.frequency.value = mr;
-  const modGain = ctx.createGain();
-  modGain.gain.value = p.modDepth;
-  mod.connect(modGain);
-  modGain.connect(osc.frequency);
-
-  // Noise source — adds wetness / splatter.
-  const noiseLen = Math.max(1, Math.floor(ctx.sampleRate * dur));
-  const noiseBuf = ctx.createBuffer(1, noiseLen, ctx.sampleRate);
-  const nd = noiseBuf.getChannelData(0);
-  for (let i = 0; i < noiseLen; i++) nd[i] = Math.random() * 2 - 1;
-  const noise = ctx.createBufferSource();
-  noise.buffer = noiseBuf;
-
-  const noiseFilt = ctx.createBiquadFilter();
-  noiseFilt.type = "bandpass";
-  noiseFilt.frequency.value = freq * 1.5;
-  noiseFilt.Q.value = 2;
-
-  const noiseGain = ctx.createGain();
-  noiseGain.gain.value = p.wet;
-
-  noise.connect(noiseFilt);
-  noiseFilt.connect(noiseGain);
-
-  // Master lowpass filter — shapes overall tone.
-  const filter = ctx.createBiquadFilter();
-  filter.type = "lowpass";
-  filter.frequency.value = p.filt;
-  filter.Q.value = 3;
-
-  // Master gain with envelope (quick attack, sustain, decay).
-  const gain = ctx.createGain();
-  const attackTime = Math.min(0.04, dur * 0.08);
-  gain.gain.setValueAtTime(0, now);
-  gain.gain.linearRampToValueAtTime(0.7, now + attackTime);
-  gain.gain.setValueAtTime(0.7, now + dur * 0.3);
-  gain.gain.exponentialRampToValueAtTime(0.01, now + dur);
-
-  // Wire it up.
-  osc.connect(filter);
-  noiseGain.connect(filter);
-  filter.connect(gain);
-  gain.connect(ctx.destination);
-
-  osc.start(now);
-  mod.start(now);
-  noise.start(now);
-  osc.stop(now + dur);
-  mod.stop(now + dur);
-  noise.stop(now + dur);
+  const audio = _fartAudios[Math.floor(Math.random() * _fartAudios.length)];
+  audio.currentTime = 0;
+  audio.play().catch(() => {});
 }
 
 // ─── Lightning Scene Panel ────────────────────────────────────────────────────
