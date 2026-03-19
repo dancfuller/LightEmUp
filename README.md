@@ -17,9 +17,18 @@ A unified web app for controlling Philips Hue (Zigbee) and Govee (LAN) smart lig
 
 ## Requirements
 
-- Python 3.10+
+- **Python 3.10+** — must be installed and available on your system PATH (run `python --version` to verify)
+- **Internet connection** — required on first launch to load the frontend UI (React/Babel served from CDN)
 - Philips Hue Bridge on the same network (optional)
 - Govee devices with LAN Control enabled in the Govee Home app (optional)
+
+### Windows prerequisites
+
+- **PowerShell execution policy**: The `start.ps1` launcher requires script execution to be enabled. If you get "running scripts is disabled on this system", run this once in an admin PowerShell:
+  ```powershell
+  Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
+  ```
+- **Python on PATH**: When installing Python from [python.org](https://www.python.org/downloads/), check **"Add python.exe to PATH"** during installation. If Python is already installed but `python --version` doesn't work, add it to your PATH manually.
 
 ## Setup
 
@@ -177,6 +186,26 @@ python govee_spots_razer_test.py
 - Govee command responses are unreliable — the app uses fire-and-forget with optimistic UI updates
 - The Govee SKU-to-name map in the frontend covers a limited set of devices; unknown SKUs show the model number
 - Razer protocol has a 60-second timeout — the scene engine sends keepalive packets to prevent auto-disable
+
+## Troubleshooting
+
+**"python" is not recognized / not found**
+Python isn't installed or isn't on your PATH. Install from [python.org](https://www.python.org/downloads/) and make sure to check "Add python.exe to PATH" during setup. Restart your terminal after installing.
+
+**"running scripts is disabled on this system"**
+PowerShell's execution policy is blocking `start.ps1`. Run `Set-ExecutionPolicy RemoteSigned -Scope CurrentUser` in an admin PowerShell, then try again.
+
+**Server starts but the UI is blank**
+The frontend loads React and Babel from a CDN. If you're offline or behind a restrictive proxy/firewall, the page will be blank. Check your internet connection and try refreshing.
+
+**Port 8420 already in use**
+Another application is using port 8420. Close it or check what's using it with `netstat -ano | findstr :8420` in PowerShell.
+
+**Govee devices not discovered**
+Allow the UDP discovery ports through Windows Firewall (see [Firewall](#firewall) section). Also ensure your Govee devices have LAN Control enabled in the Govee Home app.
+
+**Can't access the UI from another device on the network**
+Allow TCP port 8420 through Windows Firewall (see [Firewall](#firewall) section).
 
 ## License
 
