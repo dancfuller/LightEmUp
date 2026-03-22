@@ -1,107 +1,75 @@
 # LightEmUp
 
-A unified web app for controlling Philips Hue (Zigbee) and Govee (LAN) smart lights from a single interface. Includes a lightning storm scene engine with per-segment Govee panel control.
+A local-network web app for controlling Philips Hue and Govee smart lights from a single interface. No cloud, no accounts — everything runs on your LAN.
 
-## Features
+![Python](https://img.shields.io/badge/Python-3.10+-blue) ![FastAPI](https://img.shields.io/badge/FastAPI-latest-009688) ![License](https://img.shields.io/badge/License-MIT-green)
 
-- **Hue Bridge integration** — auto-discovery, pairing, per-light control (on/off, brightness, color)
-- **Govee LAN control** — auto-discovery via UDP broadcast, on/off, brightness, RGB color
-- **Room grouping** — assign lights to rooms, control entire rooms at once
-- **Per-light controls** — brightness slider, color wheel, RGB sliders, favorite colors
-- **Room-level overrides** — set brightness/color for all lights in a room
-- **Lightning storm scene** — realistic lightning simulation with preset frequency modes (Realistic, Slow, Medium, Fast, Epilepsy) and advanced timing controls
-- **Govee Razer per-segment control** — independent color control of individual panels/segments on compatible Govee devices (e.g. H6061 Hexa Panels)
-- **Device nicknames** — editable nicknames persisted across sessions
-- **Mobile-friendly** — responsive UI, tap-based room assignment (no drag-and-drop)
-- **No cloud dependency** — all control is local (Hue via bridge API, Govee via LAN UDP)
+## What It Does
 
-## Requirements
+LightEmUp discovers and controls Philips Hue (Zigbee via bridge) and Govee (LAN/UDP) smart lights through one unified web UI. Group lights into rooms, set colors and brightness, save favorites, and run scene effects — all without leaving your local network.
 
-- **Python 3.10+** — must be installed and available on your system PATH (run `python --version` to verify)
-- **Internet connection** — required on first launch to load the frontend UI (React/Babel served from CDN)
-- Philips Hue Bridge on the same network (optional)
-- Govee devices with LAN Control enabled in the Govee Home app (optional)
+### Key Features
 
-### Windows prerequisites
+- **Unified control** — Hue and Govee devices in one UI with room grouping
+- **Per-light controls** — on/off, brightness slider, color wheel, RGB sliders, favorite colors
+- **Room-level overrides** — set brightness/color for all lights in a room at once
+- **Lightning storm scene** — realistic thunderstorm simulation with Hue light flashes, configurable timing presets, optional thunder sound effects, and a "funny mode" that replaces thunder with fart sounds
+- **Govee Razer per-segment control** — independent color control of individual panels on compatible devices (e.g. Hexa Light Panels)
+- **Device nicknames** — custom names persisted across sessions
+- **Desktop shortcut launcher** — one-click launch with auto-server-start and browser open (Windows)
+- **Server management** — restart or shut down the server from the Settings tab in the UI
+- **280+ Govee SKU names** — automatic product name resolution for most Govee devices
+- **Mobile-friendly** — responsive design, tap-based room assignment
+- **Fully local** — no cloud dependency, no internet required after first load
 
-- **PowerShell execution policy**: The `start.ps1` launcher requires script execution to be enabled. If you get "running scripts is disabled on this system", run this once in an admin PowerShell:
-  ```powershell
-  Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
-  ```
-- **Python on PATH**: When installing Python from [python.org](https://www.python.org/downloads/), check **"Add python.exe to PATH"** during installation. If Python is already installed but `python --version` doesn't work, add it to your PATH manually.
-
-## Setup
+## Quick Start
 
 ### 1. Clone and install
 
-```powershell
-cd lightemup\backend
+```bash
+git clone https://github.com/dancfuller/LightEmUp.git
+cd LightEmUp/backend
 python -m venv venv
+```
+
+**Windows (PowerShell):**
+```powershell
 .\venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
 
-On Linux/macOS:
+**Linux/macOS:**
 ```bash
-cd backend
-python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2. Configure (optional)
+### 2. Start the server
 
-Copy the example config:
-```
-cp config.json.example config.json
-```
-
-Or just start the server — it will create a default `config.json` on first run.
-
-If you have a Govee API key (for cloud features), add it to `config.json`:
-```json
-{
-  "govee_api_key": "your-api-key-here"
-}
-```
-
-### 3. Start the server
-
-```powershell
+```bash
 python main.py
 ```
 
-The server runs at `http://localhost:8420`.
+Open `http://localhost:8420` in your browser. That's it.
 
-### 4. Open the UI
+### 3. Connect your lights
 
-Navigate to `http://localhost:8420` in your browser.
+- **Hue**: Click the Hue badge in the header, press the physical button on your bridge, then click Pair
+- **Govee**: Devices are auto-discovered if LAN Control is enabled in the Govee Home app
 
-### 5. Pair Hue Bridge (optional)
+### Desktop Shortcut (Windows)
 
-Click the **Hue** badge in the header, press the physical button on your Hue Bridge, then click **Pair** in the UI.
-
-### 6. Assign devices to rooms
-
-Go to the **Assign Rooms** tab to organize your lights into rooms.
-
-## Firewall
-
-If accessing from another device on your network, allow the server port:
+Run the shortcut installer for a one-click launcher on your Desktop and Start Menu:
 
 ```powershell
-New-NetFirewallRule -DisplayName "LightEmUp" -Direction Inbound -Protocol TCP -LocalPort 8420 -Action Allow
+powershell -ExecutionPolicy Bypass -File install-shortcut.ps1
 ```
 
-If Govee devices aren't discovered, allow the UDP discovery ports:
-
-```powershell
-New-NetFirewallRule -DisplayName "Govee LAN Discovery" -Direction Inbound -Protocol UDP -LocalPort 4001,4002 -Action Allow
-```
+This creates a shortcut that silently starts the server (if not already running) and opens the browser — no console window.
 
 ## Lightning Storm Scene
 
-The lightning scene simulates a realistic thunderstorm by flashing Hue lights in randomized bursts. It includes frequency presets:
+A scene engine that simulates realistic thunderstorms by flashing lights in randomized bursts with synced thunder audio.
 
 | Preset      | Gap Between Flashes | Burst Size | Feel                    |
 |-------------|---------------------|------------|-------------------------|
@@ -111,27 +79,35 @@ The lightning scene simulates a realistic thunderstorm by flashing Hue lights in
 | Fast        | 0.5–2 seconds       | 2–5        | Intense storm           |
 | Epilepsy    | 80–400 ms           | 4–8        | Strobe (use with care)  |
 
-An **Advanced** toggle reveals detailed sliders for fine-tuning gap timing, flash duration, burst count, and inter-burst gaps.
-
-Govee lights can optionally participate in the flash effect, or hold a background glow while Hue lights handle the flashing (controlled via the "Govee Lights" toggle in settings).
-
-## Govee Razer Protocol (Per-Segment Control)
-
-Some Govee devices support an undocumented "Razer" protocol that allows per-segment/per-panel color control over LAN. This is used by the lightning scene to flash individual Hexa panels independently.
-
-**Confirmed working:** H6061 Glide Hexa Light Panels (7 segments)
-**Not working:** H7065/H7066 Outdoor Spotlights (no response to Razer commands)
-
-See the [Test Scripts](#test-scripts) section for tools to verify Razer support on your devices.
+Features:
+- **Thunder sound effects** — browser-synthesized thunder synced to flashes via Server-Sent Events
+- **Funny mode** — replaces thunder with 20 real fart sound effects
+- **Immediate vs. delayed** thunder timing toggle
+- **Govee flash participation** — Govee lights can flash alongside Hue, or hold a background glow
+- **Per-segment flashing** — on compatible Govee devices (e.g. Hexa Panels), individual panels flash independently
+- **Advanced controls** — fine-tune gap timing, flash duration, burst count, and inter-burst gaps
 
 ## Architecture
 
-- **Backend**: Python FastAPI server handling device discovery, control, and scene management
-  - Hue: local HTTP API via the bridge
-  - Govee: UDP broadcast (port 4001) for discovery, UDP unicast (port 4003) for commands
-  - Scenes: async pattern generation and per-light playback (`scenes.py`)
-- **Frontend**: Single-page React app served as static HTML (no build step needed)
-- **Config**: `config.json` stores bridge credentials, room assignments, nicknames, lightning settings
+```
+backend/
+  main.py           # FastAPI server — endpoints, room/nickname management
+  discovery.py      # Device discovery & control (Hue REST, Govee UDP)
+  scenes.py         # Lightning scene engine with async pattern generation
+  requirements.txt  # Python deps (fastapi, uvicorn, httpx)
+  start.ps1         # PowerShell launcher
+  config.json       # LOCAL ONLY (gitignored) — IPs, credentials, rooms
+  static/
+    index.html      # Full React frontend (single file, no build step)
+    sounds/         # Audio assets (fart sound effects for funny mode)
+launch.ps1          # Silent launcher (starts server + opens browser)
+launch.vbs          # VBScript wrapper for no-console-window launch
+install-shortcut.ps1 # Desktop/Start Menu shortcut installer
+```
+
+- **Backend**: Python FastAPI with Hue (local REST API) and Govee (UDP broadcast/unicast) control
+- **Frontend**: Single-page React app served as static HTML — React and Babel load from CDN, no build step
+- **Config**: `config.json` stores bridge credentials, room assignments, nicknames, scene settings (gitignored)
 
 ## API Endpoints
 
@@ -157,55 +133,70 @@ See the [Test Scripts](#test-scripts) section for tools to verify Razer support 
 | POST | `/api/govee/segment-mode` | Toggle per-segment mode for a device |
 | POST | `/api/govee/segment-count` | Set segment count for a device |
 | GET | `/api/govee/segment-info` | Get segment capabilities for all SKUs |
+| POST | `/api/server/shutdown` | Shut down the server |
+| POST | `/api/server/restart` | Restart the server |
 
-## Test Scripts
+## Govee Razer Protocol (Per-Segment Control)
 
-Interactive test scripts for validating the Govee Razer per-segment protocol on physical hardware. These are manual, visual tests — they send commands to real devices and prompt you to confirm what you see.
+Some Govee devices support an undocumented "Razer" protocol for per-segment/per-panel color control over LAN. The lightning scene uses this to flash individual Hexa panels independently.
 
-### `govee_razer_test.py`
+**Confirmed working:** H6061 Glide Hexa Light Panels (7 segments)
+**Not working:** H7065/H7066 Outdoor Spotlights (no response to Razer commands)
 
-Tests per-segment color control on **H6061 Glide Hexa Light Panels** (7 panels). Walks through 9 steps: turning on the device, enabling the Razer protocol, testing discrete colors (one per panel), gradient mode, fewer-than-max colors, and probing with 21 colors to verify segment limits. Resets to white and disables Razer mode when done.
+Test scripts are included for validating Razer support on your hardware:
 
-```powershell
+```bash
 cd backend
-python govee_razer_test.py
+python govee_razer_test.py       # Test H6061 Hexa Panels
+python govee_spots_razer_test.py # Test H7065/H7066 Outdoor Spotlights
 ```
 
-### `govee_spots_razer_test.py`
+## Firewall
 
-Tests per-segment color control on **H7065 (2-pack)** and **H7066 (4-pack) outdoor spotlights**. Runs the same protocol sequence on each device: enable Razer, send distinct colors per spot, test gradient mode, then reset. Used to determine whether these devices support the Razer protocol (result: they do not).
+If accessing from another device on your network, allow the server port:
 
 ```powershell
-cd backend
-python govee_spots_razer_test.py
+New-NetFirewallRule -DisplayName "LightEmUp" -Direction Inbound -Protocol TCP -LocalPort 8420 -Action Allow
 ```
 
-## Known Limitations
+If Govee devices aren't discovered, allow the UDP discovery ports:
 
-- Govee Razer per-segment control only confirmed working on H6061 Hexa Panels; outdoor spotlights (H7065/H7066) do not respond
-- Govee command responses are unreliable — the app uses fire-and-forget with optimistic UI updates
-- The Govee SKU-to-name map in the frontend covers a limited set of devices; unknown SKUs show the model number
-- Razer protocol has a 60-second timeout — the scene engine sends keepalive packets to prevent auto-disable
+```powershell
+New-NetFirewallRule -DisplayName "Govee LAN Discovery" -Direction Inbound -Protocol UDP -LocalPort 4001,4002 -Action Allow
+```
+
+## Requirements
+
+- **Python 3.10+** — must be on your system PATH
+- **Internet connection** — required on first launch only (React/Babel load from CDN)
+- Philips Hue Bridge on the same network (optional)
+- Govee devices with LAN Control enabled in the Govee Home app (optional)
+
+### Windows Notes
+
+- **PowerShell execution policy**: If you get "running scripts is disabled", run once in an admin PowerShell:
+  ```powershell
+  Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
+  ```
+- **Python on PATH**: When installing from [python.org](https://www.python.org/downloads/), check "Add python.exe to PATH"
 
 ## Troubleshooting
 
-**"python" is not recognized / not found**
-Python isn't installed or isn't on your PATH. Install from [python.org](https://www.python.org/downloads/) and make sure to check "Add python.exe to PATH" during setup. Restart your terminal after installing.
+| Problem | Solution |
+|---------|----------|
+| `python` not recognized | Install Python and ensure it's on PATH. Restart your terminal. |
+| Scripts disabled on this system | Run `Set-ExecutionPolicy RemoteSigned -Scope CurrentUser` in admin PowerShell |
+| UI is blank | Frontend needs internet on first load (CDN). Check your connection and refresh. |
+| Port 8420 in use | Check with `netstat -ano \| findstr :8420` and close the conflicting process |
+| Govee devices not found | Enable LAN Control in Govee Home app. Allow UDP 4001/4002 through firewall. |
+| Can't access UI from phone | Allow TCP 8420 through firewall (see [Firewall](#firewall)) |
 
-**"running scripts is disabled on this system"**
-PowerShell's execution policy is blocking `start.ps1`. Run `Set-ExecutionPolicy RemoteSigned -Scope CurrentUser` in an admin PowerShell, then try again.
+## Known Limitations
 
-**Server starts but the UI is blank**
-The frontend loads React and Babel from a CDN. If you're offline or behind a restrictive proxy/firewall, the page will be blank. Check your internet connection and try refreshing.
-
-**Port 8420 already in use**
-Another application is using port 8420. Close it or check what's using it with `netstat -ano | findstr :8420` in PowerShell.
-
-**Govee devices not discovered**
-Allow the UDP discovery ports through Windows Firewall (see [Firewall](#firewall) section). Also ensure your Govee devices have LAN Control enabled in the Govee Home app.
-
-**Can't access the UI from another device on the network**
-Allow TCP port 8420 through Windows Firewall (see [Firewall](#firewall) section).
+- Govee Razer per-segment control only confirmed on H6061 Hexa Panels
+- Govee commands are fire-and-forget — the app uses optimistic UI updates
+- Razer protocol has a 60-second timeout; the scene engine sends keepalive packets
+- Unknown Govee SKUs fall back to showing the model number
 
 ## License
 
