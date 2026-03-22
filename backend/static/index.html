@@ -2301,10 +2301,44 @@ function App() {
                 style={{ marginTop: 12, padding: "8px 16px", borderRadius: 8, border: "none", background: "#334155", color: "#f1f5f9", fontSize: 13, cursor: "pointer" }}
               >Re-scan Govee Devices</button>
             </div>
-            <div style={{ background: "#1e293b", borderRadius: 16, padding: 20, border: "1px solid #334155" }}>
+            <div style={{ background: "#1e293b", borderRadius: 16, padding: 20, border: "1px solid #334155", marginBottom: 16 }}>
               <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 12, color: "#e2e8f0" }}>About</h3>
               <div style={{ fontSize: 13, color: "#94a3b8" }}>LightEmUp v0.1.0</div>
               <div style={{ fontSize: 13, color: "#64748b", marginTop: 4 }}>Hue (Zigbee) + Govee (LAN) unified controller</div>
+            </div>
+            <div style={{ background: "#1e293b", borderRadius: 16, padding: 20, border: "1px solid #334155" }}>
+              <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 12, color: "#e2e8f0" }}>Server</h3>
+              <div style={{ display: "flex", gap: 12 }}>
+                <button
+                  onClick={async () => {
+                    if (!confirm("Restart the LightEmUp server? The page will reconnect automatically.")) return;
+                    try { await api("/server/restart", { method: "POST" }); } catch {}
+                    // Poll until server is back up, then reload
+                    const poll = setInterval(async () => {
+                      try {
+                        const r = await fetch(API + "/config");
+                        if (r.ok) { clearInterval(poll); window.location.reload(); }
+                      } catch {}
+                    }, 1000);
+                  }}
+                  style={{
+                    padding: "10px 20px", borderRadius: 10, border: "none",
+                    background: "#334155", color: "#f1f5f9", fontSize: 13,
+                    fontWeight: 600, cursor: "pointer",
+                  }}
+                >Restart Server</button>
+                <button
+                  onClick={async () => {
+                    if (!confirm("Shut down the LightEmUp server? You will need to relaunch it manually.")) return;
+                    try { await api("/server/shutdown", { method: "POST" }); } catch {}
+                  }}
+                  style={{
+                    padding: "10px 20px", borderRadius: 10, border: "1px solid #dc2626",
+                    background: "transparent", color: "#f87171", fontSize: 13,
+                    fontWeight: 600, cursor: "pointer",
+                  }}
+                >Stop Server</button>
+              </div>
             </div>
           </div>
         )}

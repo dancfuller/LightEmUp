@@ -5,6 +5,8 @@ LightEmUp - FastAPI backend for controlling Hue and Govee lights.
 import asyncio
 import json
 import os
+import sys
+import subprocess
 from pathlib import Path
 from contextlib import asynccontextmanager
 
@@ -555,6 +557,43 @@ async def get_nicknames():
     return {"nicknames": config.get("nicknames", {})}
 
 
+# ─── Server Control Endpoints ────────────────────────────────────────────────
+
+_server_ref = None  # Set by __main__ to allow clean shutdown
+
+
+@app.post("/api/server/shutdown")
+async def server_shutdown():
+    """Shut down the LightEmUp server."""
+    async def _do_shutdown():
+        await asyncio.sleep(0.5)
+        if _server_ref:
+            _server_ref.should_exit = True
+        else:
+            os._exit(0)
+    asyncio.create_task(_do_shutdown())
+    return {"success": True, "message": "Server shutting down..."}
+
+
+@app.post("/api/server/restart")
+async def server_restart():
+    """Restart the LightEmUp server by spawning a new process and exiting."""
+    async def _do_restart():
+        await asyncio.sleep(0.5)
+        subprocess.Popen(
+            [sys.executable, os.path.abspath(__file__)],
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+        )
+        await asyncio.sleep(0.3)
+        if _server_ref:
+            _server_ref.should_exit = True
+        else:
+            os._exit(0)
+    asyncio.create_task(_do_restart())
+    return {"success": True, "message": "Server restarting..."}
+
+
 # ─── Static Files (frontend) ─────────────────────────────────────────────────
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -571,4 +610,7 @@ app.mount("/sounds", StaticFiles(directory=str(STATIC_DIR / "sounds")), name="so
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8420)
+    uvi_config = uvicorn.Config(app, host="0.0.0.0", port=8420)
+    server = uvicorn.Server(uvi_config)
+    _server_ref = server
+    server.run()
