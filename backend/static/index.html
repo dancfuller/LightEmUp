@@ -78,12 +78,14 @@ async function api(path, options = {}) {
 
 // ─── Device Name Helpers ────────────────────────────────────────────────────
 
+// SKU subset for devices likely on this network. Full table is in discovery.py.
 const GOVEE_SKU_NAMES = {
-  "H70C1": "Christmas String Lights 2",
-  "H7065": "Outdoor Spotlights 2-Pack",
-  "H7066": "Outdoor Spotlights 4-Pack",
   "H6061": "Glide Hexa Light Panels",
   "H61D3": "Neon Rope Light 2",
+  "H60A6": "Ceiling Light Pro",
+  "H7065": "Outdoor Spot Lights 2-Pack",
+  "H7066": "Outdoor Spot Lights 4-Pack",
+  "H70C1": "Christmas String Lights 2 10M",
 };
 
 function getDeviceDisplayName(device, nicknames) {
