@@ -12,5 +12,7 @@
       "govee_devices": []
     }
   },
-  "nicknames": {}
+  "nicknames": {},
+  "room_layouts": {},
+  "room_presets": {}
 }

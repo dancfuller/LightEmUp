@@ -13,7 +13,9 @@ LightEmUp discovers and controls Philips Hue (Zigbee via bridge) and Govee (LAN/
 - **Unified control** — Hue and Govee devices in one UI with room grouping
 - **Per-light controls** — on/off, brightness slider, color wheel, RGB sliders, favorite colors
 - **Room-level overrides** — set brightness/color for all lights in a room at once
+- **Interactive room maps** — drag-and-drop 2D floor plan and linear layout modes with live device state, per-device controls, reference furniture items, and auto-save
 - **Lightning storm scene** — realistic thunderstorm simulation with Hue light flashes, configurable timing presets, optional thunder sound effects, and a "funny mode" that replaces thunder with fart sounds
+- **Tonal color presets** — apply harmonious color schemes across rooms with gradient and random shade modes
 - **Govee Razer per-segment control** — independent color control of individual panels on compatible devices (e.g. Hexa Light Panels)
 - **Device nicknames** — custom names persisted across sessions
 - **Desktop shortcut launcher** — one-click launch with auto-server-start and browser open (Windows)
@@ -98,7 +100,18 @@ backend/
   start.ps1         # PowerShell launcher
   config.json       # LOCAL ONLY (gitignored) — IPs, credentials, rooms
   static/
-    index.html      # Full React frontend (single file, no build step)
+    index.html      # HTML shell — loads React/Babel CDN + component scripts
+    js/
+      utils.js          # React hooks, API wrapper, color utilities, SKU names
+      audio.js          # Thunder synth, fart sounds
+      components-shared.js  # ColorPicker, ColorWheel, Slider, StatusBadge
+      light-card.js     # Per-device control card
+      lightning-panel.js # Lightning storm scene UI
+      room-map.js       # Interactive 2D floor plan & linear layout
+      room-section.js   # Room grouping with controls
+      room-assignment.js # Drag-based room assignment UI
+      setup-wizard.js   # Hue Bridge pairing wizard
+      app.js            # Main App component + render
     sounds/         # Audio assets (fart sound effects for funny mode)
 launch.ps1          # Silent launcher (starts server + opens browser)
 launch.vbs          # VBScript wrapper for no-console-window launch
@@ -106,8 +119,8 @@ install-shortcut.ps1 # Desktop/Start Menu shortcut installer
 ```
 
 - **Backend**: Python FastAPI with Hue (local REST API) and Govee (UDP broadcast/unicast) control
-- **Frontend**: Single-page React app served as static HTML — React and Babel load from CDN, no build step
-- **Config**: `config.json` stores bridge credentials, room assignments, nicknames, scene settings (gitignored)
+- **Frontend**: Modular React app split across 10 component files — React and Babel load from CDN, no build step, Babel transpiles in-browser
+- **Config**: `config.json` stores bridge credentials, room assignments, nicknames, room layouts, scene settings (gitignored)
 
 ## API Endpoints
 
@@ -133,6 +146,9 @@ install-shortcut.ps1 # Desktop/Start Menu shortcut installer
 | POST | `/api/govee/segment-mode` | Toggle per-segment mode for a device |
 | POST | `/api/govee/segment-count` | Set segment count for a device |
 | GET | `/api/govee/segment-info` | Get segment capabilities for all SKUs |
+| GET | `/api/room-layouts/{room}` | Get room layout |
+| POST | `/api/room-layouts` | Save/update room layout |
+| DELETE | `/api/room-layouts/{room}` | Delete room layout |
 | POST | `/api/server/shutdown` | Shut down the server |
 | POST | `/api/server/restart` | Restart the server |
 

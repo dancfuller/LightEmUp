@@ -44,6 +44,7 @@ DEFAULT_CONFIG = {
     "govee_api_key": None,
     "rooms": {},
     "nicknames": {},
+    "room_layouts": {},
 }
 
 
@@ -148,6 +149,16 @@ class GoveeSegmentModeRequest(BaseModel):
     room_name: str
     ip: str
     enabled: bool
+
+class RoomLayoutRequest(BaseModel):
+    room_name: str
+    grid_size: int = 20
+    mode: str = "2d"  # "2d" or "linear"
+    boundary: dict = {}
+    devices: dict = {}  # {"hue:1": {"x": 4, "y": 2}, ...}
+    segments: dict = {}
+    furniture: list = []  # [{id, type, label, x, y, w, h, rotation}, ...]
+    landmarks: list = []  # [{x, label}, ...]
 
 
 # ─── Discovery Endpoints ────────────────────────────────────────────────────
@@ -535,6 +546,7 @@ async def get_config():
         "govee_api_key_set": bool(config.get("govee_api_key")),
         "rooms": config.get("rooms", {}),
         "nicknames": config.get("nicknames", {}),
+        "room_layouts": config.get("room_layouts", {}),
     }
 
 
@@ -555,6 +567,65 @@ async def set_nickname(req: NicknameRequest):
 @app.get("/api/nicknames")
 async def get_nicknames():
     return {"nicknames": config.get("nicknames", {})}
+
+
+# ─── Room Layout Endpoints ──────────────────────────────────────────────────
+
+@app.get("/api/room-layouts/{room_name}")
+async def get_room_layout(room_name: str):
+    layouts = config.get("room_layouts", {})
+    layout = layouts.get(room_name)
+    if not layout:
+        raise HTTPException(404, f"No layout for '{room_name}'")
+    return layout
+
+
+@app.post("/api/room-layouts")
+async def save_room_layout(req: RoomLayoutRequest):
+    if "room_layouts" not in config:
+        config["room_layouts"] = {}
+    config["room_layouts"][req.room_name] = {
+        "grid_size": req.grid_size,
+        "mode": req.mode,
+        "boundary": req.boundary,
+        "devices": req.devices,
+        "segments": req.segments,
+        "furniture": req.furniture,
+        "landmarks": req.landmarks,
+    }
+    save_config(config)
+    return {"success": True}
+
+
+@app.delete("/api/room-layouts/{room_name}")
+async def delete_room_layout(room_name: str):
+    layouts = config.get("room_layouts", {})
+    if room_name in layouts:
+        del layouts[room_name]
+        save_config(config)
+    return {"success": True}
+
+
+# ─── Room Scene Preset Endpoints ───────────────────────────────────────────
+
+class RoomPresetsRequest(BaseModel):
+    room_name: str
+    presets: list  # list of {name, snapshot, created}
+
+
+@app.get("/api/room-presets/{room_name}")
+async def get_room_presets(room_name: str):
+    presets = config.get("room_presets", {}).get(room_name, [])
+    return {"presets": presets}
+
+
+@app.post("/api/room-presets")
+async def save_room_presets(req: RoomPresetsRequest):
+    if "room_presets" not in config:
+        config["room_presets"] = {}
+    config["room_presets"][req.room_name] = req.presets
+    save_config(config)
+    return {"success": True}
 
 
 # ─── Server Control Endpoints ────────────────────────────────────────────────
@@ -606,6 +677,7 @@ async def serve_frontend():
     return {"message": "Frontend not found. Place index.html in /static/"}
 
 app.mount("/sounds", StaticFiles(directory=str(STATIC_DIR / "sounds")), name="sounds")
+app.mount("/js", StaticFiles(directory=str(STATIC_DIR / "js")), name="js")
 
 
 if __name__ == "__main__":
