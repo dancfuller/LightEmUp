@@ -369,22 +369,109 @@ function App() {
         )}
 
         {activeTab === "settings" && (
-          <div style={{ maxWidth: 600 }}>
+          <div style={{ maxWidth: 700 }}>
             <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 20 }}>Configuration</h2>
+
+            {/* Hue Bridge */}
             <div style={{ background: "#1e293b", borderRadius: 16, padding: 20, border: "1px solid #334155", marginBottom: 16 }}>
-              <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 12, color: "#e2e8f0" }}>Hue Bridge</h3>
-              <div style={{ fontSize: 13, color: "#94a3b8" }}>IP: {config?.hue_bridge_ip || "Not found"}</div>
-              <div style={{ fontSize: 13, color: "#94a3b8", marginTop: 4 }}>
-                Status: {config?.hue_paired ? "✅ Paired" : "❌ Not paired"}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                <h3 style={{ fontSize: 15, fontWeight: 600, color: "#e2e8f0", margin: 0 }}>Hue Bridge</h3>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <span style={{
+                    display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, color: "#94a3b8",
+                  }}>
+                    <span style={{
+                      width: 6, height: 6, borderRadius: "50%",
+                      background: config?.hue_paired ? "#4ade80" : "#f87171",
+                      boxShadow: config?.hue_paired ? "0 0 4px #4ade80" : "none",
+                    }} />
+                    {config?.hue_paired ? "Paired" : "Not paired"}
+                  </span>
+                  <button onClick={() => setShowHueSetup(true)}
+                    style={{ padding: "4px 12px", borderRadius: 6, border: "1px solid #334155", background: "transparent", color: "#a5b4fc", fontSize: 11, fontWeight: 600, cursor: "pointer" }}
+                  >{config?.hue_paired ? "Re-pair" : "Set up"}</button>
+                </div>
               </div>
+              <div style={{ fontSize: 12, color: "#64748b", marginBottom: 10 }}>
+                IP: {config?.hue_bridge_ip || "Not found"}
+                {config?.hue_username && <span style={{ marginLeft: 12 }}>User: {config.hue_username.slice(0, 12)}...</span>}
+              </div>
+              {hueLights.length > 0 ? (
+                <div style={{ borderTop: "1px solid #334155", paddingTop: 10 }}>
+                  <div style={{ fontSize: 11, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>
+                    {hueLights.length} lights
+                  </div>
+                  {hueLights.map(light => {
+                    const dk = `hue:${light.id}`;
+                    const nick = nicknames?.[dk];
+                    const name = nick || light.product_name || light.name || light.model || `Light ${light.id}`;
+                    const model = light.product_name || light.model || "Unknown";
+                    const reachable = light.state?.reachable !== false;
+                    return (
+                      <div key={light.id} style={{
+                        display: "flex", alignItems: "center", gap: 8, padding: "5px 0",
+                        borderBottom: "1px solid rgba(51,65,85,0.4)", fontSize: 12,
+                      }}>
+                        <span style={{
+                          width: 6, height: 6, borderRadius: "50%", flexShrink: 0,
+                          background: reachable ? "#4ade80" : "#f87171",
+                          opacity: reachable ? 0.8 : 0.5,
+                        }} />
+                        <span style={{ color: "#e2e8f0", fontWeight: 600, minWidth: 140 }}>{name}</span>
+                        <span style={{ color: "#64748b", flex: 1 }}>{model}</span>
+                        <span style={{ color: "#475569", fontSize: 11, fontFamily: "monospace" }}>ID: {light.id}</span>
+                        <span style={{ color: reachable ? "#64748b" : "#f87171", fontSize: 10, width: 70, textAlign: "right" }}>
+                          {reachable ? "reachable" : "unreachable"}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : config?.hue_paired ? (
+                <div style={{ fontSize: 12, color: "#64748b", fontStyle: "italic" }}>No lights found — try refreshing</div>
+              ) : null}
             </div>
+
+            {/* Govee Devices */}
             <div style={{ background: "#1e293b", borderRadius: 16, padding: 20, border: "1px solid #334155", marginBottom: 16 }}>
-              <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 12, color: "#e2e8f0" }}>Govee Devices</h3>
-              <div style={{ fontSize: 13, color: "#94a3b8" }}>Found: {goveeDevices.length} devices via LAN</div>
-              <button
-                onClick={async () => { const data = await api("/discover/govee"); setGoveeDevices(data.devices || []); }}
-                style={{ marginTop: 12, padding: "8px 16px", borderRadius: 8, border: "none", background: "#334155", color: "#f1f5f9", fontSize: 13, cursor: "pointer" }}
-              >Re-scan Govee Devices</button>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                <h3 style={{ fontSize: 15, fontWeight: 600, color: "#e2e8f0", margin: 0 }}>Govee Devices</h3>
+                <button
+                  onClick={async () => { const data = await api("/discover/govee"); setGoveeDevices(data.devices || []); }}
+                  style={{ padding: "4px 12px", borderRadius: 6, border: "1px solid #334155", background: "transparent", color: "#a5b4fc", fontSize: 11, fontWeight: 600, cursor: "pointer" }}
+                >Re-scan</button>
+              </div>
+              {goveeDevices.length > 0 ? (
+                <div>
+                  <div style={{ fontSize: 11, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>
+                    {goveeDevices.length} devices via LAN
+                  </div>
+                  {goveeDevices.map(device => {
+                    const dk = `govee:${device.ip}`;
+                    const nick = nicknames?.[dk];
+                    const name = nick || GOVEE_SKU_NAMES[device.sku] || device.name || device.sku || "Unknown";
+                    return (
+                      <div key={device.ip} style={{
+                        display: "flex", alignItems: "center", gap: 8, padding: "5px 0",
+                        borderBottom: "1px solid rgba(51,65,85,0.4)", fontSize: 12,
+                      }}>
+                        <span style={{
+                          width: 6, height: 6, borderRadius: "50%", flexShrink: 0,
+                          background: "#4ade80", opacity: 0.8,
+                        }} />
+                        <span style={{ color: "#e2e8f0", fontWeight: 600, minWidth: 140 }}>{name}</span>
+                        <span style={{ color: "#64748b" }}>{device.sku}</span>
+                        <span style={{ color: "#475569", fontSize: 11, fontFamily: "monospace", flex: 1 }}>{device.ip}</span>
+                        {device.mac && (
+                          <span style={{ color: "#475569", fontSize: 10, fontFamily: "monospace" }}>{device.mac}</span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div style={{ fontSize: 12, color: "#64748b", fontStyle: "italic" }}>No devices found — enable LAN Control in Govee Home app and re-scan</div>
+              )}
             </div>
             <div style={{ background: "#1e293b", borderRadius: 16, padding: 20, border: "1px solid #334155", marginBottom: 16 }}>
               <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 12, color: "#e2e8f0" }}>About</h3>
