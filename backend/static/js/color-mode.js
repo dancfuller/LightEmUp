@@ -2,6 +2,149 @@
 // Room-level color scheme control. Reads device positions from room layout.
 // Two modes: "Gradient" (directional shades of one color) and "Palette" (distinct colors, no adjacent duplicates).
 
+// ─── Gradient Direction Picker with Mini Map ──────────────────────────────
+function GradientDirectionPicker({ direction, onDirectionChange, availableDirections, placedLights, layout, preview, lightMap, nicknames, isLinear }) {
+  if (!layout || placedLights.length === 0) return null;
+
+  const boundary = layout.boundary || {};
+  const bw = isLinear ? (boundary.length || 20) : (boundary.width || 12);
+  const bh = isLinear ? 3 : (boundary.height || 10);
+
+  // Mini map sizing — scale to fit within a max width, keep aspect ratio
+  const maxW = 280;
+  const maxH = isLinear ? 48 : 160;
+  const aspect = bw / bh;
+  let mapW, mapH;
+  if (aspect > maxW / maxH) {
+    mapW = maxW;
+    mapH = maxW / aspect;
+  } else {
+    mapH = maxH;
+    mapW = maxH * aspect;
+  }
+  const scale = mapW / bw;
+
+  // Direction arrow geometry (in SVG coords)
+  const pad = 8;
+  const cx = mapW / 2, cy = mapH / 2;
+  const arrowDefs = {
+    "left-right": { x1: pad, y1: cy, x2: mapW - pad, y2: cy },
+    "right-left": { x1: mapW - pad, y1: cy, x2: pad, y2: cy },
+    "top-bottom": { x1: cx, y1: pad, x2: cx, y2: mapH - pad },
+    "bottom-top": { x1: cx, y1: mapH - pad, x2: cx, y2: pad },
+    "center-out": null,
+  };
+
+  const dirLabels = {
+    "left-right": "\u2192",
+    "right-left": "\u2190",
+    "top-bottom": "\u2193",
+    "bottom-top": "\u2191",
+    "center-out": "\u25CE",
+  };
+
+  const dirNames = {
+    "left-right": "Left to right",
+    "right-left": "Right to left",
+    "top-bottom": "Top to bottom",
+    "bottom-top": "Bottom to top",
+    "center-out": "Center outward",
+  };
+
+  const btnStyle = (active) => ({
+    padding: "4px 10px", borderRadius: 6, border: "1px solid #334155",
+    background: active ? "rgba(52,211,153,0.15)" : "transparent",
+    color: active ? "#34d399" : "#64748b", fontSize: 11, fontWeight: 600, cursor: "pointer",
+    whiteSpace: "nowrap",
+  });
+
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <div style={{ fontSize: 11, color: "#64748b", marginBottom: 6 }}>Direction:</div>
+      <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+        {/* Mini map */}
+        <div style={{
+          background: "#0f172a", borderRadius: 8, border: "1px solid #1e293b",
+          padding: 6, flexShrink: 0,
+        }}>
+          <svg width={mapW + 12} height={mapH + 12} viewBox={`-6 -6 ${mapW + 12} ${mapH + 12}`}>
+            {/* Room boundary */}
+            <rect x={0} y={0} width={mapW} height={mapH} rx={4}
+              fill="none" stroke="#334155" strokeWidth={1} strokeDasharray="4,3" />
+
+            {/* Device dots with preview colors */}
+            {placedLights.map(d => {
+              const dx = d.x * scale;
+              const dy = isLinear ? mapH / 2 : d.y * scale;
+              const previewColor = preview?.[d.key];
+              const fill = previewColor
+                ? `rgb(${previewColor.r},${previewColor.g},${previewColor.b})`
+                : "#64748b";
+              const label = getDeviceLabel(lightMap[d.key], nicknames);
+              return (
+                <g key={d.key}>
+                  <circle cx={dx} cy={dy} r={5} fill={fill}
+                    stroke="rgba(255,255,255,0.2)" strokeWidth={1} />
+                  <title>{label}</title>
+                </g>
+              );
+            })}
+
+            {/* Direction arrow or radial rings */}
+            {direction === "center-out" ? (
+              <>
+                <circle cx={cx} cy={cy} r={Math.min(mapW, mapH) * 0.15} fill="none" stroke="#34d399" strokeWidth={1} opacity={0.4} strokeDasharray="3,2" />
+                <circle cx={cx} cy={cy} r={Math.min(mapW, mapH) * 0.35} fill="none" stroke="#34d399" strokeWidth={1} opacity={0.3} strokeDasharray="3,2" />
+                <circle cx={cx} cy={cy} r={Math.min(mapW, mapH) * 0.5} fill="none" stroke="#34d399" strokeWidth={1} opacity={0.2} strokeDasharray="3,2" />
+                <circle cx={cx} cy={cy} r={3} fill="#34d399" opacity={0.8} />
+              </>
+            ) : arrowDefs[direction] ? (() => {
+              const a = arrowDefs[direction];
+              return (
+                <>
+                  <defs>
+                    <marker id="cm-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+                      <polygon points="0 0, 8 3, 0 6" fill="#34d399" />
+                    </marker>
+                  </defs>
+                  <line x1={a.x1} y1={a.y1} x2={a.x2} y2={a.y2}
+                    stroke="#34d399" strokeWidth={1.5} strokeDasharray="6,3" opacity={0.6}
+                    markerEnd="url(#cm-arrow)" />
+                  {/* Dark/Light labels — offset beside the arrow for vertical, above for horizontal */}
+                  {direction.includes("top") || direction.includes("bottom") ? (
+                    <>
+                      <text x={a.x1 + 10} y={a.y1 + 3} textAnchor="start" fill="#34d399" fontSize={7} opacity={0.7} fontFamily="sans-serif">dark</text>
+                      <text x={a.x2 + 10} y={a.y2 + 3} textAnchor="start" fill="#34d399" fontSize={7} opacity={0.7} fontFamily="sans-serif">light</text>
+                    </>
+                  ) : (
+                    <>
+                      <text x={a.x1} y={a.y1 - 6} textAnchor="middle" fill="#34d399" fontSize={7} opacity={0.7} fontFamily="sans-serif">dark</text>
+                      <text x={a.x2} y={a.y2 - 6} textAnchor="middle" fill="#34d399" fontSize={7} opacity={0.7} fontFamily="sans-serif">light</text>
+                    </>
+                  )}
+                </>
+              );
+            })() : null}
+          </svg>
+        </div>
+
+        {/* Direction buttons */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          {availableDirections.map(key => (
+            <button key={key} onClick={() => onDirectionChange(key)}
+              style={btnStyle(direction === key)}
+              title={dirNames[key]}
+            >
+              <span style={{ marginRight: 4 }}>{dirLabels[key]}</span>
+              {dirNames[key]}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlGovee, favorites, onFavoritesChange, nicknames, roomLayouts }) {
   const [mode, setMode] = useState("gradient"); // "gradient" | "palette"
   const [baseColor, setBaseColor] = useState({ r: 40, g: 180, b: 80 });
@@ -198,13 +341,17 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     { name: "Neon", colors: [{ r: 255, g: 0, b: 255 }, { r: 0, g: 255, b: 255 }, { r: 255, g: 255, b: 0 }, { r: 0, g: 255, b: 128 }] },
   ];
 
-  const directionLabels = {
-    "left-right": "\u2192",
-    "right-left": "\u2190",
-    "top-bottom": "\u2193",
-    "bottom-top": "\u2191",
-    "center-out": "\u25CE",
-  };
+  const isLinear = layout?.mode === "linear";
+  const availableDirections = isLinear
+    ? ["left-right", "right-left", "center-out"]
+    : ["left-right", "right-left", "top-bottom", "bottom-top", "center-out"];
+
+  // Reset direction if current one isn't available for this layout mode
+  useEffect(() => {
+    if (!availableDirections.includes(direction)) {
+      setDirection("left-right");
+    }
+  }, [isLinear]);
 
   const btnStyle = (active) => ({
     padding: "4px 12px", borderRadius: 6, border: "1px solid #334155",
@@ -251,19 +398,18 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
                 Shades of one color, distributed along a direction across your room layout.
               </div>
 
-              {/* Direction picker */}
-              <div style={{ display: "flex", gap: 4, alignItems: "center", marginBottom: 12 }}>
-                <span style={{ fontSize: 11, color: "#64748b", marginRight: 4 }}>Direction:</span>
-                {Object.entries(directionLabels).map(([key, label]) => (
-                  <button key={key} onClick={() => setDirection(key)}
-                    style={{
-                      ...btnStyle(direction === key),
-                      padding: "4px 10px", fontSize: 14, lineHeight: 1,
-                    }}
-                    title={key.replace("-", " \u2192 ")}
-                  >{label}</button>
-                ))}
-              </div>
+              {/* Direction picker with mini map */}
+              <GradientDirectionPicker
+                direction={direction}
+                onDirectionChange={setDirection}
+                availableDirections={availableDirections}
+                placedLights={placedColorLights}
+                layout={layout}
+                preview={preview}
+                lightMap={lightMap}
+                nicknames={nicknames}
+                isLinear={isLinear}
+              />
 
               {/* Base color */}
               <div style={{ marginBottom: 12 }}>
