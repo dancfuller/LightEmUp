@@ -312,7 +312,9 @@ async def control_hue_light(req: HueLightStateRequest):
             state["xy"] = [round(X / total, 4), round(Y / total, 4)]
         else:
             state["xy"] = [0.3127, 0.3290]  # D65 white
-        state["bri"] = max(1, min(254, int(Y * 254)))
+        # Only derive brightness from color luminance if no explicit brightness was sent
+        if req.brightness is None:
+            state["bri"] = max(1, min(254, int(Y * 254)))
 
     success = await set_hue_light_state(ip, username, req.light_id, state)
     return {"success": success}
@@ -327,14 +329,15 @@ async def control_govee(req: GoveeCommandRequest):
     if req.on is not None:
         results["turn"] = await govee_lan_turn(req.ip, req.on)
 
-    if req.brightness is not None:
-        results["brightness"] = await govee_lan_brightness(req.ip, req.brightness)
-
     if req.r is not None and req.g is not None and req.b is not None:
         results["color"] = await govee_lan_color(req.ip, req.r, req.g, req.b)
 
     if req.color_temp_kelvin is not None:
         results["color_temp"] = await govee_lan_color_temp(req.ip, req.color_temp_kelvin)
+
+    # Send brightness after color — some Govee devices reset brightness on color change
+    if req.brightness is not None:
+        results["brightness"] = await govee_lan_brightness(req.ip, req.brightness)
 
     return {"results": results}
 

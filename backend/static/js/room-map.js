@@ -682,6 +682,7 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
   };
 
   const applyPreset = (preset) => {
+    let goveeDelay = 0;
     Object.entries(preset.snapshot).forEach(([key, state]) => {
       const light = lightMap[key];
       if (!light) return;
@@ -695,7 +696,12 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
         cmd.g = state.color.g;
         cmd.b = state.color.b;
       }
-      light._controlFn(light, cmd);
+      if (light.type === "govee") {
+        setTimeout(() => light._controlFn(light, cmd), goveeDelay);
+        goveeDelay += 150;
+      } else {
+        light._controlFn(light, cmd);
+      }
     });
   };
 

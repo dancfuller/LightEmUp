@@ -305,13 +305,32 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
   // ─── Apply colors to lights ─────────────────────────────────────────
   const applyColors = () => {
     if (!preview) return;
-    Object.entries(preview).forEach(([key, color]) => {
+    const entries = Object.entries(preview);
+    console.log("[ColorMode] Applying to", entries.length, "devices. Preview keys:", entries.map(([k]) => k));
+    console.log("[ColorMode] LightMap keys:", Object.keys(lightMap));
+    // Hue lights can be sent in parallel (REST API), but Govee devices
+    // need staggering to avoid UDP packet drops on the same port
+    let goveeDelay = 0;
+    entries.forEach(([key, color]) => {
       const light = lightMap[key];
-      if (light && light._controlFn) {
-        const bri = light.type === "hue"
-          ? Math.round(brightness * 254 / 100)
-          : brightness;
-        light._controlFn(light, { on: true, r: color.r, g: color.g, b: color.b, brightness: bri });
+      if (!light) {
+        console.warn("[ColorMode] No light found for key:", key);
+        return;
+      }
+      if (!light._controlFn) {
+        console.warn("[ColorMode] No _controlFn for key:", key);
+        return;
+      }
+      const bri = light.type === "hue"
+        ? Math.round(brightness * 254 / 100)
+        : brightness;
+      const cmd = { on: true, r: color.r, g: color.g, b: color.b, brightness: bri };
+      console.log("[ColorMode] Sending to", key, light.type, cmd);
+      if (light.type === "govee") {
+        setTimeout(() => light._controlFn(light, cmd), goveeDelay);
+        goveeDelay += 150; // 150ms between each Govee device
+      } else {
+        light._controlFn(light, cmd);
       }
     });
   };
