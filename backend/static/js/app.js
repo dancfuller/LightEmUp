@@ -243,7 +243,7 @@ function App() {
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <button
-            onClick={() => setShowHueSetup(true)}
+            onClick={() => config?.hue_paired ? setActiveTab("settings") : setShowHueSetup(true)}
             style={{
               display: "inline-flex", alignItems: "center", gap: 6,
               padding: "4px 12px", borderRadius: 20, border: "none", cursor: "pointer",
@@ -260,7 +260,24 @@ function App() {
             }} />
             Hue {config?.hue_paired ? "" : "(Setup)"}
           </button>
-          <StatusBadge connected={goveeDevices.length > 0} label={`Govee (${goveeDevices.length})`} />
+          <button
+            onClick={() => setActiveTab("settings")}
+            style={{
+              display: "inline-flex", alignItems: "center", gap: 6,
+              padding: "4px 12px", borderRadius: 20, border: "none", cursor: "pointer",
+              background: goveeDevices.length > 0 ? "rgba(74,222,128,0.15)" : "rgba(248,113,113,0.15)",
+              color: goveeDevices.length > 0 ? "#4ade80" : "#f87171",
+              fontSize: 12, fontWeight: 600, letterSpacing: 0.5,
+            }}
+            title={goveeDevices.length > 0 ? `${goveeDevices.length} Govee devices found` : "Click to open Govee settings"}
+          >
+            <span style={{
+              width: 7, height: 7, borderRadius: "50%",
+              background: goveeDevices.length > 0 ? "#4ade80" : "#f87171",
+              boxShadow: goveeDevices.length > 0 ? "0 0 6px #4ade80" : "none",
+            }} />
+            Govee ({goveeDevices.length})
+          </button>
         </div>
       </header>
 
@@ -320,20 +337,28 @@ function App() {
           </>
         )}
 
-        {activeTab === "all lights" && (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 12 }}>
-            {hueLights.map(light => (
-              <LightCard key={`hue-${light.id}`} light={light} onControl={controlHueLight}
-                favorites={favoriteColors} onFavoritesChange={updateFavorites}
-                nicknames={nicknames} onNicknameChange={updateNickname} />
-            ))}
-            {goveeDevices.map(device => (
-              <LightCard key={`govee-${device.ip}`} light={device} onControl={controlGoveeDevice}
-                favorites={favoriteColors} onFavoritesChange={updateFavorites}
-                nicknames={nicknames} onNicknameChange={updateNickname} />
-            ))}
-          </div>
-        )}
+        {activeTab === "all lights" && (() => {
+          const deviceRoomMap = {};
+          Object.entries(rooms).forEach(([rn, keys]) => {
+            (keys || []).forEach(k => { deviceRoomMap[k] = rn; });
+          });
+          return (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 12 }}>
+              {hueLights.map(light => (
+                <LightCard key={`hue-${light.id}`} light={light} onControl={controlHueLight}
+                  favorites={favoriteColors} onFavoritesChange={updateFavorites}
+                  nicknames={nicknames} onNicknameChange={updateNickname}
+                  roomName={deviceRoomMap[`hue:${light.id}`]} />
+              ))}
+              {goveeDevices.map(device => (
+                <LightCard key={`govee-${device.ip}`} light={device} onControl={controlGoveeDevice}
+                  favorites={favoriteColors} onFavoritesChange={updateFavorites}
+                  nicknames={nicknames} onNicknameChange={updateNickname}
+                  roomName={deviceRoomMap[`govee:${device.ip}`]} />
+              ))}
+            </div>
+          );
+        })()}
 
         {activeTab === "assign rooms" && (
           <RoomAssignment

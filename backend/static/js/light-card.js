@@ -1,6 +1,6 @@
 // ─── Light Card Component ───────────────────────────────────────────────────
 
-function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, onNicknameChange }) {
+function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, onNicknameChange, roomName }) {
   const [brightness, setBrightness] = useState(
     light.type === "hue" ? Math.round((light.state?.brightness || 0) / 254 * 100) : (light.state?.brightness ?? 50)
   );
@@ -113,7 +113,12 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
           {/* Friendly name (permanent, from SKU map) — smaller when nickname is set */}
           <div style={{ fontSize: nickname ? 12 : 14, fontWeight: nickname ? 500 : 600, color: nickname ? "#94a3b8" : "#f1f5f9" }}>{friendlyName}</div>
           {/* Model line (not editable) */}
-          <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>{modelLine}</div>
+          <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>
+            {modelLine}
+            {roomName && (
+              <span style={{ color: "#6366f1", marginLeft: 6 }}>&middot; {roomName}</span>
+            )}
+          </div>
           {/* IP address */}
           {light.ip && (
             <div style={{ fontSize: 10, color: "#475569", marginTop: 1 }}>{light.ip}</div>

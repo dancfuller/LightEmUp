@@ -95,6 +95,9 @@ class HueLightStateRequest(BaseModel):
     hue: Optional[int] = None  # 0-65535
     saturation: Optional[int] = None  # 0-254
     color_temp: Optional[int] = None  # 153-500 (mirek)
+    r: Optional[int] = None  # 0-255, requires g and b
+    g: Optional[int] = None
+    b: Optional[int] = None
 
 class GoveeCommandRequest(BaseModel):
     ip: str
@@ -293,6 +296,23 @@ async def control_hue_light(req: HueLightStateRequest):
         state["sat"] = req.saturation
     if req.color_temp is not None:
         state["ct"] = req.color_temp
+
+    # RGB → Hue xy color space (wide gamut D65)
+    if req.r is not None and req.g is not None and req.b is not None:
+        # Gamma correction and wide RGB conversion
+        def gamma(v):
+            v = v / 255.0
+            return pow(v, 2.2) if v > 0.04045 else v / 12.92
+        rr, gg, bb = gamma(req.r), gamma(req.g), gamma(req.b)
+        X = rr * 0.664511 + gg * 0.154324 + bb * 0.162028
+        Y = rr * 0.283881 + gg * 0.668433 + bb * 0.047685
+        Z = rr * 0.000088 + gg * 0.072310 + bb * 0.986039
+        total = X + Y + Z
+        if total > 0:
+            state["xy"] = [round(X / total, 4), round(Y / total, 4)]
+        else:
+            state["xy"] = [0.3127, 0.3290]  # D65 white
+        state["bri"] = max(1, min(254, int(Y * 254)))
 
     success = await set_hue_light_state(ip, username, req.light_id, state)
     return {"success": success}

@@ -267,13 +267,13 @@ function wrapText(text, maxCharsPerLine) {
   return lines;
 }
 
-function DeviceNode({ deviceKey, pos, gridSize, light, nicknames, isEdit, isSelected, onSelect, onDragEnd, segmentInfo, segments, onToggleSegments, colorOverride }) {
+function DeviceNode({ deviceKey, pos, gridSize, light, nicknames, isEdit, isSelected, onSelect, onDragEnd, segmentInfo, segments, onToggleSegments }) {
   const [dragging, setDragging] = useState(false);
   const [dragPos, setDragPos] = useState(null);
   const dragPosRef = useRef(null);
   const didDragRef = useRef(false);
   const svgRef = useRef(null);
-  const color = colorOverride ? `rgb(${colorOverride.r},${colorOverride.g},${colorOverride.b})` : getDeviceColor(light);
+  const color = getDeviceColor(light);
   const label = getDeviceLabel(light, nicknames);
   const lines = wrapText(label, 14);
   const cx = pos.x * gridSize;
@@ -344,8 +344,21 @@ function DeviceNode({ deviceKey, pos, gridSize, light, nicknames, isEdit, isSele
   const displayY = dragging && dragPos ? dragPos.y * gridSize : cy;
   const dpillX = displayX - pillW / 2;
   const dpillY = displayY - pillH / 2;
-  const isOn = light.state?.on || !!colorOverride;
+  const isOn = light.state?.on;
   const transition = dragging ? "none" : "transform 0.15s, opacity 0.3s";
+
+  // Build tooltip
+  const bri = light.type === "hue"
+    ? Math.round((light.state?.brightness || 0) / 254 * 100)
+    : (light.state?.brightness ?? 0);
+  const col = getInitialColor(light);
+  const tipLines = [
+    label,
+    isOn ? "On" : "Off",
+    `Brightness: ${bri}%`,
+  ];
+  if (col) tipLines.push(`Color: R${col.r} G${col.g} B${col.b}`);
+  const tooltip = tipLines.join("\n");
 
   return (
     <g style={{ cursor: isEdit ? "grab" : "pointer", transition, userSelect: "none", WebkitUserSelect: "none" }}
@@ -354,6 +367,7 @@ function DeviceNode({ deviceKey, pos, gridSize, light, nicknames, isEdit, isSele
       onDragStart={(e) => e.preventDefault()}
       onClick={(e) => { e.stopPropagation(); if (!didDragRef.current) onSelect(deviceKey); }}
     >
+      <title>{tooltip}</title>
       {/* Pill background */}
       <rect x={pillX} y={pillY} width={pillW} height={pillH} rx={pillH / 2}
         fill={isOn ? "rgba(30,41,59,0.92)" : "rgba(15,23,42,0.85)"}
@@ -487,15 +501,6 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
   const [isEdit, setIsEdit] = useState(false);
   const [selectedDevice, setSelectedDevice] = useState(null);
   const [placingDevice, setPlacingDevice] = useState(null);
-  // Tonal mode
-  const [tonalActive, setTonalActive] = useState(false);
-  const [tonalBase, setTonalBase] = useState({ r: 40, g: 180, b: 80 });
-  const [tonalMode, setTonalMode] = useState("random"); // "random" or "gradient"
-  const [tonalPreview, setTonalPreview] = useState(null); // {deviceKey: {r,g,b}, ...}
-  const [gradientStart, setGradientStart] = useState(null); // {x, y} SVG coords
-  const [gradientEnd, setGradientEnd] = useState(null); // {x, y} SVG coords
-  const [draggingGradient, setDraggingGradient] = useState(null); // "start"|"end"|"drawing"|null
-  const gradientSvgRef = useRef(null);
   // Furniture / landmarks
   const [selectedFurniture, setSelectedFurniture] = useState(null);
   const [placingFurniture, setPlacingFurniture] = useState(null); // furniture type string
@@ -639,94 +644,6 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
     }));
   };
 
-  // ─── Tonal mode logic ──────────────────────────────────────────────────
-  const computeTonalPreview = useCallback((base, mode, gStart, gEnd) => {
-    if (!layout) return null;
-    const placedEntries = Object.entries(layout.devices)
-      .filter(([k]) => lightMap[k]?.capabilities?.has_color);
-    if (placedEntries.length === 0) return null;
-    const count = placedEntries.length;
-    const shades = generateTonalShades(base.r, base.g, base.b, count);
-
-    if (mode === "gradient" && gStart && gEnd) {
-      // Project each device position onto the gradient vector
-      const dx = gEnd.x - gStart.x;
-      const dy = gEnd.y - gStart.y;
-      const len = Math.sqrt(dx * dx + dy * dy);
-      if (len < 0.001) return null;
-      const sorted = placedEntries.map(([key, pos]) => {
-        const px = pos.x - gStart.x;
-        const py = pos.y - gStart.y;
-        const proj = (px * dx + py * dy) / (len * len);
-        return { key, proj };
-      }).sort((a, b) => a.proj - b.proj);
-      const preview = {};
-      sorted.forEach((item, i) => { preview[item.key] = shades[i]; });
-      return preview;
-    } else {
-      // Random: shuffle shades
-      const shuffled = [...shades];
-      for (let i = shuffled.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-      }
-      const preview = {};
-      placedEntries.forEach(([key], i) => { preview[key] = shuffled[i]; });
-      return preview;
-    }
-  }, [layout, lightMap]);
-
-  const refreshTonalPreview = useCallback(() => {
-    const preview = computeTonalPreview(tonalBase, tonalMode, gradientStart, gradientEnd);
-    setTonalPreview(preview);
-  }, [tonalBase, tonalMode, gradientStart, gradientEnd, computeTonalPreview]);
-
-  // Update preview when gradient endpoints or base color change
-  useEffect(() => {
-    if (tonalActive && tonalMode === "gradient" && gradientStart && gradientEnd) {
-      const preview = computeTonalPreview(tonalBase, "gradient", gradientStart, gradientEnd);
-      setTonalPreview(preview);
-    }
-  }, [gradientStart, gradientEnd, tonalBase, tonalActive]);
-
-  // Gradient handle dragging
-  const currentGridSize = layout?.grid_size || 40;
-  useEffect(() => {
-    if (!draggingGradient) return;
-    const svg = gradientSvgRef.current;
-    if (!svg) return;
-    const gs = currentGridSize;
-    const onMove = (e) => {
-      const pt = svg.createSVGPoint();
-      const src = e.touches ? e.touches[0] : e;
-      pt.x = src.clientX; pt.y = src.clientY;
-      const svgP = pt.matrixTransform(svg.getScreenCTM().inverse());
-      const pos = { x: svgP.x / gs, y: svgP.y / gs };
-      if (draggingGradient === "start") setGradientStart(pos);
-      else if (draggingGradient === "end") setGradientEnd(pos);
-    };
-    const onUp = () => setDraggingGradient(null);
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-    window.addEventListener("touchmove", onMove, { passive: false });
-    window.addEventListener("touchend", onUp);
-    return () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-      window.removeEventListener("touchmove", onMove);
-      window.removeEventListener("touchend", onUp);
-    };
-  }, [draggingGradient, currentGridSize]);
-
-  const applyTonalColors = () => {
-    if (!tonalPreview) return;
-    Object.entries(tonalPreview).forEach(([key, color]) => {
-      const light = lightMap[key];
-      if (light && light._controlFn) {
-        light._controlFn(light, { on: true, r: color.r, g: color.g, b: color.b });
-      }
-    });
-  };
 
   // ─── Scene preset logic ────────────────────────────────────────────────
   // Load presets from config on mount
@@ -837,16 +754,6 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
         addLandmark(gx, label.trim());
       }
       setPlacingLandmark(false);
-    } else if (tonalActive && tonalMode === "gradient") {
-      const gxf = svgP.x / gridSize;
-      const gyf = svgP.y / gridSize;
-      if (!gradientStart || (gradientStart && gradientEnd)) {
-        setGradientStart({ x: gxf, y: gyf });
-        setGradientEnd(null);
-        setTonalPreview(null);
-      } else if (!gradientEnd) {
-        setGradientEnd({ x: gxf, y: gyf });
-      }
     } else {
       setSelectedDevice(null);
       setSelectedFurniture(null);
@@ -999,17 +906,8 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
             padding: "5px 14px", borderRadius: 8, border: "1px solid #334155",
             background: "transparent", color: "#94a3b8", fontSize: 12, fontWeight: 600, cursor: "pointer",
           }}
-        >{isLinear ? "Floor Plan" : "Line"}</button>
+        >{isLinear ? "Change to Floor Plan" : "Change to Linear"}</button>
 
-        {!isEdit && (
-          <button onClick={() => { setTonalActive(!tonalActive); if (tonalActive) { setTonalPreview(null); setGradientStart(null); setGradientEnd(null); } }}
-            style={{
-              padding: "5px 14px", borderRadius: 8, border: "1px solid #334155",
-              background: tonalActive ? "rgba(52,211,153,0.15)" : "transparent",
-              color: tonalActive ? "#34d399" : "#94a3b8", fontSize: 12, fontWeight: 600, cursor: "pointer",
-            }}
-          >Tonal</button>
-        )}
 
         {isEdit && (
           <>
@@ -1030,92 +928,6 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
         )}
 
       </div>
-
-      {/* Tonal mode panel */}
-      {tonalActive && !isEdit && (
-        <div style={{
-          padding: 16, borderRadius: 12, marginBottom: 12,
-          background: "linear-gradient(135deg, #1e293b 0%, #172033 100%)",
-          border: "1px solid #334155",
-        }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-            <div style={{ fontSize: 12, fontWeight: 600, color: "#34d399", textTransform: "uppercase", letterSpacing: 0.8 }}>
-              Tonal Shades
-            </div>
-            <div style={{ display: "flex", gap: 6 }}>
-              <button onClick={() => { setTonalMode("random"); }}
-                style={{
-                  padding: "4px 12px", borderRadius: 6, border: "1px solid #334155",
-                  background: tonalMode === "random" ? "rgba(52,211,153,0.15)" : "transparent",
-                  color: tonalMode === "random" ? "#34d399" : "#64748b", fontSize: 11, fontWeight: 600, cursor: "pointer",
-                }}>Random</button>
-              <button onClick={() => { setTonalMode("gradient"); }}
-                style={{
-                  padding: "4px 12px", borderRadius: 6, border: "1px solid #334155",
-                  background: tonalMode === "gradient" ? "rgba(52,211,153,0.15)" : "transparent",
-                  color: tonalMode === "gradient" ? "#34d399" : "#64748b", fontSize: 11, fontWeight: 600, cursor: "pointer",
-                }}>Gradient</button>
-            </div>
-          </div>
-
-          {/* Base color picker */}
-          <div style={{ marginBottom: 12 }}>
-            <ColorPicker
-              size={120}
-              currentColor={tonalBase}
-              onColorSelect={(r, g, b) => setTonalBase({ r, g, b })}
-              favorites={favorites}
-              onFavoritesChange={onFavoritesChange}
-              compact={true}
-            />
-          </div>
-
-          {/* Gradient mode instructions */}
-          {tonalMode === "gradient" && !gradientStart && (
-            <div style={{ fontSize: 11, color: "#64748b", marginBottom: 8 }}>
-              Click two points on the map to set the gradient direction (dark to light).
-            </div>
-          )}
-          {tonalMode === "gradient" && gradientStart && gradientEnd && (
-            <div style={{ fontSize: 11, color: "#64748b", marginBottom: 8 }}>
-              Gradient set. Drag the endpoints on the map to adjust.
-            </div>
-          )}
-
-          {/* Preview swatches */}
-          {tonalPreview && (
-            <div style={{ marginBottom: 12 }}>
-              <div style={{ fontSize: 11, color: "#64748b", marginBottom: 4 }}>Preview:</div>
-              <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-                {Object.entries(tonalPreview).map(([key, c]) => (
-                  <div key={key} style={{
-                    width: 20, height: 20, borderRadius: 4,
-                    background: `rgb(${c.r},${c.g},${c.b})`,
-                    border: "1px solid rgba(255,255,255,0.15)",
-                  }} title={getDeviceLabel(lightMap[key], nicknames)} />
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Action buttons */}
-          <div style={{ display: "flex", gap: 8 }}>
-            <button onClick={() => { refreshTonalPreview(); }}
-              style={{
-                padding: "6px 16px", borderRadius: 8, border: "1px solid #334155",
-                background: "transparent", color: "#94a3b8", fontSize: 12, fontWeight: 600, cursor: "pointer",
-              }}>{tonalMode === "random" ? "Shuffle" : "Preview"}</button>
-            <button onClick={() => { applyTonalColors(); }}
-              disabled={!tonalPreview}
-              style={{
-                padding: "6px 16px", borderRadius: 8, border: "none",
-                background: tonalPreview ? "#34d399" : "#334155",
-                color: tonalPreview ? "#0f172a" : "#64748b",
-                fontSize: 12, fontWeight: 600, cursor: tonalPreview ? "pointer" : "default",
-              }}>Apply</button>
-          </div>
-        </div>
-      )}
 
       {/* Scene presets */}
       {!isEdit && (
@@ -1308,51 +1120,10 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
                 segmentInfo={segmentInfo}
                 segments={segData}
                 onToggleSegments={handleToggleSegments}
-                colorOverride={tonalPreview?.[key]}
               />
             );
           })}
 
-          {/* Gradient arrow overlay (tonal mode) */}
-          {tonalActive && tonalMode === "gradient" && gradientStart && (
-            <g>
-              {gradientEnd && (
-                <>
-                  <defs>
-                    <marker id="grad-arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
-                      <polygon points="0 0, 8 3, 0 6" fill="#34d399" />
-                    </marker>
-                  </defs>
-                  <line
-                    x1={gradientStart.x * gridSize} y1={gradientStart.y * gridSize}
-                    x2={gradientEnd.x * gridSize} y2={gradientEnd.y * gridSize}
-                    stroke="#34d399" strokeWidth={2} strokeDasharray="6,3" opacity={0.7}
-                    markerEnd="url(#grad-arrow)"
-                  />
-                </>
-              )}
-              {/* Draggable start handle */}
-              <circle cx={gradientStart.x * gridSize} cy={gradientStart.y * gridSize} r={8}
-                fill="#1e293b" stroke="#34d399" strokeWidth={2} style={{ cursor: "grab" }}
-                onMouseDown={(e) => { e.stopPropagation(); setDraggingGradient("start"); gradientSvgRef.current = e.currentTarget.closest("svg"); }}
-                onTouchStart={(e) => { e.stopPropagation(); setDraggingGradient("start"); gradientSvgRef.current = e.currentTarget.closest("svg"); }}
-              />
-              <text x={gradientStart.x * gridSize} y={gradientStart.y * gridSize + 3.5} textAnchor="middle"
-                fill="#34d399" fontSize={8} fontFamily="sans-serif" fontWeight="bold" pointerEvents="none">D</text>
-              {/* Draggable end handle */}
-              {gradientEnd && (
-                <>
-                  <circle cx={gradientEnd.x * gridSize} cy={gradientEnd.y * gridSize} r={8}
-                    fill="#1e293b" stroke="#34d399" strokeWidth={2} style={{ cursor: "grab" }}
-                    onMouseDown={(e) => { e.stopPropagation(); setDraggingGradient("end"); gradientSvgRef.current = e.currentTarget.closest("svg"); }}
-                    onTouchStart={(e) => { e.stopPropagation(); setDraggingGradient("end"); gradientSvgRef.current = e.currentTarget.closest("svg"); }}
-                  />
-                  <text x={gradientEnd.x * gridSize} y={gradientEnd.y * gridSize + 3.5} textAnchor="middle"
-                    fill="#34d399" fontSize={8} fontFamily="sans-serif" fontWeight="bold" pointerEvents="none">L</text>
-                </>
-              )}
-            </g>
-          )}
 
           {/* Ghost furniture preview while placing */}
           {placingFurniture && hoverGrid && (() => {

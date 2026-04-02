@@ -5,6 +5,7 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
   const [showRoomControls, setShowRoomControls] = useState(false);
   const [showLightning, setShowLightning] = useState(false);
   const [showMap, setShowMap] = useState(false);
+  const [showColor, setShowColor] = useState(false);
   const [roomBrightness, setRoomBrightness] = useState(75);
   const [roomColor, setRoomColor] = useState(null);
 
@@ -62,6 +63,17 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
             }}
           >
             Map
+          </button>
+          <button
+            onClick={() => { setShowColor(!showColor); if (!showColor) { setShowLightning(false); setShowRoomControls(false); } }}
+            style={{
+              padding: "6px 14px", borderRadius: 8, border: "1px solid #334155",
+              background: showColor ? "rgba(52,211,153,0.15)" : "transparent",
+              color: showColor ? "#34d399" : "#94a3b8",
+              fontSize: 12, fontWeight: 600, cursor: "pointer", transition: "all 0.2s",
+            }}
+          >
+            Color
           </button>
           <button
             onClick={() => { setShowRoomControls(!showRoomControls); if (!showRoomControls) setShowLightning(false); }}
@@ -133,6 +145,18 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
               </div>
             )}
           </div>
+        )}
+
+        {/* Color Mode */}
+        {showColor && (
+          <ColorMode
+            roomName={name}
+            hueLights={hueLights} goveeDevices={goveeDevices}
+            onControlHue={onControlHue} onControlGovee={onControlGovee}
+            favorites={favorites} onFavoritesChange={onFavoritesChange}
+            nicknames={nicknames}
+            roomLayouts={roomLayouts}
+          />
         )}
 
         {/* Room Map */}

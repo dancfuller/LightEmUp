@@ -15,7 +15,7 @@ LightEmUp discovers and controls Philips Hue (Zigbee via bridge) and Govee (LAN/
 - **Room-level overrides** — set brightness/color for all lights in a room at once
 - **Interactive room maps** — drag-and-drop 2D floor plan and linear layout modes with live device state, per-device controls, reference furniture items, and auto-save
 - **Lightning storm scene** — realistic thunderstorm simulation with Hue light flashes, configurable timing presets, optional thunder sound effects, and a "funny mode" that replaces thunder with fart sounds
-- **Tonal color presets** — apply harmonious color schemes across rooms with gradient and random shade modes
+- **Color Mode** — room-level color schemes with layout awareness: Gradient mode distributes shades along a direction, Palette mode assigns distinct colors so adjacent lights never match. Includes brightness control and preset palettes (Warm, Cool, Forest, Sunset, Ocean, Neon)
 - **Govee Razer per-segment control** — independent color control of individual panels on compatible devices (e.g. Hexa Light Panels)
 - **Device nicknames** — custom names persisted across sessions
 - **Desktop shortcut launcher** — one-click launch with auto-server-start and browser open (Windows)
@@ -108,6 +108,7 @@ backend/
       light-card.js     # Per-device control card
       lightning-panel.js # Lightning storm scene UI
       room-map.js       # Interactive 2D floor plan & linear layout
+      color-mode.js     # Room-level color schemes (gradient & palette)
       room-section.js   # Room grouping with controls
       room-assignment.js # Drag-based room assignment UI
       setup-wizard.js   # Hue Bridge pairing wizard
@@ -119,7 +120,7 @@ install-shortcut.ps1 # Desktop/Start Menu shortcut installer
 ```
 
 - **Backend**: Python FastAPI with Hue (local REST API) and Govee (UDP broadcast/unicast) control
-- **Frontend**: Modular React app split across 10 component files — React and Babel load from CDN, no build step, Babel transpiles in-browser
+- **Frontend**: Modular React app split across 11 component files — React and Babel load from CDN, no build step, Babel transpiles in-browser
 - **Config**: `config.json` stores bridge credentials, room assignments, nicknames, room layouts, scene settings (gitignored)
 
 ## API Endpoints
@@ -129,7 +130,7 @@ install-shortcut.ps1 # Desktop/Start Menu shortcut installer
 | GET | `/api/discover/hue` | Discover Hue bridges |
 | POST | `/api/hue/pair` | Pair with a Hue bridge |
 | GET | `/api/hue/lights` | List Hue lights |
-| POST | `/api/hue/light` | Control a Hue light |
+| POST | `/api/hue/light` | Control a Hue light (supports RGB) |
 | GET | `/api/discover/govee` | Discover Govee LAN devices |
 | POST | `/api/govee/control` | Control a Govee device |
 | GET | `/api/rooms` | Get room assignments |
