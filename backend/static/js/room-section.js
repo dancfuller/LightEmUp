@@ -43,7 +43,7 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <button
-            onClick={() => { setShowLightning(!showLightning); if (!showLightning) setShowRoomControls(false); }}
+            onClick={() => { const opening = !showLightning; setShowLightning(opening); if (opening) { setCollapsed(false); setShowRoomControls(false); } }}
             style={{
               padding: "6px 14px", borderRadius: 8, border: "1px solid #334155",
               background: showLightning || lightningActive ? "rgba(251,191,36,0.15)" : "transparent",
@@ -54,7 +54,7 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
             &#x26A1; {lightningActive ? "Storm" : "Lightning"}
           </button>
           <button
-            onClick={() => { setShowMap(!showMap); if (!showMap) { setShowLightning(false); setShowRoomControls(false); } }}
+            onClick={() => { const opening = !showMap; setShowMap(opening); if (opening) { setCollapsed(false); setShowLightning(false); setShowRoomControls(false); } }}
             style={{
               padding: "6px 14px", borderRadius: 8, border: "1px solid #334155",
               background: showMap ? "rgba(52,211,153,0.15)" : "transparent",
@@ -65,7 +65,7 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
             Map
           </button>
           <button
-            onClick={() => { setShowColor(!showColor); if (!showColor) { setShowLightning(false); setShowRoomControls(false); } }}
+            onClick={() => { const opening = !showColor; setShowColor(opening); if (opening) { setCollapsed(false); setShowLightning(false); setShowRoomControls(false); } }}
             style={{
               padding: "6px 14px", borderRadius: 8, border: "1px solid #334155",
               background: showColor ? "rgba(52,211,153,0.15)" : "transparent",
@@ -76,7 +76,7 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
             Color
           </button>
           <button
-            onClick={() => { setShowRoomControls(!showRoomControls); if (!showRoomControls) setShowLightning(false); }}
+            onClick={() => { const opening = !showRoomControls; setShowRoomControls(opening); if (opening) { setCollapsed(false); setShowLightning(false); } }}
             style={{
               padding: "6px 14px", borderRadius: 8, border: "1px solid #334155",
               background: showRoomControls ? "rgba(99,102,241,0.15)" : "transparent",
