@@ -446,13 +446,15 @@ function DeviceNode({ deviceKey, pos, gridSize, light, nicknames, isEdit, isSele
 // Convert segment index to letter label: 0→A, 1→B, etc.
 function segLetter(idx) { return String.fromCharCode(65 + idx); }
 
-function SegmentNode({ deviceKey, segIndex, pos, gridSize, light, nicknames, packLabel, isEdit, isSelected, onSelect, onDragEnd }) {
+function SegmentNode({ deviceKey, segIndex, pos, gridSize, light, nicknames, packLabel, colorOverride, isEdit, isSelected, onSelect, onDragEnd }) {
   const [dragging, setDragging] = useState(false);
   const [dragPos, setDragPos] = useState(null);
   const dragPosRef = useRef(null);
   const didDragRef = useRef(false);
   const svgRef = useRef(null);
-  const color = getDeviceColor(light);
+  const color = colorOverride
+    ? `rgb(${colorOverride.r},${colorOverride.g},${colorOverride.b})`
+    : getDeviceColor(light);
   const cx = pos.x * gridSize;
   const cy = pos.y * gridSize;
 
@@ -528,7 +530,7 @@ function SegmentNode({ deviceKey, segIndex, pos, gridSize, light, nicknames, pac
         const segBri = light.type === "hue"
           ? Math.round((light.state?.brightness || 0) / 254 * 100)
           : (light.state?.brightness ?? 0);
-        const segCol = getInitialColor(light);
+        const segCol = colorOverride || getInitialColor(light);
         const lines = [`${parentName}${packLabel ? " " + packLabel : ""} — Segment ${letter}`, isOn ? "On" : "Off", `Brightness: ${segBri}%`];
         if (segCol) lines.push(`Color: R${segCol.r} G${segCol.g} B${segCol.b}`);
         return lines.join("\n");
@@ -581,6 +583,8 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
   const [presets, setPresets] = useState([]);
   const [presetName, setPresetName] = useState("");
   const [showPresetSave, setShowPresetSave] = useState(false);
+  // Per-segment color overrides (keyed "govee:ip:segN") — set by Identify, shown on dots
+  const [segmentColorOverrides, setSegmentColorOverrides] = useState({});
 
   const allLights = [
     ...hueLights.map(l => ({ ...l, _controlFn: onControlHue })),
@@ -869,14 +873,16 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
       assignment[item.key] = chosen;
     });
 
-    // Apply colors
+    // Apply colors — collect segment overrides for immediate UI update
+    const newSegOverrides = {};
     let goveeDelay = 0;
     let segDelay = 0;
     items.forEach(item => {
       const c = palette[assignment[item.key]];
       if (!c) return;
       if (item.segIndex !== undefined) {
-        // Segment — use V2 API
+        // Segment — use V2 API; also update local override so dot reflects the color
+        newSegOverrides[item.key] = c;
         const cmd = { ip: item.light.ip, sku: item.light.sku, device_mac: item.light.mac, segment_idx: item.segIndex, r: c.r, g: c.g, b: c.b, brightness: 100 };
         setTimeout(() => {
           api("/govee/segment-control", { method: "POST", body: JSON.stringify(cmd), headers: { "Content-Type": "application/json" } })
@@ -894,6 +900,9 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
         }
       }
     });
+    if (Object.keys(newSegOverrides).length > 0) {
+      setSegmentColorOverrides(prev => ({ ...prev, ...newSegOverrides }));
+    }
   };
 
   const deletePreset = async (index) => {
@@ -1310,6 +1319,7 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
                     pos={segDisplayPos} gridSize={gridSize}
                     light={light} nicknames={nicknames}
                     packLabel={devicePackLabel[key] || ""}
+                    colorOverride={segmentColorOverrides[`${key}:seg${si}`] || null}
                     isEdit={isEdit}
                     isSelected={selectedDevice === key}
                     onSelect={(dk) => setSelectedDevice(dk)}
