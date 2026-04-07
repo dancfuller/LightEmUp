@@ -1,7 +1,7 @@
 // ─── Room Section ──────────────────────────────────────────────────────────
 
 function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGovee, onControlRoom, favorites, onFavoritesChange, nicknames, onNicknameChange, lightningActive, onLightningStart, onLightningStop, segmentInfo, roomLayouts, onLayoutChange }) {
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(true);
   const [showRoomControls, setShowRoomControls] = useState(false);
   const [showLightning, setShowLightning] = useState(false);
   const [showMap, setShowMap] = useState(false);
