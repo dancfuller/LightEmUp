@@ -524,7 +524,15 @@ function SegmentNode({ deviceKey, segIndex, pos, gridSize, light, nicknames, pac
       onMouseDown={startDrag} onTouchStart={startDrag}
       onClick={(e) => { e.stopPropagation(); if (!didDragRef.current) onSelect(deviceKey, segIndex); }}
     >
-      <title>{`${parentName}${packLabel ? " " + packLabel : ""} — Segment ${letter}`}</title>
+      <title>{(() => {
+        const segBri = light.type === "hue"
+          ? Math.round((light.state?.brightness || 0) / 254 * 100)
+          : (light.state?.brightness ?? 0);
+        const segCol = getInitialColor(light);
+        const lines = [`${parentName}${packLabel ? " " + packLabel : ""} — Segment ${letter}`, isOn ? "On" : "Off", `Brightness: ${segBri}%`];
+        if (segCol) lines.push(`Color: R${segCol.r} G${segCol.g} B${segCol.b}`);
+        return lines.join("\n");
+      })()}</title>
       {/* Pillbox background */}
       <rect x={pillX} y={pillY} width={pillW} height={pillH} rx={pillH / 2}
         fill="#1e293b"
