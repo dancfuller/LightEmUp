@@ -827,8 +827,6 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
       { r: 255, g: 0,   b: 255 }, // magenta
       { r: 255, g: 255, b: 255 }, // white
     ];
-    const threshold = 8; // grid units adjacency
-
     // Build flat list of all placed items (lights + expanded segments)
     const items = [];
     Object.entries(devices).forEach(([key, pos]) => {
@@ -844,37 +842,15 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
       }
     });
 
-    // Build adjacency
-    const adj = {};
-    items.forEach(it => { adj[it.key] = new Set(); });
-    for (let i = 0; i < items.length; i++) {
-      for (let j = i + 1; j < items.length; j++) {
-        const dx = items[i].x - items[j].x;
-        const dy = items[i].y - items[j].y;
-        if (Math.sqrt(dx * dx + dy * dy) < threshold) {
-          adj[items[i].key].add(items[j].key);
-          adj[items[j].key].add(items[i].key);
-        }
-      }
-    }
-
-    // Graph color — sort by most neighbors first
-    const sorted = [...items].sort((a, b) => (adj[b.key]?.size || 0) - (adj[a.key]?.size || 0));
-    const assignment = {};
-    sorted.forEach(item => {
-      const usedIdxs = new Set();
-      adj[item.key]?.forEach(nk => { if (assignment[nk] !== undefined) usedIdxs.add(assignment[nk]); });
-      let chosen = palette.findIndex((_, i) => !usedIdxs.has(i));
-      if (chosen === -1) chosen = 0;
-      assignment[item.key] = chosen;
-    });
+    // Sort spatially so colors run left-to-right (linear) or row-major (2D)
+    items.sort((a, b) => a.x !== b.x ? a.x - b.x : a.y - b.y);
 
     // Apply colors — collect segment overrides for immediate UI update
     const newSegOverrides = {};
     let goveeDelay = 0;
     let segDelay = 0;
-    items.forEach(item => {
-      const c = palette[assignment[item.key]];
+    items.forEach((item, i) => {
+      const c = palette[i % palette.length];
       if (!c) return;
       if (item.segIndex !== undefined) {
         // Segment — use V2 API; also update local override so dot reflects the color
