@@ -15,8 +15,9 @@ LightEmUp discovers and controls Philips Hue (Zigbee via bridge) and Govee (LAN/
 - **Room-level overrides** — set brightness/color for all lights in a room at once
 - **Interactive room maps** — drag-and-drop 2D floor plan and linear layout modes with live device state, per-device controls, reference furniture items, and auto-save
 - **Lightning storm scene** — realistic thunderstorm simulation with Hue light flashes, configurable timing presets, optional thunder sound effects, and a "funny mode" that replaces thunder with fart sounds
-- **Color Mode** — room-level color schemes with layout awareness: Gradient mode distributes shades along a direction, Palette mode assigns distinct colors so adjacent lights never match. Includes brightness control and preset palettes (Warm, Cool, Forest, Sunset, Ocean, Neon)
-- **Govee Razer per-segment control** — independent color control of individual panels on compatible devices (e.g. Hexa Light Panels)
+- **Color Mode** — room-level color schemes with layout awareness: Gradient mode distributes shades along a direction, Palette mode assigns distinct colors so adjacent lights never match. Includes brightness control and 16 preset palettes across 4 rows (Spring/Easter, Warm, Cool, Nature/Bold)
+- **Per-segment color control** — independent color control of individual panels/spotlights on compatible Govee devices. Hexa Panels (H6061) use the Razer LAN protocol; Outdoor Spotlights (H7065/H7066) use the Govee Platform API v2. Segments appear as separate nodes on the room map and integrate fully with Color Mode gradients and palettes.
+- **Layout Identify mode** — one-click button assigns each light/segment a unique color based on physical proximity, making it easy to match map nodes to real-world lights
 - **Device nicknames** — custom names persisted across sessions
 - **Desktop shortcut launcher** — one-click launch with auto-server-start and browser open (Windows)
 - **Server management** — restart or shut down the server from the Settings tab in the UI
@@ -147,26 +148,30 @@ install-shortcut.ps1 # Desktop/Start Menu shortcut installer
 | POST | `/api/govee/segment-mode` | Toggle per-segment mode for a device |
 | POST | `/api/govee/segment-count` | Set segment count for a device |
 | GET | `/api/govee/segment-info` | Get segment capabilities for all SKUs |
+| POST | `/api/govee/segment-control` | Control a single segment via Govee Platform API v2 |
 | GET | `/api/room-layouts/{room}` | Get room layout |
 | POST | `/api/room-layouts` | Save/update room layout |
 | DELETE | `/api/room-layouts/{room}` | Delete room layout |
 | POST | `/api/server/shutdown` | Shut down the server |
 | POST | `/api/server/restart` | Restart the server |
 
-## Govee Razer Protocol (Per-Segment Control)
+## Govee Per-Segment Control
 
-Some Govee devices support an undocumented "Razer" protocol for per-segment/per-panel color control over LAN. The lightning scene uses this to flash individual Hexa panels independently.
+Two protocols are used for per-segment color control depending on the device:
+
+### Razer Protocol (LAN, H6061 Hexa Panels)
+An undocumented binary protocol sent over the local UDP port. Used by the lightning scene to flash individual Hexa panels independently.
 
 **Confirmed working:** H6061 Glide Hexa Light Panels (7 segments)
-**Not working:** H7065/H7066 Outdoor Spotlights (no response to Razer commands)
 
-Test scripts are included for validating Razer support on your hardware:
+### Govee Platform API v2 (Cloud, H7065/H7066 Outdoor Spotlights)
+The Outdoor Spotlights 2-Pack and 4-Pack do not respond to the Razer protocol. Per-segment control is only available via the Govee Platform API v2. A Govee Developer API key is required — set `govee_api_key` in `config.json`.
 
-```bash
-cd backend
-python govee_razer_test.py       # Test H6061 Hexa Panels
-python govee_spots_razer_test.py # Test H7065/H7066 Outdoor Spotlights
-```
+**Confirmed working:** H7065 Outdoor Spotlights 2-Pack (2 segments), H7066 4-Pack (4 segments)
+
+The V2 API enforces a ~1 req/sec rate limit, so applying a color gradient to multiple segments takes a few seconds.
+
+To enable per-segment control on a device, open the room map, enter Edit Layout, and click the expand toggle on any segment-capable device node.
 
 ## Firewall
 

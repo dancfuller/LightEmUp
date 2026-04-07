@@ -80,7 +80,11 @@ function GradientDirectionPicker({ direction, onDirectionChange, availableDirect
               const fill = previewColor
                 ? `rgb(${previewColor.r},${previewColor.g},${previewColor.b})`
                 : "#64748b";
-              const label = getDeviceLabel(lightMap[d.key], nicknames);
+              const segMatch = d.key.match(/^(.+):seg(\d+)$/);
+              const lookupKey = segMatch ? segMatch[1] : d.key;
+              const baseName = getDeviceLabel(lightMap[lookupKey], nicknames);
+              const segLtr = segMatch ? String.fromCharCode(65 + parseInt(segMatch[2])) : null;
+              const label = segMatch ? `${baseName.split(" ")[0]} ${segLtr}` : baseName;
               return (
                 <g key={d.key}>
                   <circle cx={dx} cy={dy} r={5} fill={fill}
@@ -145,7 +149,7 @@ function GradientDirectionPicker({ direction, onDirectionChange, availableDirect
   );
 }
 
-function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlGovee, favorites, onFavoritesChange, nicknames, roomLayouts }) {
+function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlGovee, favorites, onFavoritesChange, nicknames, segmentInfo, roomLayouts }) {
   const [mode, setMode] = useState("gradient"); // "gradient" | "palette"
   const [baseColor, setBaseColor] = useState({ r: 40, g: 180, b: 80 });
   const [paletteColors, setPaletteColors] = useState([
@@ -155,7 +159,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     { r: 255, g: 200, b: 40 },
   ]);
   const [editingPaletteIdx, setEditingPaletteIdx] = useState(null);
-  const [direction, setDirection] = useState("left-right"); // "left-right" | "right-left" | "top-bottom" | "bottom-top" | "center-out"
+  const [direction, setDirection] = useState("left-right");
   const [brightness, setBrightness] = useState(100); // 0-100%
   const [preview, setPreview] = useState(null); // { deviceKey: {r,g,b}, ... }
 
@@ -173,12 +177,24 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
   // Get the active layout for this room
   const layout = roomLayouts?.[roomName];
   const devices = layout?.devices || {};
+  const segments = layout?.segments || {};
   const gridSize = layout?.grid_size || 40;
 
-  // Only color-capable lights that are placed on the map
-  const placedColorLights = Object.entries(devices)
-    .filter(([k]) => lightMap[k]?.capabilities?.has_color)
-    .map(([key, pos]) => ({ key, x: pos.x, y: pos.y }));
+  // Build placed lights list, expanding segments where applicable
+  const placedColorLights = [];
+  Object.entries(devices).forEach(([key, pos]) => {
+    const light = lightMap[key];
+    if (!light?.capabilities?.has_color) return;
+    const segData = segments[key];
+    if (segData?.expanded && segData.positions) {
+      // Expanded: add each segment as its own entry
+      Object.entries(segData.positions).forEach(([si, sp]) => {
+        placedColorLights.push({ key: `${key}:seg${si}`, x: sp.x, y: sp.y, parentKey: key, segIndex: parseInt(si) });
+      });
+    } else {
+      placedColorLights.push({ key, x: pos.x, y: pos.y });
+    }
+  });
 
   const hasLayout = placedColorLights.length > 0;
 
@@ -300,35 +316,42 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     } else {
       setPreview(computePalette());
     }
-  }, [mode, baseColor, direction, paletteColors, hasLayout]);
+  }, [mode, baseColor, direction, paletteColors, hasLayout, layout]);
 
   // ─── Apply colors to lights ─────────────────────────────────────────
   const applyColors = () => {
     if (!preview) return;
     const entries = Object.entries(preview);
-    console.log("[ColorMode] Applying to", entries.length, "devices. Preview keys:", entries.map(([k]) => k));
-    console.log("[ColorMode] LightMap keys:", Object.keys(lightMap));
-    // Hue lights can be sent in parallel (REST API), but Govee devices
-    // need staggering to avoid UDP packet drops on the same port
+    // Hue lights: parallel (REST API)
+    // Govee whole-device: stagger 150ms (LAN UDP)
+    // Govee segments: stagger 1500ms (V2 cloud API rate limit)
     let goveeDelay = 0;
+    let segDelay = 0;
     entries.forEach(([key, color]) => {
+      // Check if this is a segment key (e.g. "govee:192.168.0.186:seg0")
+      const segMatch = key.match(/^(govee:.+):seg(\d+)$/);
+      if (segMatch) {
+        const parentKey = segMatch[1];
+        const segIdx = parseInt(segMatch[2]);
+        const light = lightMap[parentKey];
+        if (!light) return;
+        // Send segment color via V2 cloud API
+        const cmd = { ip: light.ip, sku: light.sku, device_mac: light.mac, segment_idx: segIdx, r: color.r, g: color.g, b: color.b, brightness };
+        setTimeout(() => {
+          api("/govee/segment-control", { method: "POST", body: JSON.stringify(cmd), headers: { "Content-Type": "application/json" } })
+            .catch(e => console.warn("[ColorMode] Segment control failed:", key, e));
+        }, segDelay);
+        segDelay += 1500; // V2 API rate limit ~1 req/sec
+        return;
+      }
+
       const light = lightMap[key];
-      if (!light) {
-        console.warn("[ColorMode] No light found for key:", key);
-        return;
-      }
-      if (!light._controlFn) {
-        console.warn("[ColorMode] No _controlFn for key:", key);
-        return;
-      }
-      const bri = light.type === "hue"
-        ? Math.round(brightness * 254 / 100)
-        : brightness;
+      if (!light || !light._controlFn) return;
+      const bri = light.type === "hue" ? Math.round(brightness * 254 / 100) : brightness;
       const cmd = { on: true, r: color.r, g: color.g, b: color.b, brightness: bri };
-      console.log("[ColorMode] Sending to", key, light.type, cmd);
       if (light.type === "govee") {
         setTimeout(() => light._controlFn(light, cmd), goveeDelay);
-        goveeDelay += 150; // 150ms between each Govee device
+        goveeDelay += 150;
       } else {
         light._controlFn(light, cmd);
       }
@@ -350,14 +373,44 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     setPaletteColors(prev => prev.map((c, i) => i === idx ? { r, g, b } : c));
   };
 
-  // ─── Color scheme presets ───────────────────────────────────────────
-  const schemePresets = [
-    { name: "Warm", colors: [{ r: 255, g: 80, b: 40 }, { r: 255, g: 160, b: 30 }, { r: 255, g: 220, b: 80 }, { r: 200, g: 60, b: 60 }] },
-    { name: "Cool", colors: [{ r: 40, g: 120, b: 255 }, { r: 80, g: 200, b: 255 }, { r: 40, g: 255, b: 200 }, { r: 100, g: 80, b: 220 }] },
-    { name: "Forest", colors: [{ r: 34, g: 139, b: 34 }, { r: 107, g: 142, b: 35 }, { r: 85, g: 107, b: 47 }, { r: 144, g: 238, b: 144 }] },
-    { name: "Sunset", colors: [{ r: 255, g: 94, b: 77 }, { r: 255, g: 154, b: 0 }, { r: 255, g: 206, b: 84 }, { r: 200, g: 50, b: 100 }] },
-    { name: "Ocean", colors: [{ r: 0, g: 105, b: 148 }, { r: 0, g: 168, b: 198 }, { r: 72, g: 202, b: 228 }, { r: 144, g: 224, b: 239 }] },
-    { name: "Neon", colors: [{ r: 255, g: 0, b: 255 }, { r: 0, g: 255, b: 255 }, { r: 255, g: 255, b: 0 }, { r: 0, g: 255, b: 128 }] },
+  // ─── Color scheme presets (grouped into rows) ───────────────────────
+  const schemePresetRows = [
+    {
+      label: "Spring / Easter",
+      presets: [
+        { name: "Easter Pastel", colors: [{ r: 230, g: 180, b: 230 }, { r: 160, g: 220, b: 190 }, { r: 160, g: 210, b: 240 }, { r: 255, g: 235, b: 150 }] },
+        { name: "Spring Bloom", colors: [{ r: 255, g: 175, b: 200 }, { r: 255, g: 220, b: 40 }, { r: 100, g: 195, b: 100 }, { r: 120, g: 160, b: 235 }] },
+        { name: "Easter Egg", colors: [{ r: 240, g: 130, b: 160 }, { r: 120, g: 170, b: 240 }, { r: 200, g: 145, b: 235 }, { r: 100, g: 215, b: 175 }] },
+        { name: "Spring Garden", colors: [{ r: 195, g: 135, b: 255 }, { r: 255, g: 155, b: 130 }, { r: 155, g: 230, b: 165 }, { r: 135, g: 200, b: 255 }] },
+      ],
+    },
+    {
+      label: "Warm",
+      presets: [
+        { name: "Warm", colors: [{ r: 255, g: 80, b: 40 }, { r: 255, g: 160, b: 30 }, { r: 255, g: 220, b: 80 }, { r: 200, g: 60, b: 60 }] },
+        { name: "Sunset", colors: [{ r: 255, g: 94, b: 77 }, { r: 255, g: 154, b: 0 }, { r: 255, g: 206, b: 84 }, { r: 200, g: 50, b: 100 }] },
+        { name: "Autumn", colors: [{ r: 205, g: 92, b: 40 }, { r: 255, g: 140, b: 0 }, { r: 180, g: 60, b: 30 }, { r: 218, g: 165, b: 32 }] },
+        { name: "Campfire", colors: [{ r: 220, g: 40, b: 20 }, { r: 255, g: 120, b: 0 }, { r: 255, g: 215, b: 0 }, { r: 255, g: 80, b: 20 }] },
+      ],
+    },
+    {
+      label: "Cool",
+      presets: [
+        { name: "Cool", colors: [{ r: 40, g: 120, b: 255 }, { r: 80, g: 200, b: 255 }, { r: 40, g: 255, b: 200 }, { r: 100, g: 80, b: 220 }] },
+        { name: "Ocean", colors: [{ r: 0, g: 105, b: 148 }, { r: 0, g: 168, b: 198 }, { r: 72, g: 202, b: 228 }, { r: 144, g: 224, b: 239 }] },
+        { name: "Aurora", colors: [{ r: 0, g: 230, b: 150 }, { r: 0, g: 200, b: 255 }, { r: 120, g: 60, b: 220 }, { r: 0, g: 180, b: 100 }] },
+        { name: "Midnight", colors: [{ r: 30, g: 60, b: 180 }, { r: 80, g: 30, b: 160 }, { r: 140, g: 60, b: 200 }, { r: 10, g: 100, b: 200 }] },
+      ],
+    },
+    {
+      label: "Nature / Bold",
+      presets: [
+        { name: "Forest", colors: [{ r: 34, g: 139, b: 34 }, { r: 107, g: 142, b: 35 }, { r: 85, g: 107, b: 47 }, { r: 144, g: 238, b: 144 }] },
+        { name: "Neon", colors: [{ r: 255, g: 0, b: 255 }, { r: 0, g: 255, b: 255 }, { r: 255, g: 255, b: 0 }, { r: 0, g: 255, b: 128 }] },
+        { name: "Retro", colors: [{ r: 0, g: 188, b: 188 }, { r: 255, g: 100, b: 90 }, { r: 218, g: 165, b: 0 }, { r: 100, g: 170, b: 100 }] },
+        { name: "Candy", colors: [{ r: 255, g: 0, b: 150 }, { r: 0, g: 200, b: 220 }, { r: 180, g: 255, b: 0 }, { r: 180, g: 100, b: 255 }] },
+      ],
+    },
   ];
 
   const isLinear = layout?.mode === "linear";
@@ -452,28 +505,37 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
                 Distinct colors assigned to devices. Adjacent lights on the map won't share a color.
               </div>
 
-              {/* Scheme presets */}
-              <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 12 }}>
-                {schemePresets.map((scheme) => (
-                  <button key={scheme.name}
-                    onClick={() => { setPaletteColors([...scheme.colors]); setEditingPaletteIdx(null); }}
-                    style={{
-                      padding: "4px 10px", borderRadius: 6, border: "1px solid #334155",
-                      background: "transparent", cursor: "pointer",
-                      display: "flex", alignItems: "center", gap: 4,
-                    }}
-                  >
-                    <span style={{ display: "flex", gap: 2 }}>
-                      {scheme.colors.map((c, j) => (
-                        <span key={j} style={{
-                          width: 8, height: 8, borderRadius: 2,
-                          background: `rgb(${c.r},${c.g},${c.b})`,
-                          display: "inline-block",
-                        }} />
+              {/* Scheme presets — grouped rows */}
+              <div style={{ marginBottom: 12 }}>
+                {schemePresetRows.map((row) => (
+                  <div key={row.label} style={{ marginBottom: 6 }}>
+                    <div style={{ fontSize: 9, color: "#475569", textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 3 }}>
+                      {row.label}
+                    </div>
+                    <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                      {row.presets.map((scheme) => (
+                        <button key={scheme.name}
+                          onClick={() => { setPaletteColors([...scheme.colors]); setEditingPaletteIdx(null); }}
+                          style={{
+                            padding: "4px 10px", borderRadius: 6, border: "1px solid #334155",
+                            background: "transparent", cursor: "pointer",
+                            display: "flex", alignItems: "center", gap: 4,
+                          }}
+                        >
+                          <span style={{ display: "flex", gap: 2 }}>
+                            {scheme.colors.map((c, j) => (
+                              <span key={j} style={{
+                                width: 8, height: 8, borderRadius: 2,
+                                background: `rgb(${c.r},${c.g},${c.b})`,
+                                display: "inline-block",
+                              }} />
+                            ))}
+                          </span>
+                          <span style={{ fontSize: 10, color: "#94a3b8" }}>{scheme.name}</span>
+                        </button>
                       ))}
-                    </span>
-                    <span style={{ fontSize: 10, color: "#94a3b8" }}>{scheme.name}</span>
-                  </button>
+                    </div>
+                  </div>
                 ))}
               </div>
 
@@ -531,28 +593,45 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
           {/* ─── Preview swatches ────────────────────────────────── */}
           {preview && (
             <div style={{ marginBottom: 12 }}>
-              <div style={{ fontSize: 11, color: "#64748b", marginBottom: 4 }}>Preview:</div>
-              <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+              <div style={{ fontSize: 11, color: "#64748b", marginBottom: 6 }}>Preview:</div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                 {Object.entries(preview)
                   .sort(([aKey], [bKey]) => {
-                    const aPos = devices[aKey] || { x: 0, y: 0 };
-                    const bPos = devices[bKey] || { x: 0, y: 0 };
+                    const aEntry = placedColorLights.find(p => p.key === aKey);
+                    const bEntry = placedColorLights.find(p => p.key === bKey);
+                    const aPos = aEntry || { x: 0, y: 0 };
+                    const bPos = bEntry || { x: 0, y: 0 };
                     return aPos.x !== bPos.x ? aPos.x - bPos.x : aPos.y - bPos.y;
                   })
-                  .map(([key, c]) => (
-                  <div key={key} style={{
-                    display: "flex", flexDirection: "column", alignItems: "center", gap: 2,
-                  }}>
-                    <div style={{
-                      width: 24, height: 24, borderRadius: 4,
-                      background: `rgb(${c.r},${c.g},${c.b})`,
-                      border: "1px solid rgba(255,255,255,0.15)",
-                    }} />
-                    <span style={{ fontSize: 8, color: "#64748b", maxWidth: 40, textAlign: "center", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {getDeviceLabel(lightMap[key], nicknames)}
-                    </span>
-                  </div>
-                ))}
+                  .map(([key, c]) => {
+                    const sm = key.match(/^(.+):seg(\d+)$/);
+                    const lk = sm ? sm[1] : key;
+                    const bn = getDeviceLabel(lightMap[lk], nicknames);
+                    const letter = sm ? String.fromCharCode(65 + parseInt(sm[2])) : null;
+                    const label = sm ? `${bn.split(" ")[0]} ${letter}` : bn;
+                    return (
+                      <div key={key} title={sm ? `${bn} — Segment ${letter}` : bn}
+                        style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3, cursor: "default" }}>
+                        <div style={{ position: "relative", width: 40, height: 40 }}>
+                          <div style={{
+                            width: 40, height: 40, borderRadius: sm ? 6 : 8,
+                            background: `rgb(${c.r},${c.g},${c.b})`,
+                            border: sm ? "2px dashed rgba(255,255,255,0.4)" : "1px solid rgba(255,255,255,0.2)",
+                          }} />
+                          {sm && (
+                            <span style={{
+                              position: "absolute", bottom: 2, right: 4,
+                              fontSize: 11, fontWeight: 800, color: "rgba(255,255,255,0.9)",
+                              textShadow: "0 0 4px rgba(0,0,0,0.8)",
+                            }}>{letter}</span>
+                          )}
+                        </div>
+                        <span style={{ fontSize: 9, color: "#94a3b8", maxWidth: 46, textAlign: "center", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {label}
+                        </span>
+                      </div>
+                    );
+                  })}
               </div>
             </div>
           )}

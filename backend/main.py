@@ -31,6 +31,8 @@ from discovery import (
     govee_lan_get_state,
     govee_cloud_get_devices,
     govee_get_segment_info,
+    govee_v2_segment_color,
+    govee_v2_segment_brightness,
     GOVEE_SEGMENT_INFO,
 )
 from scenes import scene_manager, LightningSettings
@@ -557,6 +559,43 @@ async def get_segment_info():
         "configured_counts": config.get("govee_segment_counts", {}),
         "segment_mode": config.get("govee_segment_mode", {}),
     }
+
+
+class GoveeSegmentControlRequest(BaseModel):
+    ip: str
+    sku: str
+    device_mac: str
+    segment_idx: int
+    r: Optional[int] = None
+    g: Optional[int] = None
+    b: Optional[int] = None
+    brightness: Optional[int] = None
+
+
+@app.post("/api/govee/segment-control")
+async def control_govee_segment(req: GoveeSegmentControlRequest):
+    """Control a single segment on a Govee device via the V2 Platform API."""
+    api_key = config.get("govee_api_key")
+    if not api_key:
+        raise HTTPException(400, "No Govee API key configured")
+
+    seg_info = GOVEE_SEGMENT_INFO.get(req.sku)
+    if not seg_info or seg_info.get("protocol") != "cloud_v2":
+        raise HTTPException(400, f"SKU {req.sku} does not support cloud_v2 segment control")
+
+    results = {}
+    if req.r is not None and req.g is not None and req.b is not None:
+        results["color"] = await govee_v2_segment_color(
+            api_key, req.sku, req.device_mac, req.segment_idx, req.r, req.g, req.b
+        )
+    if req.brightness is not None:
+        # Rate limit: wait before second call
+        if results:
+            await asyncio.sleep(1.0)
+        results["brightness"] = await govee_v2_segment_brightness(
+            api_key, req.sku, req.device_mac, req.segment_idx, req.brightness
+        )
+    return {"results": results}
 
 
 # ─── Config Endpoint ────────────────────────────────────────────────────────

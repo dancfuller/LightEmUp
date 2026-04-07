@@ -410,7 +410,10 @@ function DeviceNode({ deviceKey, pos, gridSize, light, nicknames, isEdit, isSele
   );
 }
 
-function SegmentNode({ deviceKey, segIndex, pos, gridSize, light, isEdit, isSelected, onSelect, onDragEnd }) {
+// Convert segment index to letter label: 0→A, 1→B, etc.
+function segLetter(idx) { return String.fromCharCode(65 + idx); }
+
+function SegmentNode({ deviceKey, segIndex, pos, gridSize, light, nicknames, isEdit, isSelected, onSelect, onDragEnd }) {
   const [dragging, setDragging] = useState(false);
   const [dragPos, setDragPos] = useState(null);
   const dragPosRef = useRef(null);
@@ -419,7 +422,17 @@ function SegmentNode({ deviceKey, segIndex, pos, gridSize, light, isEdit, isSele
   const color = getDeviceColor(light);
   const cx = pos.x * gridSize;
   const cy = pos.y * gridSize;
-  const r = 12;
+
+  // Pillbox dimensions — narrower than DeviceNode to indicate sub-device
+  const pillW = 90;
+  const pillH = 26;
+  const pillX = cx - pillW / 2;
+  const pillY = cy - pillH / 2;
+  const dotR = 6;
+  const letter = segLetter(segIndex);
+  const parentName = getDeviceLabel(light, nicknames);
+  // Short name: first word of parent name, max 8 chars
+  const shortName = (parentName.split(" ")[0] || "Seg").substring(0, 8);
 
   const startDrag = (e) => {
     if (!isEdit) return;
@@ -462,36 +475,50 @@ function SegmentNode({ deviceKey, segIndex, pos, gridSize, light, isEdit, isSele
     };
   }, [dragging, deviceKey, segIndex, gridSize, onDragEnd]);
 
-  const displayX = dragging && dragPos ? dragPos.x * gridSize : cx;
-  const displayY = dragging && dragPos ? dragPos.y * gridSize : cy;
+  const dx = dragging && dragPos ? dragPos.x * gridSize : cx;
+  const dy = dragging && dragPos ? dragPos.y * gridSize : cy;
   const isOn = light.state?.on;
-  const transition = dragging ? "none" : "cx 0.15s, cy 0.15s, opacity 0.3s";
+  const transition = dragging ? "none" : "transform 0.15s, opacity 0.3s";
+
+  // Contrast text color against the color dot
+  const luminance = (parseInt(color.slice(1, 3), 16) * 0.299 + parseInt(color.slice(3, 5), 16) * 0.587 + parseInt(color.slice(5, 7), 16) * 0.114) / 255;
+  const textColor = luminance > 0.55 ? "#1e293b" : "#f8fafc";
 
   return (
-    <g style={{ cursor: isEdit ? "grab" : "pointer" }}
+    <g style={{ cursor: isEdit ? "grab" : "pointer", transform: `translate(${dx - cx}px, ${dy - cy}px)`, transition }}
       onMouseDown={startDrag} onTouchStart={startDrag}
       onClick={(e) => { e.stopPropagation(); if (!didDragRef.current) onSelect(deviceKey, segIndex); }}
     >
-      {/* Segment circle — always shows device color */}
-      <circle cx={displayX} cy={displayY} r={r}
-        fill={color}
-        opacity={isOn ? 1 : 0.3}
-        stroke={isSelected ? "#fff" : isOn ? "rgba(255,255,255,0.2)" : "rgba(255,255,255,0.1)"}
-        strokeWidth={isSelected ? 2.5 : 1}
-        strokeDasharray={isOn ? "none" : "3,2"}
-        style={{ transition, filter: isOn ? `drop-shadow(0 0 4px ${color})` : "none" }}
+      <title>{`${parentName} — Segment ${letter}`}</title>
+      {/* Pillbox background */}
+      <rect x={pillX} y={pillY} width={pillW} height={pillH} rx={pillH / 2}
+        fill="#1e293b"
+        opacity={isOn ? 1 : 0.5}
+        stroke={isSelected ? "#a5b4fc" : "#475569"}
+        strokeWidth={isSelected ? 2 : 1}
+        strokeDasharray="4,2"
       />
-      {/* Off: small color preview pip */}
-      {!isOn && (
-        <circle cx={displayX} cy={displayY} r={3.5}
-          fill={color} opacity={0.85}
-          stroke="rgba(0,0,0,0.4)" strokeWidth={0.5}
-          style={{ transition }} />
-      )}
-      {/* Segment index label */}
-      <text x={displayX} y={displayY + 4} textAnchor="middle"
-        fill={isOn ? "#fff" : "#94a3b8"} fontSize={9} fontFamily="sans-serif" fontWeight="bold" pointerEvents="none"
-      >{segIndex + 1}</text>
+      {/* Color dot */}
+      <circle cx={pillX + dotR + 5} cy={cy} r={dotR}
+        fill={color}
+        opacity={isOn ? 1 : 0.4}
+        style={{ filter: isOn ? `drop-shadow(0 0 3px ${color})` : "none" }}
+      />
+      {/* Segment letter badge inside dot */}
+      <text x={pillX + dotR + 5} y={cy + 3.5} textAnchor="middle"
+        fill={textColor} fontSize={7} fontFamily="sans-serif" fontWeight="800"
+        pointerEvents="none"
+      >{letter}</text>
+      {/* Short parent name */}
+      <text x={pillX + dotR * 2 + 12} y={cy - 2} textAnchor="start"
+        fill={isOn ? "#e2e8f0" : "#64748b"} fontSize={9} fontFamily="sans-serif" fontWeight="600"
+        pointerEvents="none"
+      >{shortName}</text>
+      {/* "Seg X" sub-label */}
+      <text x={pillX + dotR * 2 + 12} y={cy + 9} textAnchor="start"
+        fill="#64748b" fontSize={7.5} fontFamily="sans-serif"
+        pointerEvents="none"
+      >seg {letter}</text>
     </g>
   );
 }
@@ -705,6 +732,92 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
     });
   };
 
+  // ─── Identify mode: assign each light/segment a unique color vs its neighbors ──
+  const handleIdentify = () => {
+    // Rainbow palette — 12 highly distinct hues
+    const palette = [
+      { r: 255, g: 40, b: 40 },   // red
+      { r: 255, g: 140, b: 0 },   // orange
+      { r: 230, g: 220, b: 0 },   // yellow
+      { r: 0, g: 220, b: 60 },    // green
+      { r: 0, g: 220, b: 220 },   // cyan
+      { r: 0, g: 80, b: 255 },    // blue
+      { r: 160, g: 0, b: 255 },   // violet
+      { r: 255, g: 0, b: 200 },   // pink/magenta
+      { r: 0, g: 180, b: 120 },   // teal
+      { r: 255, g: 180, b: 60 },  // amber
+      { r: 100, g: 200, b: 255 }, // sky
+      { r: 200, g: 80, b: 40 },   // rust
+    ];
+    const threshold = 8; // grid units adjacency
+
+    // Build flat list of all placed items (lights + expanded segments)
+    const items = [];
+    Object.entries(devices).forEach(([key, pos]) => {
+      const light = lightMap[key];
+      if (!light?.capabilities?.has_color) return;
+      const segData = segments[key];
+      if (segData?.expanded && segData.positions) {
+        Object.entries(segData.positions).forEach(([si, sp]) => {
+          items.push({ key: `${key}:seg${si}`, x: sp.x, y: sp.y, parentKey: key, segIndex: parseInt(si), light });
+        });
+      } else {
+        items.push({ key, x: pos.x, y: pos.y, light });
+      }
+    });
+
+    // Build adjacency
+    const adj = {};
+    items.forEach(it => { adj[it.key] = new Set(); });
+    for (let i = 0; i < items.length; i++) {
+      for (let j = i + 1; j < items.length; j++) {
+        const dx = items[i].x - items[j].x;
+        const dy = items[i].y - items[j].y;
+        if (Math.sqrt(dx * dx + dy * dy) < threshold) {
+          adj[items[i].key].add(items[j].key);
+          adj[items[j].key].add(items[i].key);
+        }
+      }
+    }
+
+    // Graph color — sort by most neighbors first
+    const sorted = [...items].sort((a, b) => (adj[b.key]?.size || 0) - (adj[a.key]?.size || 0));
+    const assignment = {};
+    sorted.forEach(item => {
+      const usedIdxs = new Set();
+      adj[item.key]?.forEach(nk => { if (assignment[nk] !== undefined) usedIdxs.add(assignment[nk]); });
+      let chosen = palette.findIndex((_, i) => !usedIdxs.has(i));
+      if (chosen === -1) chosen = 0;
+      assignment[item.key] = chosen;
+    });
+
+    // Apply colors
+    let goveeDelay = 0;
+    let segDelay = 0;
+    items.forEach(item => {
+      const c = palette[assignment[item.key]];
+      if (!c) return;
+      if (item.segIndex !== undefined) {
+        // Segment — use V2 API
+        const cmd = { ip: item.light.ip, sku: item.light.sku, device_mac: item.light.mac, segment_idx: item.segIndex, r: c.r, g: c.g, b: c.b, brightness: 100 };
+        setTimeout(() => {
+          api("/govee/segment-control", { method: "POST", body: JSON.stringify(cmd), headers: { "Content-Type": "application/json" } })
+            .catch(e => console.warn("[Identify] Segment control failed:", item.key, e));
+        }, segDelay);
+        segDelay += 1500;
+      } else {
+        const bri = item.light.type === "hue" ? Math.round(254) : 100;
+        const cmd = { on: true, r: c.r, g: c.g, b: c.b, brightness: bri };
+        if (item.light.type === "govee") {
+          setTimeout(() => item.light._controlFn(item.light, cmd), goveeDelay);
+          goveeDelay += 150;
+        } else {
+          item.light._controlFn(item.light, cmd);
+        }
+      }
+    });
+  };
+
   const deletePreset = async (index) => {
     const updated = presets.filter((_, i) => i !== index);
     setPresets(updated);
@@ -914,6 +1027,16 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
           }}
         >{isLinear ? "Change to Floor Plan" : "Change to Linear"}</button>
 
+        {!isEdit && (
+          <button onClick={handleIdentify}
+            title="Set each light/segment to a unique color so you can identify them by position"
+            style={{
+              padding: "5px 14px", borderRadius: 8, border: "1px solid #334155",
+              background: "transparent", color: "#f59e0b", fontSize: 12, fontWeight: 600, cursor: "pointer",
+            }}
+          >Identify</button>
+        )}
+
 
         {isEdit && (
           <>
@@ -1107,7 +1230,7 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
                     key={`${key}-seg-${si}`}
                     deviceKey={key} segIndex={parseInt(si)}
                     pos={segDisplayPos} gridSize={gridSize}
-                    light={light} isEdit={isEdit}
+                    light={light} nicknames={nicknames} isEdit={isEdit}
                     isSelected={selectedDevice === key}
                     onSelect={(dk) => setSelectedDevice(dk)}
                     onDragEnd={handleSegDragEnd}

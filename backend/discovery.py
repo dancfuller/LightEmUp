@@ -722,8 +722,8 @@ async def govee_lan_get_state(ip: str) -> Optional[dict]:
 
 GOVEE_SEGMENT_INFO = {
     "H6061": {"count": 7, "protocol": "razer", "name": "Glide Hexa Light Panels"},
-    "H7065": {"count": 2, "protocol": "unknown", "name": "Outdoor Spotlights 2-Pack"},
-    "H7066": {"count": 4, "protocol": "unknown", "name": "Outdoor Spotlights 4-Pack"},
+    "H7065": {"count": 2, "protocol": "cloud_v2", "name": "Outdoor Spotlights 2-Pack"},
+    "H7066": {"count": 4, "protocol": "cloud_v2", "name": "Outdoor Spotlights 4-Pack"},
     "H70C1": {"count": None, "protocol": "unknown", "name": "Christmas String Lights 2"},
     "H61D3": {"count": None, "protocol": "unknown", "name": "Neon Rope Light 2"},
 }
@@ -814,3 +814,57 @@ async def govee_cloud_get_devices(api_key: str) -> list[dict]:
                 "commands": [c.get("commandName") for c in d.get("supportCmds", [])],
             } for d in devices]
     return []
+
+
+# ─── Govee Platform API v2 (per-segment control) ────────────────────────────
+
+GOVEE_V2_BASE = "https://openapi.api.govee.com/router/api/v1"
+
+
+async def govee_v2_segment_color(api_key: str, sku: str, device_mac: str,
+                                  segment_idx: int, r: int, g: int, b: int) -> bool:
+    """Set a single segment's color via the Govee Platform API v2."""
+    rgb_int = (r << 16) | (g << 8) | b
+    payload = {
+        "requestId": f"seg-{segment_idx}-{int(asyncio.get_event_loop().time() * 1000)}",
+        "payload": {
+            "sku": sku,
+            "device": device_mac,
+            "capability": {
+                "type": "devices.capabilities.segment_color_setting",
+                "instance": "segmentedColorRgb",
+                "value": {"segment": [segment_idx], "rgb": rgb_int},
+            },
+        },
+    }
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.post(
+            f"{GOVEE_V2_BASE}/device/control",
+            headers={"Govee-API-Key": api_key, "Content-Type": "application/json"},
+            json=payload,
+        )
+        return resp.status_code == 200
+
+
+async def govee_v2_segment_brightness(api_key: str, sku: str, device_mac: str,
+                                       segment_idx: int, brightness: int) -> bool:
+    """Set a single segment's brightness via the Govee Platform API v2."""
+    payload = {
+        "requestId": f"bri-{segment_idx}-{int(asyncio.get_event_loop().time() * 1000)}",
+        "payload": {
+            "sku": sku,
+            "device": device_mac,
+            "capability": {
+                "type": "devices.capabilities.segment_color_setting",
+                "instance": "segmentedBrightness",
+                "value": {"segment": [segment_idx], "brightness": max(0, min(100, brightness))},
+            },
+        },
+    }
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.post(
+            f"{GOVEE_V2_BASE}/device/control",
+            headers={"Govee-API-Key": api_key, "Content-Type": "application/json"},
+            json=payload,
+        )
+        return resp.status_code == 200

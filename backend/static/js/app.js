@@ -339,8 +339,9 @@ function App() {
 
         {activeTab === "all lights" && (() => {
           const deviceRoomMap = {};
-          Object.entries(rooms).forEach(([rn, keys]) => {
-            (keys || []).forEach(k => { deviceRoomMap[k] = rn; });
+          Object.entries(rooms).forEach(([rn, room]) => {
+            (room.hue_light_ids || []).forEach(id => { deviceRoomMap[`hue:${id}`] = rn; });
+            (room.govee_devices || []).forEach(ip => { deviceRoomMap[`govee:${ip}`] = rn; });
           });
           return (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 12 }}>

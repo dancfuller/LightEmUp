@@ -155,6 +155,7 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
             onControlHue={onControlHue} onControlGovee={onControlGovee}
             favorites={favorites} onFavoritesChange={onFavoritesChange}
             nicknames={nicknames}
+            segmentInfo={segmentInfo}
             roomLayouts={roomLayouts}
           />
         )}
