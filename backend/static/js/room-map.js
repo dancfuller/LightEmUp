@@ -231,7 +231,39 @@ function autoPlaceDevices(allLights, boundary, mode) {
   return devices;
 }
 
-function autoPlaceSegments(devicePos, count, occupied) {
+function autoPlaceSegments(devicePos, count, occupied, isLinear = false) {
+  if (isLinear) {
+    // In linear mode all nodes share y=0. Pillboxes are ~90px wide.
+    // At default gridSize=40 that's ~2.25 grid units — require step≥3 to avoid overlap.
+    const step = 3;
+
+    // Build set of all occupied x values so we can enforce a gap, not just exact collision.
+    const occupiedX = new Set();
+    occupied.forEach(k => { const x = parseInt(k.split(",")[0]); occupiedX.add(x); });
+
+    const isXFree = (x) => {
+      if (x < 0) return false;
+      for (const ox of occupiedX) { if (Math.abs(x - ox) < step) return false; }
+      return true;
+    };
+
+    const positions = {};
+    let placed = 0;
+    // Alternate right then left from the parent device x
+    for (let i = 1; placed < count && i < 200; i++) {
+      for (const tx of [devicePos.x + i * step, devicePos.x - i * step]) {
+        if (placed < count && isXFree(tx)) {
+          positions[String(placed)] = { x: tx, y: 0 };
+          occupiedX.add(tx);
+          occupied.add(`${tx},0`);
+          placed++;
+        }
+      }
+    }
+    return positions;
+  }
+
+  // 2D mode: ring algorithm
   const positions = {};
   let placed = 0;
   for (let ring = 1; placed < count; ring++) {
@@ -921,7 +953,7 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
       Object.values(prev.segments).forEach(s => {
         if (s.expanded && s.positions) Object.values(s.positions).forEach(p => occupied.add(`${p.x},${p.y}`));
       });
-      const positions = seg?.positions || autoPlaceSegments(devicePos, count, occupied);
+      const positions = seg?.positions || autoPlaceSegments(devicePos, count, occupied, prev.mode === "linear");
       return { ...prev, segments: { ...prev.segments, [deviceKey]: { expanded: true, positions } } };
     });
   };
