@@ -312,8 +312,9 @@ function DeviceNode({ deviceKey, pos, gridSize, light, nicknames, isEdit, isSele
   const cy = pos.y * gridSize;
   const dotR = 10;
 
-  // Pill dimensions
-  const pillW = 120;
+  // Pill dimensions — width tracks actual label length (5.5px/char at font-10)
+  const maxLineLen = lines.reduce((m, l) => Math.max(m, l.length), 4);
+  const pillW = Math.max(80, 30 + Math.ceil(maxLineLen * 5.5) + 16);
   const lineHeight = 13;
   const pillH = Math.max(28, 10 + lines.length * lineHeight);
   const pillX = cx - pillW / 2;
@@ -455,17 +456,18 @@ function SegmentNode({ deviceKey, segIndex, pos, gridSize, light, nicknames, pac
   const cx = pos.x * gridSize;
   const cy = pos.y * gridSize;
 
-  // Pillbox dimensions — narrower than DeviceNode to indicate sub-device
-  const pillW = 104;
-  const pillH = 26;
-  const pillX = cx - pillW / 2;
-  const pillY = cy - pillH / 2;
+  // Pillbox dimensions — width tracks actual text content (dashed border = sub-device)
   const dotR = 6;
   const letter = segLetter(segIndex);
   const parentName = getDeviceLabel(light, nicknames);
-  // Short name: first word of parent name, max 8 chars
   const shortName = (parentName.split(" ")[0] || "Seg").substring(0, 8);
   const subLabel = packLabel ? `${packLabel} seg ${letter}` : `seg ${letter}`;
+  // Estimate text width: shortName at ~5.4px/char (font-9), subLabel at ~4.5px/char (font-7.5)
+  const estimatedTextW = Math.max(shortName.length * 5.4, subLabel.length * 4.5);
+  const pillW = Math.max(68, Math.ceil(24 + estimatedTextW + 8));
+  const pillH = 26;
+  const pillX = cx - pillW / 2;
+  const pillY = cy - pillH / 2;
 
   const startDrag = (e) => {
     if (!isEdit) return;
