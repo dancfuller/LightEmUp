@@ -816,20 +816,16 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
 
   // ─── Identify mode: assign each light/segment a unique color vs its neighbors ──
   const handleIdentify = () => {
-    // Rainbow palette — 12 highly distinct hues
+    // Binary RGB palette — corners of the RGB cube, maximally distinct
+    // Ordered so first 3 (primaries) and next 3 (secondaries) are assigned before white
     const palette = [
-      { r: 255, g: 40, b: 40 },   // red
-      { r: 255, g: 140, b: 0 },   // orange
-      { r: 230, g: 220, b: 0 },   // yellow
-      { r: 0, g: 220, b: 60 },    // green
-      { r: 0, g: 220, b: 220 },   // cyan
-      { r: 0, g: 80, b: 255 },    // blue
-      { r: 160, g: 0, b: 255 },   // violet
-      { r: 255, g: 0, b: 200 },   // pink/magenta
-      { r: 0, g: 180, b: 120 },   // teal
-      { r: 255, g: 180, b: 60 },  // amber
-      { r: 100, g: 200, b: 255 }, // sky
-      { r: 200, g: 80, b: 40 },   // rust
+      { r: 255, g: 0,   b: 0   }, // red
+      { r: 0,   g: 255, b: 0   }, // green
+      { r: 0,   g: 0,   b: 255 }, // blue
+      { r: 255, g: 255, b: 0   }, // yellow
+      { r: 0,   g: 255, b: 255 }, // cyan
+      { r: 255, g: 0,   b: 255 }, // magenta
+      { r: 255, g: 255, b: 255 }, // white
     ];
     const threshold = 8; // grid units adjacency
 
