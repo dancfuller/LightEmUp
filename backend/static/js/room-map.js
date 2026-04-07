@@ -445,7 +445,7 @@ function DeviceNode({ deviceKey, pos, gridSize, light, nicknames, isEdit, isSele
 // Convert segment index to letter label: 0→A, 1→B, etc.
 function segLetter(idx) { return String.fromCharCode(65 + idx); }
 
-function SegmentNode({ deviceKey, segIndex, pos, gridSize, light, nicknames, isEdit, isSelected, onSelect, onDragEnd }) {
+function SegmentNode({ deviceKey, segIndex, pos, gridSize, light, nicknames, packLabel, isEdit, isSelected, onSelect, onDragEnd }) {
   const [dragging, setDragging] = useState(false);
   const [dragPos, setDragPos] = useState(null);
   const dragPosRef = useRef(null);
@@ -456,7 +456,7 @@ function SegmentNode({ deviceKey, segIndex, pos, gridSize, light, nicknames, isE
   const cy = pos.y * gridSize;
 
   // Pillbox dimensions — narrower than DeviceNode to indicate sub-device
-  const pillW = 90;
+  const pillW = 104;
   const pillH = 26;
   const pillX = cx - pillW / 2;
   const pillY = cy - pillH / 2;
@@ -465,6 +465,7 @@ function SegmentNode({ deviceKey, segIndex, pos, gridSize, light, nicknames, isE
   const parentName = getDeviceLabel(light, nicknames);
   // Short name: first word of parent name, max 8 chars
   const shortName = (parentName.split(" ")[0] || "Seg").substring(0, 8);
+  const subLabel = packLabel ? `${packLabel} seg ${letter}` : `seg ${letter}`;
 
   const startDrag = (e) => {
     if (!isEdit) return;
@@ -521,7 +522,7 @@ function SegmentNode({ deviceKey, segIndex, pos, gridSize, light, nicknames, isE
       onMouseDown={startDrag} onTouchStart={startDrag}
       onClick={(e) => { e.stopPropagation(); if (!didDragRef.current) onSelect(deviceKey, segIndex); }}
     >
-      <title>{`${parentName} — Segment ${letter}`}</title>
+      <title>{`${parentName}${packLabel ? " " + packLabel : ""} — Segment ${letter}`}</title>
       {/* Pillbox background */}
       <rect x={pillX} y={pillY} width={pillW} height={pillH} rx={pillH / 2}
         fill="#1e293b"
@@ -546,11 +547,11 @@ function SegmentNode({ deviceKey, segIndex, pos, gridSize, light, nicknames, isE
         fill={isOn ? "#e2e8f0" : "#64748b"} fontSize={9} fontFamily="sans-serif" fontWeight="600"
         pointerEvents="none"
       >{shortName}</text>
-      {/* "Seg X" sub-label */}
+      {/* "Seg X" sub-label with pack indicator */}
       <text x={pillX + dotR * 2 + 12} y={cy + 9} textAnchor="start"
         fill="#64748b" fontSize={7.5} fontFamily="sans-serif"
         pointerEvents="none"
-      >seg {letter}</text>
+      >{subLabel}</text>
     </g>
   );
 }
@@ -581,6 +582,41 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
     const key = l.type === "hue" ? `hue:${l.id}` : `govee:${l.ip}`;
     lightMap[key] = l;
   });
+
+  // Compute pack/disambiguation labels for segment pills
+  // e.g. "(2pk)", "(4pk)", or "(2pk) #1"/"(2pk) #2" when two devices share a name+count
+  const devicePackLabel = {};
+  if (layout) {
+    const layoutDevices = layout.devices || {};
+    const deviceInfo = {};
+    Object.keys(layoutDevices).forEach(key => {
+      const light = lightMap[key];
+      if (!light) return;
+      const sku = light.sku;
+      const segInfo = sku && segmentInfo?.sku_table?.[sku];
+      const configuredCount = light.ip && segmentInfo?.configured_counts?.[light.ip];
+      const count = configuredCount || segInfo?.count || 0;
+      deviceInfo[key] = { baseLabel: getDeviceLabel(light, nicknames), count };
+    });
+    const comboCount = {};
+    Object.values(deviceInfo).forEach(({ baseLabel, count }) => {
+      if (count === 0) return;
+      const combo = `${baseLabel}|${count}`;
+      comboCount[combo] = (comboCount[combo] || 0) + 1;
+    });
+    const comboIdx = {};
+    Object.entries(deviceInfo).forEach(([key, { baseLabel, count }]) => {
+      if (count === 0) { devicePackLabel[key] = ""; return; }
+      const combo = `${baseLabel}|${count}`;
+      const packStr = `(${count}pk)`;
+      if (comboCount[combo] > 1) {
+        if (!comboIdx[combo]) comboIdx[combo] = 1;
+        devicePackLabel[key] = `${packStr} #${comboIdx[combo]++}`;
+      } else {
+        devicePackLabel[key] = packStr;
+      }
+    });
+  }
 
   // Initialize layout
   useEffect(() => {
@@ -1262,7 +1298,9 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
                     key={`${key}-seg-${si}`}
                     deviceKey={key} segIndex={parseInt(si)}
                     pos={segDisplayPos} gridSize={gridSize}
-                    light={light} nicknames={nicknames} isEdit={isEdit}
+                    light={light} nicknames={nicknames}
+                    packLabel={devicePackLabel[key] || ""}
+                    isEdit={isEdit}
                     isSelected={selectedDevice === key}
                     onSelect={(dk) => setSelectedDevice(dk)}
                     onDragEnd={handleSegDragEnd}
