@@ -149,7 +149,7 @@ function GradientDirectionPicker({ direction, onDirectionChange, availableDirect
   );
 }
 
-function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlGovee, favorites, onFavoritesChange, nicknames, segmentInfo, roomLayouts }) {
+function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlGovee, favorites, onFavoritesChange, nicknames, segmentInfo, roomLayouts, onApply }) {
   const [mode, setMode] = useState("gradient"); // "gradient" | "palette"
   const [baseColor, setBaseColor] = useState({ r: 40, g: 180, b: 80 });
   const [paletteColors, setPaletteColors] = useState([
@@ -327,6 +327,27 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     // Govee segments: stagger 1500ms (V2 cloud API rate limit)
     let goveeDelay = 0;
     let segDelay = 0;
+
+    // Segments sometimes "stick" to a previous color. Fix: reset every segment to
+    // white at 5% brightness first, hold for 2s, then apply the real colors.
+    const segmentEntries = entries.filter(([key]) => /^govee:.+:seg\d+$/.test(key));
+    let segStartDelay = 0;
+    if (segmentEntries.length > 0) {
+      let resetDelay = 0;
+      segmentEntries.forEach(([key]) => {
+        const segMatch = key.match(/^(govee:.+):seg(\d+)$/);
+        const light = lightMap[segMatch[1]];
+        if (!light) return;
+        const resetCmd = { ip: light.ip, sku: light.sku, device_mac: light.mac, segment_idx: parseInt(segMatch[2]), r: 255, g: 255, b: 255, brightness: 5 };
+        setTimeout(() => {
+          api("/govee/segment-control", { method: "POST", body: JSON.stringify(resetCmd), headers: { "Content-Type": "application/json" } })
+            .catch(e => console.warn("[ColorMode] Segment reset failed:", key, e));
+        }, resetDelay);
+        resetDelay += 1500;
+      });
+      segStartDelay = resetDelay + 2000; // hold white for 2s before applying colors
+    }
+
     entries.forEach(([key, color]) => {
       // Check if this is a segment key (e.g. "govee:192.168.0.186:seg0")
       const segMatch = key.match(/^(govee:.+):seg(\d+)$/);
@@ -335,12 +356,12 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
         const segIdx = parseInt(segMatch[2]);
         const light = lightMap[parentKey];
         if (!light) return;
-        // Send segment color via V2 cloud API
+        // Send segment color via V2 cloud API (after reset delay)
         const cmd = { ip: light.ip, sku: light.sku, device_mac: light.mac, segment_idx: segIdx, r: color.r, g: color.g, b: color.b, brightness };
         setTimeout(() => {
           api("/govee/segment-control", { method: "POST", body: JSON.stringify(cmd), headers: { "Content-Type": "application/json" } })
             .catch(e => console.warn("[ColorMode] Segment control failed:", key, e));
-        }, segDelay);
+        }, segStartDelay + segDelay);
         segDelay += 1500; // V2 API rate limit ~1 req/sec
         return;
       }
@@ -356,6 +377,9 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
         light._controlFn(light, cmd);
       }
     });
+
+    // Notify map so it updates dot colors and clears Identify active state
+    if (onApply) onApply(preview);
   };
 
   // ─── Palette color management ───────────────────────────────────────

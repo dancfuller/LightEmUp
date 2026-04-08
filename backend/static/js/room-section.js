@@ -8,6 +8,7 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
   const [showColor, setShowColor] = useState(false);
   const [roomBrightness, setRoomBrightness] = useState(75);
   const [roomColor, setRoomColor] = useState(null);
+  const [colorModeApplied, setColorModeApplied] = useState(null);
 
   const allLights = [
     ...hueLights.map(l => ({ ...l, _controlFn: onControlHue })),
@@ -157,6 +158,7 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
             nicknames={nicknames}
             segmentInfo={segmentInfo}
             roomLayouts={roomLayouts}
+            onApply={setColorModeApplied}
           />
         )}
 
@@ -170,6 +172,7 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
             nicknames={nicknames} onNicknameChange={onNicknameChange}
             segmentInfo={segmentInfo}
             roomLayouts={roomLayouts} onLayoutChange={onLayoutChange}
+            appliedColors={colorModeApplied}
           />
         )}
 

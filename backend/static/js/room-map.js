@@ -299,13 +299,13 @@ function wrapText(text, maxCharsPerLine) {
   return lines;
 }
 
-function DeviceNode({ deviceKey, pos, gridSize, light, nicknames, isEdit, isSelected, onSelect, onDragEnd, segmentInfo, segments, onToggleSegments }) {
+function DeviceNode({ deviceKey, pos, gridSize, light, nicknames, colorOverride, isEdit, isSelected, onSelect, onDragEnd, segmentInfo, segments, onToggleSegments }) {
   const [dragging, setDragging] = useState(false);
   const [dragPos, setDragPos] = useState(null);
   const dragPosRef = useRef(null);
   const didDragRef = useRef(false);
   const svgRef = useRef(null);
-  const color = getDeviceColor(light);
+  const color = colorOverride ? `rgb(${colorOverride.r},${colorOverride.g},${colorOverride.b})` : getDeviceColor(light);
   const label = getDeviceLabel(light, nicknames);
   const lines = wrapText(label, 14);
   const cx = pos.x * gridSize;
@@ -568,7 +568,7 @@ function SegmentNode({ deviceKey, segIndex, pos, gridSize, light, nicknames, pac
   );
 }
 
-function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGovee, favorites, onFavoritesChange, nicknames, onNicknameChange, segmentInfo, roomLayouts, onLayoutChange }) {
+function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGovee, favorites, onFavoritesChange, nicknames, onNicknameChange, segmentInfo, roomLayouts, onLayoutChange, appliedColors }) {
   const [layout, setLayout] = useState(null);
   const [isEdit, setIsEdit] = useState(false);
   const [selectedDevice, setSelectedDevice] = useState(null);
@@ -583,8 +583,29 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
   const [presets, setPresets] = useState([]);
   const [presetName, setPresetName] = useState("");
   const [showPresetSave, setShowPresetSave] = useState(false);
-  // Per-segment color overrides (keyed "govee:ip:segN") — set by Identify, shown on dots
+  // Per-segment color overrides (keyed "govee:ip:segN") — set by Identify or ColorMode Apply
   const [segmentColorOverrides, setSegmentColorOverrides] = useState({});
+  // Per-device color overrides (keyed by deviceKey) — set by Identify or ColorMode Apply
+  const [deviceColorOverrides, setDeviceColorOverrides] = useState({});
+  // Whether Identify has been run (drives button highlight)
+  const [identifyActive, setIdentifyActive] = useState(false);
+
+  // When ColorMode's Apply is pressed, update map dot colors and clear Identify highlight
+  useEffect(() => {
+    if (!appliedColors) return;
+    const newSegOverrides = {};
+    const newDevOverrides = {};
+    Object.entries(appliedColors).forEach(([key, color]) => {
+      if (/^govee:.+:seg\d+$/.test(key)) {
+        newSegOverrides[key] = color;
+      } else {
+        newDevOverrides[key] = color;
+      }
+    });
+    setSegmentColorOverrides(newSegOverrides);
+    setDeviceColorOverrides(newDevOverrides);
+    setIdentifyActive(false);
+  }, [appliedColors]);
 
   const allLights = [
     ...hueLights.map(l => ({ ...l, _controlFn: onControlHue })),
@@ -845,8 +866,9 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
     // Sort spatially so colors run left-to-right (linear) or row-major (2D)
     items.sort((a, b) => a.x !== b.x ? a.x - b.x : a.y - b.y);
 
-    // Apply colors — collect segment overrides for immediate UI update
+    // Apply colors — collect overrides for immediate UI update
     const newSegOverrides = {};
+    const newDevOverrides = {};
     let goveeDelay = 0;
     let segDelay = 0;
     items.forEach((item, i) => {
@@ -862,6 +884,8 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
         }, segDelay);
         segDelay += 1500;
       } else {
+        // Whole device — update override so dot reflects the color immediately
+        newDevOverrides[item.key] = c;
         const bri = item.light.type === "hue" ? Math.round(254) : 100;
         const cmd = { on: true, r: c.r, g: c.g, b: c.b, brightness: bri };
         if (item.light.type === "govee") {
@@ -875,6 +899,10 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
     if (Object.keys(newSegOverrides).length > 0) {
       setSegmentColorOverrides(prev => ({ ...prev, ...newSegOverrides }));
     }
+    if (Object.keys(newDevOverrides).length > 0) {
+      setDeviceColorOverrides(prev => ({ ...prev, ...newDevOverrides }));
+    }
+    setIdentifyActive(true);
   };
 
   const deletePreset = async (index) => {
@@ -1091,7 +1119,9 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
             title="Set each light/segment to a unique color so you can identify them by position"
             style={{
               padding: "5px 14px", borderRadius: 8, border: "1px solid #334155",
-              background: "transparent", color: "#f59e0b", fontSize: 12, fontWeight: 600, cursor: "pointer",
+              background: identifyActive ? "rgba(245,158,11,0.12)" : "transparent",
+              color: identifyActive ? "#f59e0b" : "#94a3b8",
+              fontSize: 12, fontWeight: 600, cursor: "pointer",
             }}
           >Identify</button>
         )}
@@ -1305,6 +1335,7 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
                 key={key} deviceKey={key}
                 pos={displayPos} gridSize={gridSize}
                 light={light} nicknames={nicknames}
+                colorOverride={deviceColorOverrides[key] || null}
                 isEdit={isEdit} isSelected={selectedDevice === key}
                 onSelect={(dk) => setSelectedDevice(dk)}
                 onDragEnd={handleDragEnd}
