@@ -1,6 +1,6 @@
 // ─── Light Card Component ───────────────────────────────────────────────────
 
-function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, onNicknameChange, roomName }) {
+function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, onNicknameChange, roomName, segmentColors, segmentInfo }) {
   const [brightness, setBrightness] = useState(
     light.type === "hue" ? Math.round((light.state?.brightness || 0) / 254 * 100) : (light.state?.brightness ?? 50)
   );
@@ -19,6 +19,12 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
   const isOn = light.state?.on ?? false;
   const isReachable = light.state?.reachable ?? true;
   const hasColor = light.capabilities?.has_color;
+
+  // Segment display: show a per-segment color strip when segment colors have been applied
+  const configuredSegCount = light.ip && segmentInfo?.configured_counts?.[light.ip];
+  const skuSegCount = light.sku && segmentInfo?.sku_table?.[light.sku]?.count;
+  const segCount = configuredSegCount || skuSegCount || 0;
+  const hasSegmentColors = segCount > 0 && segmentColors && Object.keys(segmentColors).length > 0;
 
   const deviceKey = light.type === "hue" ? `hue:${light.id}` : `govee:${light.ip}`;
   const nickname = nicknames?.[deviceKey] || "";
@@ -159,17 +165,41 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
             color="#fbbf24" unit="%"
           />
           {hasColor && (
-            <ColorPicker
-              size={130}
-              compact={true}
-              currentColor={lightColor}
-              onColorSelect={(r, g, b) => {
-                setLightColor({ r, g, b });
-                onControl(light, { r, g, b });
-              }}
-              favorites={favorites}
-              onFavoritesChange={onFavoritesChange}
-            />
+            <>
+              {hasSegmentColors && (
+                <div style={{ marginBottom: 10 }}>
+                  <div style={{ fontSize: 10, color: "#64748b", marginBottom: 5 }}>Segment colors:</div>
+                  <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                    {Array.from({ length: segCount }, (_, i) => {
+                      const c = segmentColors[i];
+                      return (
+                        <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+                          <div style={{
+                            width: 20, height: 20, borderRadius: 4,
+                            background: c ? `rgb(${c.r},${c.g},${c.b})` : "#1e293b",
+                            border: "1px solid rgba(255,255,255,0.15)",
+                          }} />
+                          <span style={{ fontSize: 8, color: "#64748b" }}>
+                            {String.fromCharCode(65 + i)}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+              <ColorPicker
+                size={130}
+                compact={true}
+                currentColor={lightColor}
+                onColorSelect={(r, g, b) => {
+                  setLightColor({ r, g, b });
+                  onControl(light, { r, g, b });
+                }}
+                favorites={favorites}
+                onFavoritesChange={onFavoritesChange}
+              />
+            </>
           )}
         </>
       )}

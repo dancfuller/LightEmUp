@@ -116,7 +116,8 @@ function hueSatToRGB(hue, sat) {
 }
 
 function getInitialColor(light) {
-  if (light.type === "govee" && light.state?.color) {
+  // Explicit color from optimistic update takes precedence over polled XY/hue values
+  if (light.state?.color) {
     const c = light.state.color;
     if (c.r != null) return { r: c.r, g: c.g, b: c.b };
   }

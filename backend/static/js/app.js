@@ -123,7 +123,11 @@ function App() {
     }).catch(e => console.error("Hue control error:", e));
     setHueLights(prev => prev.map(l => {
       if (l.id === light.id) {
-        return { ...l, state: { ...l.state, ...(cmd.on !== undefined ? { on: cmd.on } : {}), ...(cmd.brightness !== undefined ? { brightness: cmd.brightness } : {}) } };
+        const stateUpdate = {};
+        if (cmd.on !== undefined) stateUpdate.on = cmd.on;
+        if (cmd.brightness !== undefined) stateUpdate.brightness = cmd.brightness;
+        if (cmd.r !== undefined) stateUpdate.color = { r: cmd.r, g: cmd.g, b: cmd.b };
+        return { ...l, state: { ...l.state, ...stateUpdate } };
       }
       return l;
     }));

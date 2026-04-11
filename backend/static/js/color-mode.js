@@ -150,7 +150,7 @@ function GradientDirectionPicker({ direction, onDirectionChange, availableDirect
 }
 
 function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlGovee, favorites, onFavoritesChange, nicknames, segmentInfo, roomLayouts, onApply }) {
-  const [mode, setMode] = useState("gradient"); // "gradient" | "palette"
+  const [mode, setMode] = useState("gradient"); // "gradient" | "tonal" | "palette"
   const [baseColor, setBaseColor] = useState({ r: 40, g: 180, b: 80 });
   const [paletteColors, setPaletteColors] = useState([
     { r: 255, g: 60, b: 60 },
@@ -299,23 +299,58 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     return result;
   }, [placedColorLights, paletteColors, buildAdjacency]);
 
+  // ─── Tonal mode: 8 shades of one color, randomly assigned with adjacency gap ─
+  const computeTonal = useCallback(() => {
+    if (placedColorLights.length === 0) return null;
+    const shades = generateTonalShades(baseColor.r, baseColor.g, baseColor.b, 8);
+    const adj = buildAdjacency(placedColorLights);
+
+    // Sort most-constrained-first (most neighbors)
+    const sorted = [...placedColorLights].sort((a, b) =>
+      (adj[b.key]?.size || 0) - (adj[a.key]?.size || 0)
+    );
+
+    const assignment = {}; // key → shade index
+    sorted.forEach(device => {
+      const neighborIndices = new Set();
+      adj[device.key]?.forEach(nk => {
+        if (assignment[nk] !== undefined) neighborIndices.add(assignment[nk]);
+      });
+
+      // Shuffle shade indices, then pick the first that is ≥2 steps from every neighbor
+      const indices = Array.from({ length: 8 }, (_, i) => i);
+      for (let i = 7; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [indices[i], indices[j]] = [indices[j], indices[i]];
+      }
+
+      let chosen = -1;
+      for (const idx of indices) {
+        const tooClose = [...neighborIndices].some(n => Math.abs(idx - n) < 2);
+        if (!tooClose) { chosen = idx; break; }
+      }
+      if (chosen === -1) chosen = indices[0]; // fallback
+      assignment[device.key] = chosen;
+    });
+
+    const result = {};
+    Object.entries(assignment).forEach(([key, idx]) => { result[key] = shades[idx]; });
+    return result;
+  }, [placedColorLights, baseColor, buildAdjacency]);
+
   // ─── Generate preview ───────────────────────────────────────────────
   const generatePreview = () => {
-    if (mode === "gradient") {
-      setPreview(computeGradient());
-    } else {
-      setPreview(computePalette());
-    }
+    if (mode === "gradient") setPreview(computeGradient());
+    else if (mode === "tonal") setPreview(computeTonal());
+    else setPreview(computePalette());
   };
 
   // Auto-generate preview when inputs change
   useEffect(() => {
     if (!hasLayout) return;
-    if (mode === "gradient") {
-      setPreview(computeGradient());
-    } else {
-      setPreview(computePalette());
-    }
+    if (mode === "gradient") setPreview(computeGradient());
+    else if (mode === "tonal") setPreview(computeTonal());
+    else setPreview(computePalette());
   }, [mode, baseColor, direction, paletteColors, hasLayout, layout]);
 
   // ─── Apply colors to lights ─────────────────────────────────────────
@@ -482,6 +517,9 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
           <button onClick={() => setMode("gradient")} style={btnStyle(mode === "gradient")}>
             Gradient
           </button>
+          <button onClick={() => setMode("tonal")} style={btnStyle(mode === "tonal")}>
+            Tonal
+          </button>
           <button onClick={() => setMode("palette")} style={btnStyle(mode === "palette")}>
             Palette
           </button>
@@ -517,6 +555,42 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
               />
 
               {/* Base color */}
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ fontSize: 11, color: "#64748b", marginBottom: 4 }}>Base color:</div>
+                <ColorPicker
+                  size={120}
+                  currentColor={baseColor}
+                  onColorSelect={(r, g, b) => setBaseColor({ r, g, b })}
+                  favorites={favorites}
+                  onFavoritesChange={onFavoritesChange}
+                  compact={true}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* ─── Tonal mode ──────────────────────────────────────── */}
+          {mode === "tonal" && (
+            <div>
+              <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 10 }}>
+                8 shades of one color, randomly assigned so no adjacent lights share a similar tone.
+              </div>
+
+              {/* Live swatch row showing the 8 generated shades */}
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ fontSize: 11, color: "#64748b", marginBottom: 4 }}>Generated shades:</div>
+                <div style={{ display: "flex", gap: 4 }}>
+                  {generateTonalShades(baseColor.r, baseColor.g, baseColor.b, 8).map((c, i) => (
+                    <div key={i} style={{
+                      width: 24, height: 24, borderRadius: 5,
+                      background: `rgb(${c.r},${c.g},${c.b})`,
+                      border: "1px solid rgba(255,255,255,0.12)",
+                    }} />
+                  ))}
+                </div>
+              </div>
+
+              {/* Base color picker */}
               <div style={{ marginBottom: 12 }}>
                 <div style={{ fontSize: 11, color: "#64748b", marginBottom: 4 }}>Base color:</div>
                 <ColorPicker
@@ -685,7 +759,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
                 padding: "6px 16px", borderRadius: 8, border: "1px solid #334155",
                 background: "transparent", color: "#94a3b8", fontSize: 12, fontWeight: 600, cursor: "pointer",
               }}
-            >{mode === "palette" ? "Shuffle" : "Preview"}</button>
+            >{mode === "gradient" ? "Preview" : "Shuffle"}</button>
             <button onClick={applyColors}
               disabled={!preview}
               style={{

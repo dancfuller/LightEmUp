@@ -181,17 +181,29 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
           <div style={{
             display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 12,
           }}>
-            {allLights.map((light, i) => (
-              <LightCard
-                key={`${light.type}-${light.id || light.ip}-${i}`}
-                light={light}
-                onControl={(l, cmd) => l._controlFn(l, cmd)}
-                favorites={favorites}
-                onFavoritesChange={onFavoritesChange}
-                nicknames={nicknames}
-                onNicknameChange={onNicknameChange}
-              />
-            ))}
+            {allLights.map((light, i) => {
+              const devKey = light.type === "hue" ? `hue:${light.id}` : `govee:${light.ip}`;
+              const segColors = {};
+              if (colorModeApplied) {
+                Object.entries(colorModeApplied).forEach(([k, v]) => {
+                  const m = k.match(/^(.+):seg(\d+)$/);
+                  if (m && m[1] === devKey) segColors[parseInt(m[2])] = v;
+                });
+              }
+              return (
+                <LightCard
+                  key={`${light.type}-${light.id || light.ip}-${i}`}
+                  light={light}
+                  onControl={(l, cmd) => l._controlFn(l, cmd)}
+                  favorites={favorites}
+                  onFavoritesChange={onFavoritesChange}
+                  nicknames={nicknames}
+                  onNicknameChange={onNicknameChange}
+                  segmentInfo={segmentInfo}
+                  segmentColors={Object.keys(segColors).length > 0 ? segColors : null}
+                />
+              );
+            })}
           </div>
         )}
       </React.Fragment>)}
