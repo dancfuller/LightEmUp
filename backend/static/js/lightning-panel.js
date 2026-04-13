@@ -18,6 +18,7 @@ function getActivePreset(settings) {
 }
 
 function LightningPanel({ roomName, isActive, onStart, onStop, goveeDevices, segmentInfo }) {
+  const isMobile = useIsMobile();
   const [showSettings, setShowSettings] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [settings, setSettings] = useState(null);
@@ -89,10 +90,10 @@ function LightningPanel({ roomName, isActive, onStart, onStop, goveeDevices, seg
   return (
     <div style={{
       background: "linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)",
-      borderRadius: 16, padding: 20, marginBottom: 16,
+      borderRadius: 16, padding: isMobile ? 14 : 20, marginBottom: 16,
       border: "1px solid #334155",
     }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span style={{ fontSize: 18 }}>&#x26A1;</span>
           <span style={{ fontSize: 14, fontWeight: 700, color: "#e2e8f0" }}>Lightning Storm</span>

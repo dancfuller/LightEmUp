@@ -1,6 +1,7 @@
 // ─── Main App ───────────────────────────────────────────────────────────────
 
 function App() {
+  const isMobile = useIsMobile();
   const [config, setConfig] = useState(null);
   const [hueLights, setHueLights] = useState([]);
   const [hueGroups, setHueGroups] = useState([]);
@@ -220,14 +221,15 @@ function App() {
       fontFamily: "'Geist', -apple-system, sans-serif", color: "#f8fafc",
     }}>
       <header style={{
-        padding: "20px 24px", borderBottom: "1px solid #1e293b",
+        padding: isMobile ? "12px 14px" : "20px 24px", borderBottom: "1px solid #1e293b",
         display: "flex", justifyContent: "space-between", alignItems: "center",
+        flexWrap: "wrap", gap: 8,
         position: "sticky", top: 0, background: "rgba(10,15,30,0.95)",
         backdropFilter: "blur(12px)", zIndex: 100,
       }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <span style={{ fontSize: 28 }}>🔆</span>
-          <h1 style={{ fontSize: 22, fontWeight: 800, margin: 0, letterSpacing: -0.5 }}>LightEmUp</h1>
+        <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 8 : 12 }}>
+          <span style={{ fontSize: isMobile ? 22 : 28 }}>🔆</span>
+          <h1 style={{ fontSize: isMobile ? 18 : 22, fontWeight: 800, margin: 0, letterSpacing: -0.5 }}>LightEmUp</h1>
           <button
             onClick={refreshState}
             disabled={refreshing}
@@ -245,7 +247,7 @@ function App() {
             ↻
           </button>
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
           <button
             onClick={() => config?.hue_paired ? setActiveTab("settings") : setShowHueSetup(true)}
             style={{
@@ -285,22 +287,23 @@ function App() {
         </div>
       </header>
 
-      <nav style={{ display: "flex", gap: 4, padding: "12px 24px", borderBottom: "1px solid #1e293b" }}>
+      <nav style={{ display: "flex", gap: 4, padding: isMobile ? "8px 10px" : "12px 24px", borderBottom: "1px solid #1e293b", flexWrap: "wrap", overflowX: "auto" }}>
         {["rooms", "all lights", "assign rooms", "settings"].map(tab => (
           <button
             key={tab} onClick={() => setActiveTab(tab)}
             style={{
-              padding: "8px 20px", borderRadius: 8, border: "none",
+              padding: isMobile ? "7px 12px" : "8px 20px", borderRadius: 8, border: "none",
               background: activeTab === tab ? "#6366f1" : "transparent",
               color: activeTab === tab ? "#fff" : "#64748b",
-              fontSize: 13, fontWeight: 600, cursor: "pointer",
+              fontSize: isMobile ? 12 : 13, fontWeight: 600, cursor: "pointer",
               textTransform: "capitalize", transition: "all 0.2s",
+              whiteSpace: "nowrap",
             }}
           >{tab}</button>
         ))}
       </nav>
 
-      <main style={{ padding: 24, maxWidth: 1200, margin: "0 auto" }}>
+      <main style={{ padding: isMobile ? 12 : 24, maxWidth: 1200, margin: "0 auto" }}>
         {error && (
           <div style={{
             padding: 16, borderRadius: 12,
@@ -348,7 +351,7 @@ function App() {
             (room.govee_devices || []).forEach(ip => { deviceRoomMap[`govee:${ip}`] = rn; });
           });
           return (
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 12 }}>
+            <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fill, minmax(260px, 1fr))", gap: 12 }}>
               {hueLights.map(light => (
                 <LightCard key={`hue-${light.id}`} light={light} onControl={controlHueLight}
                   favorites={favoriteColors} onFavoritesChange={updateFavorites}
@@ -416,16 +419,17 @@ function App() {
                       <div key={light.id} style={{
                         display: "flex", alignItems: "center", gap: 8, padding: "5px 0",
                         borderBottom: "1px solid rgba(51,65,85,0.4)", fontSize: 12,
+                        flexWrap: "wrap",
                       }}>
                         <span style={{
                           width: 6, height: 6, borderRadius: "50%", flexShrink: 0,
                           background: reachable ? "#4ade80" : "#f87171",
                           opacity: reachable ? 0.8 : 0.5,
                         }} />
-                        <span style={{ color: "#e2e8f0", fontWeight: 600, minWidth: 140 }}>{name}</span>
-                        <span style={{ color: "#64748b", flex: 1 }}>{model}</span>
+                        <span style={{ color: "#e2e8f0", fontWeight: 600, minWidth: isMobile ? 0 : 140, flex: isMobile ? "1 1 auto" : "0 0 auto" }}>{name}</span>
+                        <span style={{ color: "#64748b", flex: isMobile ? "1 1 100%" : 1, order: isMobile ? 10 : 0 }}>{model}</span>
                         <span style={{ color: "#475569", fontSize: 11, fontFamily: "monospace" }}>ID: {light.id}</span>
-                        <span style={{ color: reachable ? "#64748b" : "#f87171", fontSize: 10, width: 70, textAlign: "right" }}>
+                        <span style={{ color: reachable ? "#64748b" : "#f87171", fontSize: 10, width: isMobile ? "auto" : 70, textAlign: "right" }}>
                           {reachable ? "reachable" : "unreachable"}
                         </span>
                       </div>
@@ -459,16 +463,17 @@ function App() {
                       <div key={device.ip} style={{
                         display: "flex", alignItems: "center", gap: 8, padding: "5px 0",
                         borderBottom: "1px solid rgba(51,65,85,0.4)", fontSize: 12,
+                        flexWrap: "wrap",
                       }}>
                         <span style={{
                           width: 6, height: 6, borderRadius: "50%", flexShrink: 0,
                           background: "#4ade80", opacity: 0.8,
                         }} />
-                        <span style={{ color: "#e2e8f0", fontWeight: 600, minWidth: 140 }}>{name}</span>
+                        <span style={{ color: "#e2e8f0", fontWeight: 600, minWidth: isMobile ? 0 : 140, flex: isMobile ? "1 1 auto" : "0 0 auto" }}>{name}</span>
                         <span style={{ color: "#64748b" }}>{device.sku}</span>
-                        <span style={{ color: "#475569", fontSize: 11, fontFamily: "monospace", flex: 1 }}>{device.ip}</span>
+                        <span style={{ color: "#475569", fontSize: 11, fontFamily: "monospace", flex: isMobile ? "1 1 100%" : 1, order: isMobile ? 10 : 0 }}>{device.ip}</span>
                         {device.mac && (
-                          <span style={{ color: "#475569", fontSize: 10, fontFamily: "monospace" }}>{device.mac}</span>
+                          <span style={{ color: "#475569", fontSize: 10, fontFamily: "monospace", order: isMobile ? 11 : 0 }}>{device.mac}</span>
                         )}
                       </div>
                     );

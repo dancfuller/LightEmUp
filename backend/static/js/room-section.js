@@ -1,6 +1,7 @@
 // ─── Room Section ──────────────────────────────────────────────────────────
 
 function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGovee, onControlRoom, favorites, onFavoritesChange, nicknames, onNicknameChange, lightningActive, onLightningStart, onLightningStop, segmentInfo, roomLayouts, onLayoutChange }) {
+  const isMobile = useIsMobile();
   const [collapsed, setCollapsed] = useState(true);
   const [showRoomControls, setShowRoomControls] = useState(false);
   const [showLightning, setShowLightning] = useState(false);
@@ -33,34 +34,37 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
       <div style={{
         display: "flex", justifyContent: "space-between", alignItems: "center",
         marginBottom: 4, paddingBottom: 12, borderBottom: "1px solid #1e293b",
+        flexWrap: "wrap", gap: 8,
       }}>
         <div
           onClick={() => setCollapsed(!collapsed)}
           style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", userSelect: "none" }}
         >
           <span style={{ fontSize: 14, color: "#64748b", transition: "transform 0.2s", transform: collapsed ? "rotate(-90deg)" : "rotate(0deg)", display: "inline-block" }}>&#x25BC;</span>
-          <h2 style={{ fontSize: 20, fontWeight: 700, color: "#f8fafc", margin: 0 }}>{name}</h2>
+          <h2 style={{ fontSize: isMobile ? 17 : 20, fontWeight: 700, color: "#f8fafc", margin: 0 }}>{name}</h2>
           <span style={{ fontSize: 12, color: "#64748b" }}>{allLights.length} lights</span>
         </div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <div style={{ display: "flex", gap: isMobile ? 6 : 8, alignItems: "center", flexWrap: "wrap" }}>
           <button
             onClick={() => { const opening = !showLightning; setShowLightning(opening); if (opening) { setCollapsed(false); setShowRoomControls(false); } }}
             style={{
-              padding: "6px 14px", borderRadius: 8, border: "1px solid #334155",
+              padding: isMobile ? "6px 10px" : "6px 14px", borderRadius: 8, border: "1px solid #334155",
               background: showLightning || lightningActive ? "rgba(251,191,36,0.15)" : "transparent",
               color: showLightning || lightningActive ? "#fbbf24" : "#94a3b8",
-              fontSize: 12, fontWeight: 600, cursor: "pointer", transition: "all 0.2s",
+              fontSize: isMobile ? 11 : 12, fontWeight: 600, cursor: "pointer", transition: "all 0.2s",
+              whiteSpace: "nowrap",
             }}
           >
-            &#x26A1; {lightningActive ? "Storm" : "Lightning"}
+            &#x26A1; {lightningActive ? "Storm" : (isMobile ? "" : "Lightning")}
           </button>
           <button
             onClick={() => { const opening = !showMap; setShowMap(opening); if (opening) { setCollapsed(false); setShowLightning(false); setShowRoomControls(false); } }}
             style={{
-              padding: "6px 14px", borderRadius: 8, border: "1px solid #334155",
+              padding: isMobile ? "6px 10px" : "6px 14px", borderRadius: 8, border: "1px solid #334155",
               background: showMap ? "rgba(52,211,153,0.15)" : "transparent",
               color: showMap ? "#34d399" : "#94a3b8",
-              fontSize: 12, fontWeight: 600, cursor: "pointer", transition: "all 0.2s",
+              fontSize: isMobile ? 11 : 12, fontWeight: 600, cursor: "pointer", transition: "all 0.2s",
+              whiteSpace: "nowrap",
             }}
           >
             Map
@@ -68,10 +72,11 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
           <button
             onClick={() => { const opening = !showColor; setShowColor(opening); if (opening) { setCollapsed(false); setShowLightning(false); setShowRoomControls(false); } }}
             style={{
-              padding: "6px 14px", borderRadius: 8, border: "1px solid #334155",
+              padding: isMobile ? "6px 10px" : "6px 14px", borderRadius: 8, border: "1px solid #334155",
               background: showColor ? "rgba(52,211,153,0.15)" : "transparent",
               color: showColor ? "#34d399" : "#94a3b8",
-              fontSize: 12, fontWeight: 600, cursor: "pointer", transition: "all 0.2s",
+              fontSize: isMobile ? 11 : 12, fontWeight: 600, cursor: "pointer", transition: "all 0.2s",
+              whiteSpace: "nowrap",
             }}
           >
             Color
@@ -79,21 +84,23 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
           <button
             onClick={() => { const opening = !showRoomControls; setShowRoomControls(opening); if (opening) { setCollapsed(false); setShowLightning(false); } }}
             style={{
-              padding: "6px 14px", borderRadius: 8, border: "1px solid #334155",
+              padding: isMobile ? "6px 10px" : "6px 14px", borderRadius: 8, border: "1px solid #334155",
               background: showRoomControls ? "rgba(99,102,241,0.15)" : "transparent",
               color: showRoomControls ? "#a5b4fc" : "#94a3b8",
-              fontSize: 12, fontWeight: 600, cursor: "pointer", transition: "all 0.2s",
+              fontSize: isMobile ? 11 : 12, fontWeight: 600, cursor: "pointer", transition: "all 0.2s",
+              whiteSpace: "nowrap",
             }}
           >
-            Room Controls
+            {isMobile ? "Controls" : "Room Controls"}
           </button>
           <button
             onClick={() => onControlRoom(name, { on: !anyOn })}
             style={{
-              padding: "6px 16px", borderRadius: 8, border: "none",
+              padding: isMobile ? "6px 12px" : "6px 16px", borderRadius: 8, border: "none",
               background: anyOn ? "#334155" : "#6366f1",
-              color: "#f1f5f9", fontSize: 12, fontWeight: 600,
+              color: "#f1f5f9", fontSize: isMobile ? 11 : 12, fontWeight: 600,
               cursor: "pointer", transition: "all 0.2s",
+              whiteSpace: "nowrap",
             }}
           >
             {anyOn ? "All Off" : "All On"}
@@ -179,7 +186,7 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
         {/* Individual light cards */}
         {!showMap && (
           <div style={{
-            display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 12,
+            display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fill, minmax(260px, 1fr))", gap: 12,
           }}>
             {allLights.map((light, i) => {
               const devKey = light.type === "hue" ? `hue:${light.id}` : `govee:${light.ip}`;

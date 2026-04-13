@@ -2,6 +2,44 @@
 // Room-level color scheme control. Reads device positions from room layout.
 // Two modes: "Gradient" (directional shades of one color) and "Palette" (distinct colors, no adjacent duplicates).
 
+// ─── Palette extension ────────────────────────────────────────────────────
+// Extend a palette of N colors to targetLen (up to 24) by generating variations
+// (lighter, darker, hue-shifted) of the first 8 colors. Deterministic so repeated
+// calls produce the same output for the same seed.
+function extendPalette(baseColors, targetLen) {
+  if (baseColors.length >= targetLen) return baseColors.slice(0, targetLen);
+  const result = [...baseColors];
+  if (baseColors.length === 0) {
+    while (result.length < targetLen) result.push({ r: 128, g: 128, b: 128 });
+    return result;
+  }
+  // Seed pool = first up to 8 entries (the "original" palette)
+  const seedLen = Math.min(8, baseColors.length);
+  const seed = baseColors.slice(0, seedLen);
+  while (result.length < targetLen) {
+    const i = result.length;
+    const src = seed[i % seedLen];
+    const round = Math.floor(i / seedLen); // 0 never generated (already present), 1+ extends
+    const { h, s, l } = rgbToHsl(src.r, src.g, src.b);
+    let newH = h, newS = s, newL = l;
+    if (round === 1) {
+      // Lighter, slightly desaturated tint
+      newL = Math.min(0.82, l + 0.18);
+      newS = Math.max(0.35, s * 0.88);
+    } else if (round === 2) {
+      // Darker, slightly more saturated shade
+      newL = Math.max(0.18, l - 0.18);
+      newS = Math.min(1, s * 1.12);
+    } else {
+      // Hue-shifted fallback for 24+ slots
+      newH = ((h + (round - 2) * 0.06) % 1 + 1) % 1;
+      newL = Math.max(0.25, Math.min(0.75, l + (round % 2 === 0 ? 0.08 : -0.08)));
+    }
+    result.push(hslToRgb(newH, newS, newL));
+  }
+  return result;
+}
+
 // ─── Gradient Direction Picker with Mini Map ──────────────────────────────
 function GradientDirectionPicker({ direction, onDirectionChange, availableDirections, placedLights, layout, preview, lightMap, nicknames, isLinear }) {
   if (!layout || placedLights.length === 0) return null;
@@ -150,18 +188,45 @@ function GradientDirectionPicker({ direction, onDirectionChange, availableDirect
 }
 
 function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlGovee, favorites, onFavoritesChange, nicknames, segmentInfo, roomLayouts, onApply }) {
+  const isMobile = useIsMobile();
   const [mode, setMode] = useState("gradient"); // "gradient" | "tonal" | "palette"
   const [baseColor, setBaseColor] = useState({ r: 40, g: 180, b: 80 });
-  const [paletteColors, setPaletteColors] = useState([
+  // paletteColors = visible/active subset of paletteSource.
+  // paletteSource = the "full palette" memory — preserved when count decreases
+  // so increasing count restores original colors instead of regenerating them.
+  const defaultPalette = [
     { r: 255, g: 60, b: 60 },
-    { r: 60, g: 180, b: 255 },
-    { r: 60, g: 255, b: 120 },
-    { r: 255, g: 200, b: 40 },
-  ]);
+    { r: 255, g: 140, b: 30 },
+    { r: 255, g: 220, b: 40 },
+    { r: 60, g: 200, b: 80 },
+    { r: 40, g: 200, b: 220 },
+    { r: 60, g: 100, b: 255 },
+    { r: 160, g: 60, b: 255 },
+    { r: 255, g: 60, b: 180 },
+  ];
+  const [paletteColors, setPaletteColors] = useState(defaultPalette);
+  const [paletteSource, setPaletteSource] = useState(defaultPalette);
   const [editingPaletteIdx, setEditingPaletteIdx] = useState(null);
   const [direction, setDirection] = useState("left-right");
   const [brightness, setBrightness] = useState(100); // 0-100%
   const [preview, setPreview] = useState(null); // { deviceKey: {r,g,b}, ... }
+
+  // Apply progress state
+  const [applying, setApplying] = useState(false);
+  const [applyTotal, setApplyTotal] = useState(0);
+  const [applyDone, setApplyDone] = useState(0);
+  const [applyEndAt, setApplyEndAt] = useState(0);
+  const [tickNow, setTickNow] = useState(0);
+
+  // Tick clock for the countdown while applying
+  useEffect(() => {
+    if (!applying) return;
+    setTickNow(Date.now());
+    const id = setInterval(() => setTickNow(Date.now()), 250);
+    return () => clearInterval(id);
+  }, [applying]);
+
+  const secondsLeft = applying ? Math.max(0, Math.ceil((applyEndAt - tickNow) / 1000)) : 0;
 
   const allLights = [
     ...hueLights.map(l => ({ ...l, _controlFn: onControlHue })),
@@ -256,40 +321,87 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     return result;
   }, [placedColorLights, baseColor, direction]);
 
-  // ─── Palette mode: graph-coloring with adjacency awareness ──────────
+  // ─── Palette mode: graph-coloring with global usage + perceptual spacing ──
   const computePalette = useCallback(() => {
     if (placedColorLights.length === 0 || paletteColors.length === 0) return null;
 
     const adj = buildAdjacency(placedColorLights);
     const colors = paletteColors;
+    const N = colors.length;
+
+    // Precompute HSL for each palette color
+    const hsl = colors.map(c => rgbToHsl(c.r, c.g, c.b));
+
+    // Perceptual distance: circular hue distance weighted by min saturation
+    // (low-sat colors are dominated by lightness diff). Larger = more distinct.
+    const colorDist = (i, j) => {
+      const a = hsl[i], b = hsl[j];
+      let dh = Math.abs(a.h - b.h);
+      if (dh > 0.5) dh = 1 - dh; // circular
+      const satWeight = Math.min(a.s, b.s);
+      const dl = Math.abs(a.l - b.l);
+      const ds = Math.abs(a.s - b.s);
+      return dh * 2 * satWeight + dl + ds * 0.3;
+    };
 
     // Sort devices by number of neighbors (most constrained first)
     const sorted = [...placedColorLights].sort((a, b) =>
       (adj[b.key]?.size || 0) - (adj[a.key]?.size || 0)
     );
 
+    const usage = new Array(N).fill(0);
     const assignment = {};
 
     sorted.forEach(device => {
-      // Collect colors used by neighbors
-      const neighborColors = new Set();
+      // Collect color indices already assigned to adjacent neighbors
+      const neighborIdxs = [];
       adj[device.key]?.forEach(nk => {
-        if (assignment[nk] !== undefined) neighborColors.add(assignment[nk]);
+        if (assignment[nk] !== undefined) neighborIdxs.push(assignment[nk]);
       });
+      const neighborSet = new Set(neighborIdxs);
 
-      // Pick first color not used by a neighbor; if all used, pick randomly
-      let chosen = -1;
-      // Shuffle order so repeated calls vary
-      const indices = Array.from({ length: colors.length }, (_, i) => i);
-      for (let i = indices.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [indices[i], indices[j]] = [indices[j], indices[i]];
+      // Pick a tier of usage counts: lowest first. Within a tier, prefer
+      // colors not already on a neighbor; if none, fall through to next tier.
+      const tiers = [...new Set(usage)].sort((a, b) => a - b);
+      let candidates = [];
+      for (const tier of tiers) {
+        candidates = [];
+        for (let i = 0; i < N; i++) {
+          if (usage[i] === tier && !neighborSet.has(i)) candidates.push(i);
+        }
+        if (candidates.length > 0) break;
       }
-      for (const idx of indices) {
-        if (!neighborColors.has(idx)) { chosen = idx; break; }
+      if (candidates.length === 0) {
+        // Every color is used by a neighbor — pick from the lowest-usage tier
+        const minUse = Math.min(...usage);
+        for (let i = 0; i < N; i++) if (usage[i] === minUse) candidates.push(i);
       }
-      if (chosen === -1) chosen = indices[0]; // fallback
+
+      // Among candidates, prefer max min-distance from neighbor colors
+      let chosen;
+      if (neighborIdxs.length === 0) {
+        chosen = candidates[Math.floor(Math.random() * candidates.length)];
+      } else {
+        let bestDist = -Infinity;
+        let bestCandidates = [];
+        for (const idx of candidates) {
+          let minDist = Infinity;
+          for (const nIdx of neighborIdxs) {
+            const d = colorDist(idx, nIdx);
+            if (d < minDist) minDist = d;
+          }
+          if (minDist > bestDist + 1e-9) {
+            bestDist = minDist;
+            bestCandidates = [idx];
+          } else if (Math.abs(minDist - bestDist) < 1e-9) {
+            bestCandidates.push(idx);
+          }
+        }
+        chosen = bestCandidates[Math.floor(Math.random() * bestCandidates.length)];
+      }
+
       assignment[device.key] = chosen;
+      usage[chosen]++;
     });
 
     const result = {};
@@ -355,18 +467,67 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
 
   // ─── Apply colors to lights ─────────────────────────────────────────
   const applyColors = () => {
-    if (!preview) return;
+    if (!preview || applying) return;
     const entries = Object.entries(preview);
-    // Hue lights: parallel (REST API)
-    // Govee whole-device: stagger 150ms (LAN UDP)
-    // Govee segments: stagger 1500ms (V2 cloud API rate limit)
-    let goveeDelay = 0;
-    let segDelay = 0;
 
-    // Segments sometimes "stick" to a previous color. Fix: reset every segment to
-    // white at 5% brightness first, hold for 2s, then apply the real colors.
+    // Split entries by destination protocol so we can schedule each correctly:
+    // Hue lights: parallel (REST API, fast)
+    // Govee whole-device: stagger 150ms (LAN UDP, fire-and-forget)
+    // Govee segments: stagger 1500ms (V2 cloud API rate limit, ~1 req/sec)
     const segmentEntries = entries.filter(([key]) => /^govee:.+:seg\d+$/.test(key));
-    let segStartDelay = 0;
+    const hueEntries = entries.filter(([key]) => key.startsWith("hue:"));
+    const goveeEntries = entries.filter(([key]) => /^govee:[^:]+$/.test(key));
+
+    const total = hueEntries.length + goveeEntries.length + segmentEntries.length;
+    if (total === 0) return;
+
+    // Estimated total wall-clock for the apply sequence
+    const segCount = segmentEntries.length;
+    const goveeCount = goveeEntries.length;
+    const segMs = segCount > 0
+      ? segCount * 1500 /* reset stagger */ + 2000 /* white hold */ + segCount * 1500 /* color stagger + last roundtrip */
+      : 0;
+    const goveeMs = goveeCount > 0 ? (goveeCount - 1) * 150 + 200 : 0;
+    const totalMs = Math.max(segMs, goveeMs, 300);
+
+    setApplying(true);
+    setApplyTotal(total);
+    setApplyDone(0);
+    setApplyEndAt(Date.now() + totalMs);
+    setTickNow(Date.now());
+
+    let completed = 0;
+    const tick = () => {
+      completed++;
+      setApplyDone(completed);
+      if (completed >= total) {
+        setApplying(false);
+      }
+    };
+
+    // Hue lights: fire immediately (Hue bridge handles concurrency well)
+    hueEntries.forEach(([key, color]) => {
+      const light = lightMap[key];
+      if (!light || !light._controlFn) { tick(); return; }
+      const bri = Math.round(brightness * 254 / 100);
+      light._controlFn(light, { on: true, r: color.r, g: color.g, b: color.b, brightness: bri });
+      tick();
+    });
+
+    // Govee whole-device (LAN UDP, staggered)
+    let goveeDelay = 0;
+    goveeEntries.forEach(([key, color]) => {
+      const light = lightMap[key];
+      if (!light || !light._controlFn) { tick(); return; }
+      const cmd = { on: true, r: color.r, g: color.g, b: color.b, brightness };
+      setTimeout(() => {
+        light._controlFn(light, cmd);
+        tick();
+      }, goveeDelay);
+      goveeDelay += 150;
+    });
+
+    // Govee segments: reset to dim white first to break "stuck color" state, then apply
     if (segmentEntries.length > 0) {
       let resetDelay = 0;
       segmentEntries.forEach(([key]) => {
@@ -380,56 +541,64 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
         }, resetDelay);
         resetDelay += 1500;
       });
-      segStartDelay = resetDelay + 2000; // hold white for 2s before applying colors
-    }
+      const segStartDelay = resetDelay + 2000; // hold white for 2s
 
-    entries.forEach(([key, color]) => {
-      // Check if this is a segment key (e.g. "govee:192.168.0.186:seg0")
-      const segMatch = key.match(/^(govee:.+):seg(\d+)$/);
-      if (segMatch) {
-        const parentKey = segMatch[1];
-        const segIdx = parseInt(segMatch[2]);
-        const light = lightMap[parentKey];
-        if (!light) return;
-        // Send segment color via V2 cloud API (after reset delay)
-        const cmd = { ip: light.ip, sku: light.sku, device_mac: light.mac, segment_idx: segIdx, r: color.r, g: color.g, b: color.b, brightness };
+      let segDelay = 0;
+      segmentEntries.forEach(([key, color]) => {
+        const segMatch = key.match(/^(govee:.+):seg(\d+)$/);
+        const light = lightMap[segMatch[1]];
+        if (!light) { tick(); return; }
+        const cmd = { ip: light.ip, sku: light.sku, device_mac: light.mac, segment_idx: parseInt(segMatch[2]), r: color.r, g: color.g, b: color.b, brightness };
         setTimeout(() => {
           api("/govee/segment-control", { method: "POST", body: JSON.stringify(cmd), headers: { "Content-Type": "application/json" } })
-            .catch(e => console.warn("[ColorMode] Segment control failed:", key, e));
+            .catch(e => console.warn("[ColorMode] Segment control failed:", key, e))
+            .finally(() => tick());
         }, segStartDelay + segDelay);
         segDelay += 1500; // V2 API rate limit ~1 req/sec
-        return;
-      }
-
-      const light = lightMap[key];
-      if (!light || !light._controlFn) return;
-      const bri = light.type === "hue" ? Math.round(brightness * 254 / 100) : brightness;
-      const cmd = { on: true, r: color.r, g: color.g, b: color.b, brightness: bri };
-      if (light.type === "govee") {
-        setTimeout(() => light._controlFn(light, cmd), goveeDelay);
-        goveeDelay += 150;
-      } else {
-        light._controlFn(light, cmd);
-      }
-    });
+      });
+    }
 
     // Notify map so it updates dot colors and clears Identify active state
     if (onApply) onApply(preview);
   };
 
   // ─── Palette color management ───────────────────────────────────────
+  // Adding a color pulls from paletteSource first (restoring a previously
+  // trimmed color). Only if source is exhausted do we generate a new one.
   const addPaletteColor = () => {
-    setPaletteColors(prev => [...prev, { r: 128, g: 128, b: 128 }]);
+    if (paletteColors.length >= 24) return;
+    const newCount = paletteColors.length + 1;
+    if (paletteSource.length >= newCount) {
+      setPaletteColors(paletteSource.slice(0, newCount));
+    } else {
+      const newSource = extendPalette(paletteSource, newCount);
+      setPaletteSource(newSource);
+      setPaletteColors(newSource.slice(0, newCount));
+    }
   };
 
+  // Explicit × removal on a swatch: drop from both visible and source
+  // (user is explicitly discarding this color from memory).
   const removePaletteColor = (idx) => {
-    if (paletteColors.length <= 2) return; // need at least 2
+    if (paletteColors.length <= 2) return;
     setPaletteColors(prev => prev.filter((_, i) => i !== idx));
+    setPaletteSource(prev => prev.filter((_, i) => i !== idx));
     if (editingPaletteIdx === idx) setEditingPaletteIdx(null);
+    else if (editingPaletteIdx !== null && editingPaletteIdx > idx) setEditingPaletteIdx(editingPaletteIdx - 1);
+  };
+
+  // Stepper − removes only from the visible set, preserving source memory
+  // so the user can grow back to the original palette.
+  const removeLastPaletteColor = () => {
+    if (paletteColors.length <= 2) return;
+    const lastIdx = paletteColors.length - 1;
+    setPaletteColors(prev => prev.slice(0, -1));
+    if (editingPaletteIdx === lastIdx) setEditingPaletteIdx(null);
   };
 
   const updatePaletteColor = (idx, r, g, b) => {
     setPaletteColors(prev => prev.map((c, i) => i === idx ? { r, g, b } : c));
+    setPaletteSource(prev => prev.map((c, i) => i === idx ? { r, g, b } : c));
   };
 
   // ─── Color scheme presets (grouped into rows, 8 non-repeating colors each) ─
@@ -502,11 +671,11 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
   return (
     <div style={{
       background: "linear-gradient(135deg, #1e293b 0%, #172033 100%)",
-      borderRadius: 16, padding: 20, marginBottom: 16,
+      borderRadius: 16, padding: isMobile ? 14 : 20, marginBottom: 16,
       border: "1px solid #334155",
     }}>
       {/* Header with mode tabs */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
         <div style={{
           fontSize: 12, fontWeight: 600, color: "#34d399",
           textTransform: "uppercase", letterSpacing: 0.8,
@@ -622,7 +791,15 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
                     <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
                       {row.presets.map((scheme) => (
                         <button key={scheme.name}
-                          onClick={() => { setPaletteColors([...scheme.colors]); setEditingPaletteIdx(null); }}
+                          onClick={() => {
+                            // Always cache the full preset (up to 24) as source memory,
+                            // then display as many as the user's current count (min = preset length).
+                            const visibleLen = Math.max(scheme.colors.length, paletteColors.length);
+                            const newSource = extendPalette([...scheme.colors], Math.max(visibleLen, scheme.colors.length));
+                            setPaletteSource(newSource);
+                            setPaletteColors(newSource.slice(0, visibleLen));
+                            setEditingPaletteIdx(null);
+                          }}
                           style={{
                             padding: "4px 10px", borderRadius: 6, border: "1px solid #334155",
                             background: "transparent", cursor: "pointer",
@@ -644,6 +821,36 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
                     </div>
                   </div>
                 ))}
+              </div>
+
+              {/* Color count stepper */}
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+                <span style={{ fontSize: 11, color: "#64748b" }}>Colors:</span>
+                <button
+                  onClick={removeLastPaletteColor}
+                  disabled={paletteColors.length <= 2}
+                  style={{
+                    width: 24, height: 24, borderRadius: 6, border: "1px solid #334155",
+                    background: paletteColors.length <= 2 ? "transparent" : "rgba(255,255,255,0.05)",
+                    color: paletteColors.length <= 2 ? "#334155" : "#94a3b8",
+                    fontSize: 16, lineHeight: 1, cursor: paletteColors.length <= 2 ? "default" : "pointer",
+                    display: "flex", alignItems: "center", justifyContent: "center", padding: 0,
+                  }}
+                >−</button>
+                <span style={{ fontSize: 14, fontWeight: 700, color: "#f1f5f9", minWidth: 22, textAlign: "center" }}>
+                  {paletteColors.length}
+                </span>
+                <button
+                  onClick={addPaletteColor}
+                  disabled={paletteColors.length >= 24}
+                  style={{
+                    width: 24, height: 24, borderRadius: 6, border: "1px solid #334155",
+                    background: paletteColors.length >= 24 ? "transparent" : "rgba(255,255,255,0.05)",
+                    color: paletteColors.length >= 24 ? "#334155" : "#94a3b8",
+                    fontSize: 16, lineHeight: 1, cursor: paletteColors.length >= 24 ? "default" : "pointer",
+                    display: "flex", alignItems: "center", justifyContent: "center", padding: 0,
+                  }}
+                >+</button>
               </div>
 
               {/* Editable palette swatches */}
@@ -672,13 +879,6 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
                     )}
                   </div>
                 ))}
-                <button onClick={addPaletteColor}
-                  style={{
-                    width: 32, height: 32, borderRadius: 6, border: "1px dashed #475569",
-                    background: "transparent", color: "#64748b", fontSize: 16,
-                    cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
-                  }}
-                >+</button>
               </div>
 
               {/* Inline color picker for selected swatch */}
@@ -753,22 +953,41 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
           </div>
 
           {/* ─── Action buttons ──────────────────────────────────── */}
-          <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
             <button onClick={generatePreview}
+              disabled={applying}
               style={{
                 padding: "6px 16px", borderRadius: 8, border: "1px solid #334155",
-                background: "transparent", color: "#94a3b8", fontSize: 12, fontWeight: 600, cursor: "pointer",
+                background: "transparent", color: applying ? "#475569" : "#94a3b8",
+                fontSize: 12, fontWeight: 600, cursor: applying ? "not-allowed" : "pointer",
               }}
             >{mode === "gradient" ? "Preview" : "Shuffle"}</button>
             <button onClick={applyColors}
-              disabled={!preview}
+              disabled={!preview || applying}
               style={{
                 padding: "6px 16px", borderRadius: 8, border: "none",
-                background: preview ? "#34d399" : "#334155",
-                color: preview ? "#0f172a" : "#64748b",
-                fontSize: 12, fontWeight: 600, cursor: preview ? "pointer" : "default",
+                background: applying ? "#fbbf24" : (preview ? "#34d399" : "#334155"),
+                color: applying || preview ? "#0f172a" : "#64748b",
+                fontSize: 12, fontWeight: 600,
+                cursor: applying ? "wait" : (preview ? "pointer" : "default"),
+                minWidth: applying ? 170 : 80,
+                position: "relative", overflow: "hidden",
+                transition: "background 0.2s",
               }}
-            >Apply</button>
+            >
+              {applying ? (
+                <>
+                  <span style={{ position: "relative", zIndex: 1 }}>
+                    Applying {applyDone}/{applyTotal}{secondsLeft > 0 ? ` · ${secondsLeft}s` : "…"}
+                  </span>
+                  <div style={{
+                    position: "absolute", left: 0, bottom: 0, height: 3,
+                    width: `${applyTotal > 0 ? (applyDone / applyTotal) * 100 : 0}%`,
+                    background: "#0f172a", transition: "width 0.2s ease",
+                  }} />
+                </>
+              ) : "Apply"}
+            </button>
           </div>
         </>
       )}

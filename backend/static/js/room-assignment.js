@@ -1,6 +1,7 @@
 // ─── Room Assignment Component ──────────────────────────────────────────────
 
 function DeviceRow({ device, roomName, allRoomNames, onMove, onRemove, nicknames }) {
+  const isMobile = useIsMobile();
   const isHue = device.type === "hue";
   const { nickname, friendlyName } = getDeviceDisplayName(device, nicknames);
   const subtitle = isHue
@@ -10,14 +11,15 @@ function DeviceRow({ device, roomName, allRoomNames, onMove, onRemove, nicknames
   return (
     <div style={{
       display: "flex", alignItems: "center", gap: 10,
-      padding: "10px 14px", borderRadius: 12,
+      padding: isMobile ? "10px 12px" : "10px 14px", borderRadius: 12,
       background: "#0f172a", border: "1px solid #334155",
+      flexWrap: "wrap",
     }}>
       <div style={{
         width: 8, height: 8, borderRadius: "50%", flexShrink: 0,
         background: isHue ? "#c084fc" : "#34d399",
       }} />
-      <div style={{ flex: 1, minWidth: 0 }}>
+      <div style={{ flex: "1 1 120px", minWidth: 0 }}>
         {nickname && (
           <div style={{ fontSize: 13, fontWeight: 700, color: "#e2e8f0", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
             {nickname}
@@ -39,7 +41,7 @@ function DeviceRow({ device, roomName, allRoomNames, onMove, onRemove, nicknames
           style={{
             padding: "5px 8px", borderRadius: 8, border: "1px solid #334155",
             background: "#1e293b", color: "#e2e8f0", fontSize: 12,
-            cursor: "pointer", outline: "none", minWidth: 100,
+            cursor: "pointer", outline: "none", minWidth: isMobile ? 80 : 100,
           }}
         >
           {allRoomNames.map(rn => (
@@ -178,15 +180,16 @@ function DevicePickerModal({ title, devices, onSelect, onClose, nicknames }) {
 }
 
 function RoomCard({ roomName, devices, allRoomNames, unassigned, onMoveDevice, onRemoveDevice, onAddDevices, onDeleteRoom, isDefault, nicknames }) {
+  const isMobile = useIsMobile();
   const [showPicker, setShowPicker] = useState(false);
 
   return (
     <>
       <div style={{
-        background: "#1e293b", borderRadius: 16, padding: 20,
+        background: "#1e293b", borderRadius: 16, padding: isMobile ? 14 : 20,
         border: "1px solid #334155", marginBottom: 16,
       }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <h3 style={{ fontSize: 16, fontWeight: 700, color: "#f1f5f9", margin: 0 }}>{roomName}</h3>
             <span style={{
@@ -258,6 +261,7 @@ function RoomCard({ roomName, devices, allRoomNames, unassigned, onMoveDevice, o
 }
 
 function RoomAssignment({ hueLights, goveeDevices, rooms, onRoomsChange, nicknames }) {
+  const isMobile = useIsMobile();
   const [newRoomName, setNewRoomName] = useState("");
   const [saving, setSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState(null);
@@ -408,6 +412,7 @@ function RoomAssignment({ hueLights, goveeDevices, rooms, onRoomsChange, nicknam
       <div style={{
         display: "flex", gap: 16, marginBottom: 20, padding: "10px 16px",
         background: "#0f172a", borderRadius: 10, border: "1px solid #1e293b",
+        flexWrap: "wrap",
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#94a3b8" }}>
           <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#c084fc" }} /> Hue / Zigbee
@@ -442,7 +447,7 @@ function RoomAssignment({ hueLights, goveeDevices, rooms, onRoomsChange, nicknam
       {/* Unassigned section */}
       {unassigned.length > 0 && (
         <div style={{
-          background: "#1e293b", borderRadius: 16, padding: 20,
+          background: "#1e293b", borderRadius: 16, padding: isMobile ? 14 : 20,
           border: "1px dashed #475569", marginBottom: 16,
         }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
@@ -462,12 +467,13 @@ function RoomAssignment({ hueLights, goveeDevices, rooms, onRoomsChange, nicknam
                   display: "flex", alignItems: "center", gap: 10,
                   padding: "10px 14px", borderRadius: 12,
                   background: "#0f172a", border: "1px solid #334155",
+                  flexWrap: "wrap",
                 }}>
                   <div style={{
                     width: 8, height: 8, borderRadius: "50%", flexShrink: 0,
                     background: isHue ? "#c084fc" : "#34d399",
                   }} />
-                  <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ flex: "1 1 120px", minWidth: 0 }}>
                     {nickname && (
                       <div style={{ fontSize: 13, fontWeight: 700, color: "#e2e8f0" }}>{nickname}</div>
                     )}

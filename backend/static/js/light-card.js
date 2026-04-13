@@ -1,6 +1,7 @@
 // ─── Light Card Component ───────────────────────────────────────────────────
 
 function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, onNicknameChange, roomName, segmentColors, segmentInfo }) {
+  const isMobile = useIsMobile();
   const [brightness, setBrightness] = useState(
     light.type === "hue" ? Math.round((light.state?.brightness || 0) / 254 * 100) : (light.state?.brightness ?? 50)
   );
@@ -57,7 +58,7 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
   return (
     <div style={{
       background: "linear-gradient(135deg, #1e293b 0%, #0f172a 100%)",
-      borderRadius: 16, padding: 20, border: "1px solid #334155",
+      borderRadius: 16, padding: isMobile ? 14 : 20, border: "1px solid #334155",
       opacity: isReachable ? 1 : 0.5, transition: "all 0.2s ease",
     }}>
       {/* Header: name + toggle */}

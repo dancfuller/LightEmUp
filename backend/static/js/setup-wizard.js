@@ -1,6 +1,7 @@
 // ─── Setup Wizard ───────────────────────────────────────────────────────────
 
 function SetupWizard({ onComplete }) {
+  const isMobile = useIsMobile();
   const [bridges, setBridges] = useState([]);
   const [selectedBridge, setSelectedBridge] = useState(null);
   const [pairing, setPairing] = useState(false);
@@ -37,13 +38,13 @@ function SetupWizard({ onComplete }) {
 
   return (
     <div style={{
-      maxWidth: 480, margin: "80px auto", padding: 32,
+      maxWidth: 480, margin: isMobile ? "20px auto" : "80px auto", padding: isMobile ? 20 : 32,
       background: "linear-gradient(135deg, #1e293b 0%, #0f172a 100%)",
       borderRadius: 24, border: "1px solid #334155",
     }}>
-      <div style={{ textAlign: "center", marginBottom: 32 }}>
-        <div style={{ fontSize: 48, marginBottom: 12 }}>🔆</div>
-        <h1 style={{ fontSize: 28, fontWeight: 800, color: "#f8fafc", margin: 0 }}>LightEmUp</h1>
+      <div style={{ textAlign: "center", marginBottom: isMobile ? 20 : 32 }}>
+        <div style={{ fontSize: isMobile ? 36 : 48, marginBottom: 12 }}>🔆</div>
+        <h1 style={{ fontSize: isMobile ? 22 : 28, fontWeight: 800, color: "#f8fafc", margin: 0 }}>LightEmUp</h1>
         <p style={{ color: "#94a3b8", marginTop: 8 }}>Let's set up your Hue Bridge</p>
       </div>
 

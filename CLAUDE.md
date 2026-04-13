@@ -47,6 +47,28 @@ backend/
 - **Color spaces**: Hue devices report CIE `xy` coordinates — use `hueXYToRGB()` for accurate conversion. Govee devices use direct RGB. `getInitialColor()` handles both.
 - **Device keys**: `hue:{light_id}` or `govee:{ip_address}` — used for nicknames, room layouts, and state tracking.
 
+## UI/UX: Mobile + Desktop Responsive Design (REQUIRED)
+
+Every UI change must work well on both desktop (16:9) and modern phones in portrait mode (iPhone 17 ~402px wide, Galaxy S26 ~384px wide — targeting 18:9/19:9 aspect ratios).
+
+**Rules — apply to every UI change:**
+
+1. **Always use `useIsMobile()`** from `utils.js` for width-conditional styling. The breakpoint is 640px. Never hardcode pixel widths for layout — always fork on `isMobile`.
+
+2. **Padding**: Use `isMobile ? 12 : 20` or `isMobile ? 14 : 20` for card/panel padding. Never a fixed 20-24px on all screens.
+
+3. **Button rows**: Always add `flexWrap: "wrap"` so buttons reflow onto a second line rather than overflow. Shorten labels on mobile (e.g. `isMobile ? "Controls" : "Room Controls"`).
+
+4. **Grids**: Use `gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fill, minmax(260px, 1fr))"` — single column on phones.
+
+5. **Font sizes**: Reduce on mobile (e.g. `isMobile ? 17 : 20` for section headers, `isMobile ? 11 : 12` for buttons).
+
+6. **Avoid fixed widths/minWidths on flex children**: Use `flex: "1 1 auto"` or `flex: "1 1 120px"` instead of `minWidth: 140` on narrow screens.
+
+7. **Top-level containers**: Reduce outer margin/padding on mobile (e.g. wizard container uses `margin: isMobile ? "20px auto" : "80px auto"`).
+
+8. **Test both viewports mentally before finishing**: Would this render correctly at 390px wide (portrait phone)? At 1280px wide (desktop)?
+
 ## Backend Conventions
 
 - **Config persistence**: `config.json` is read at startup and written on every mutation (rooms, nicknames, layouts, settings). Use the helper pattern in `main.py`.

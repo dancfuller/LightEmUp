@@ -3,6 +3,22 @@ const { useState, useEffect, useCallback, useRef } = React;
 
 const API = "/api";
 
+// ─── Responsive Helper ──────────────────────────────────────────────────────
+// Matches portrait-mode phones (iPhone 17 ~402px, Galaxy S26 ~384px).
+// Breakpoint 640px covers all common phones in portrait, including larger ones.
+const MOBILE_BREAKPOINT = 640;
+function useIsMobile() {
+  const [isMobile, setIsMobile] = useState(
+    typeof window !== "undefined" ? window.innerWidth < MOBILE_BREAKPOINT : false
+  );
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth < MOBILE_BREAKPOINT);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  return isMobile;
+}
+
 // ─── Color Utilities ────────────────────────────────────────────────────────
 
 function hsvToRgb(h, s, v) {
