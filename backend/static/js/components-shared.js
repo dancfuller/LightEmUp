@@ -41,6 +41,14 @@ function ColorPicker({ size = 140, currentColor, onColorSelect, favorites, onFav
   const [editingFavs, setEditingFavs] = useState(false);
   const [newFavLabel, setNewFavLabel] = useState("");
 
+  // Sync local RGB when currentColor prop changes (e.g. after Apply from ColorMode
+  // updates the parent light's state.color)
+  useEffect(() => {
+    if (currentColor?.r != null) setLocalR(currentColor.r);
+    if (currentColor?.g != null) setLocalG(currentColor.g);
+    if (currentColor?.b != null) setLocalB(currentColor.b);
+  }, [currentColor?.r, currentColor?.g, currentColor?.b]);
+
   // Sync local RGB when currentColor changes from external source (wheel pick)
   const handleWheelPick = (r, g, b) => {
     setLocalR(r);

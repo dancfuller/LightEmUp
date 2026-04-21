@@ -473,7 +473,11 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     // Split entries by destination protocol so we can schedule each correctly:
     // Hue lights: parallel (REST API, fast)
     // Govee whole-device: stagger 150ms (LAN UDP, fire-and-forget)
-    // Govee segments: stagger 1500ms (V2 cloud API rate limit, ~1 req/sec)
+    // Govee segments: stagger 1800ms on apply (V2 cloud API burst limit);
+    //   1500ms on reset (reset sends only 1 V2 call, no brightness)
+    const SEG_RESET_STAGGER = 1500;
+    const SEG_APPLY_STAGGER = 1800;
+    const SEG_WHITE_HOLD = 2000;
     const segmentEntries = entries.filter(([key]) => /^govee:.+:seg\d+$/.test(key));
     const hueEntries = entries.filter(([key]) => key.startsWith("hue:"));
     const goveeEntries = entries.filter(([key]) => /^govee:[^:]+$/.test(key));
@@ -485,7 +489,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     const segCount = segmentEntries.length;
     const goveeCount = goveeEntries.length;
     const segMs = segCount > 0
-      ? segCount * 1500 /* reset stagger */ + 2000 /* white hold */ + segCount * 1500 /* color stagger + last roundtrip */
+      ? segCount * SEG_RESET_STAGGER + SEG_WHITE_HOLD + segCount * SEG_APPLY_STAGGER
       : 0;
     const goveeMs = goveeCount > 0 ? (goveeCount - 1) * 150 + 200 : 0;
     const totalMs = Math.max(segMs, goveeMs, 300);
@@ -527,21 +531,23 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
       goveeDelay += 150;
     });
 
-    // Govee segments: reset to dim white first to break "stuck color" state, then apply
+    // Govee segments: reset color to white (no brightness change — saves 1 V2
+    // call per segment so the final brightness call isn't rate-limited), hold,
+    // then send color + target brightness.
     if (segmentEntries.length > 0) {
       let resetDelay = 0;
       segmentEntries.forEach(([key]) => {
         const segMatch = key.match(/^(govee:.+):seg(\d+)$/);
         const light = lightMap[segMatch[1]];
         if (!light) return;
-        const resetCmd = { ip: light.ip, sku: light.sku, device_mac: light.mac, segment_idx: parseInt(segMatch[2]), r: 255, g: 255, b: 255, brightness: 5 };
+        const resetCmd = { ip: light.ip, sku: light.sku, device_mac: light.mac, segment_idx: parseInt(segMatch[2]), r: 255, g: 255, b: 255 };
         setTimeout(() => {
           api("/govee/segment-control", { method: "POST", body: JSON.stringify(resetCmd), headers: { "Content-Type": "application/json" } })
             .catch(e => console.warn("[ColorMode] Segment reset failed:", key, e));
         }, resetDelay);
-        resetDelay += 1500;
+        resetDelay += SEG_RESET_STAGGER;
       });
-      const segStartDelay = resetDelay + 2000; // hold white for 2s
+      const segStartDelay = resetDelay + SEG_WHITE_HOLD;
 
       let segDelay = 0;
       segmentEntries.forEach(([key, color]) => {
@@ -554,7 +560,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
             .catch(e => console.warn("[ColorMode] Segment control failed:", key, e))
             .finally(() => tick());
         }, segStartDelay + segDelay);
-        segDelay += 1500; // V2 API rate limit ~1 req/sec
+        segDelay += SEG_APPLY_STAGGER;
       });
     }
 
@@ -697,7 +703,9 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
 
       {!hasLayout && (
         <div style={{ fontSize: 12, color: "#64748b", padding: "12px 0" }}>
-          Place color lights on the room map first (Map &rarr; Edit Layout).
+          {allLights.some(l => l.capabilities?.has_color)
+            ? <>Place color lights on the room map first (Map &rarr; Edit Layout).</>
+            : <>This room has no color lights.</>}
         </div>
       )}
 
