@@ -47,6 +47,7 @@ DEFAULT_CONFIG = {
     "rooms": {},
     "nicknames": {},
     "room_layouts": {},
+    "fixtures": {},  # fixture_id → { name, members: [device_key, ...] }
 }
 
 
@@ -609,7 +610,56 @@ async def get_config():
         "rooms": config.get("rooms", {}),
         "nicknames": config.get("nicknames", {}),
         "room_layouts": config.get("room_layouts", {}),
+        "fixtures": config.get("fixtures", {}),
     }
+
+
+# ─── Fixture Endpoints ──────────────────────────────────────────────────────
+# A fixture groups multiple electronically-separate lights that share one
+# physical housing (e.g. a triple-bulb sconce). The color-mode adjacency
+# graph treats fixture-mates as mutually adjacent so they never share a
+# color in palette/gradient/tonal scenes. Each device key may belong to at
+# most one fixture; assigning a member to a new fixture removes it from any
+# prior one.
+
+class FixtureUpsertRequest(BaseModel):
+    fixture_id: str
+    name: str
+    members: list[str]  # device keys, e.g. "hue:3" or "govee:192.168.1.5"
+
+
+@app.get("/api/fixtures")
+async def get_fixtures():
+    return {"fixtures": config.get("fixtures", {})}
+
+
+@app.post("/api/fixtures")
+async def upsert_fixture(req: FixtureUpsertRequest):
+    if "fixtures" not in config:
+        config["fixtures"] = {}
+    fixtures = config["fixtures"]
+    incoming = set(req.members)
+    # Strip incoming members out of any other fixture (one-fixture-per-device).
+    for fid in list(fixtures.keys()):
+        if fid == req.fixture_id:
+            continue
+        kept = [m for m in fixtures[fid].get("members", []) if m not in incoming]
+        if not kept:
+            del fixtures[fid]
+        elif len(kept) != len(fixtures[fid].get("members", [])):
+            fixtures[fid]["members"] = kept
+    fixtures[req.fixture_id] = {"name": req.name, "members": req.members}
+    save_config(config)
+    return {"success": True, "fixtures": fixtures}
+
+
+@app.delete("/api/fixtures/{fixture_id}")
+async def delete_fixture(fixture_id: str):
+    fixtures = config.get("fixtures", {})
+    if fixture_id in fixtures:
+        del fixtures[fixture_id]
+        save_config(config)
+    return {"success": True}
 
 
 # ─── Nickname Endpoints ─────────────────────────────────────────────────────

@@ -1,12 +1,13 @@
 // ─── Room Section ──────────────────────────────────────────────────────────
 
-function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGovee, onControlRoom, favorites, onFavoritesChange, nicknames, onNicknameChange, lightningActive, onLightningStart, onLightningStop, segmentInfo, roomLayouts, onLayoutChange }) {
+function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGovee, onControlRoom, favorites, onFavoritesChange, nicknames, onNicknameChange, lightningActive, onLightningStart, onLightningStop, segmentInfo, roomLayouts, onLayoutChange, fixtures, onFixtureUpsert, onFixtureDelete }) {
   const isMobile = useIsMobile();
   const [collapsed, setCollapsed] = useState(true);
   const [showRoomControls, setShowRoomControls] = useState(false);
   const [showLightning, setShowLightning] = useState(false);
   const [showMap, setShowMap] = useState(false);
   const [showColor, setShowColor] = useState(false);
+  const [showDebug, setShowDebug] = useState(false);
   const [roomBrightness, setRoomBrightness] = useState(75);
   const [roomColor, setRoomColor] = useState(null);
   const [colorModeApplied, setColorModeApplied] = useState(null);
@@ -17,6 +18,11 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
   ];
   const anyOn = allLights.some(l => l.state?.on);
   const anyColor = allLights.some(l => l.capabilities?.has_color);
+  const anySegmented = goveeDevices.some(d => {
+    const configured = segmentInfo?.configured_counts?.[d.ip];
+    const skuCount = segmentInfo?.sku_table?.[d.sku]?.count;
+    return (configured || skuCount || 0) > 1;
+  });
 
   const applyRoomBrightness = (val) => {
     setRoomBrightness(val);
@@ -93,6 +99,21 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
           >
             {isMobile ? "Controls" : "Room Controls"}
           </button>
+          {anySegmented && (
+            <button
+              onClick={() => { const opening = !showDebug; setShowDebug(opening); if (opening) { setCollapsed(false); setShowLightning(false); setShowRoomControls(false); setShowMap(false); setShowColor(false); } }}
+              title="Segment reset debug — compare V1 LAN vs V2 reset strategies"
+              style={{
+                padding: isMobile ? "6px 10px" : "6px 14px", borderRadius: 8, border: "1px dashed #475569",
+                background: showDebug ? "rgba(251,191,36,0.15)" : "transparent",
+                color: showDebug ? "#fbbf24" : "#64748b",
+                fontSize: isMobile ? 11 : 12, fontWeight: 600, cursor: "pointer", transition: "all 0.2s",
+                whiteSpace: "nowrap",
+              }}
+            >
+              Debug
+            </button>
+          )}
           <button
             onClick={() => onControlRoom(name, { on: !anyOn })}
             style={{
@@ -155,6 +176,15 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
           </div>
         )}
 
+        {/* Segment reset debug */}
+        {showDebug && (
+          <SegmentResetDebug
+            roomName={name}
+            goveeDevices={goveeDevices}
+            segmentInfo={segmentInfo}
+          />
+        )}
+
         {/* Color Mode */}
         {showColor && (
           <ColorMode
@@ -165,6 +195,7 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
             nicknames={nicknames}
             segmentInfo={segmentInfo}
             roomLayouts={roomLayouts}
+            fixtures={fixtures}
             onApply={setColorModeApplied}
           />
         )}
@@ -180,6 +211,9 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
             segmentInfo={segmentInfo}
             roomLayouts={roomLayouts} onLayoutChange={onLayoutChange}
             appliedColors={colorModeApplied}
+            fixtures={fixtures}
+            onFixtureUpsert={onFixtureUpsert}
+            onFixtureDelete={onFixtureDelete}
           />
         )}
 

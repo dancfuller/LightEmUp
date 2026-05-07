@@ -17,6 +17,7 @@ function App() {
   const [lightningActiveRooms, setLightningActiveRooms] = useState([]);
   const [segmentInfo, setSegmentInfo] = useState({ sku_table: {}, configured_counts: {}, segment_mode: {} });
   const [roomLayouts, setRoomLayouts] = useState({});
+  const [fixtures, setFixtures] = useState({});
 
   const updateFavorites = (newFavs) => {
     setFavoriteColors(newFavs);
@@ -42,6 +43,7 @@ function App() {
       setRooms(cfg.rooms || {});
       setNicknames(cfg.nicknames || {});
       setRoomLayouts(cfg.room_layouts || {});
+      setFixtures(cfg.fixtures || {});
 
       const promises = [
         api("/discover/govee").catch(() => ({ devices: [] })),
@@ -189,6 +191,43 @@ function App() {
     setRoomLayouts(prev => ({ ...prev, [roomName]: layout }));
   };
 
+  // Fixtures: each device_key belongs to at most one fixture. Optimistic
+  // local update mirrors the backend's strip-from-other-fixtures behavior.
+  const upsertFixture = async (fixtureId, name, members) => {
+    setFixtures(prev => {
+      const next = {};
+      const incoming = new Set(members);
+      Object.entries(prev).forEach(([fid, fix]) => {
+        if (fid === fixtureId) return;
+        const kept = (fix.members || []).filter(m => !incoming.has(m));
+        if (kept.length > 0) next[fid] = { ...fix, members: kept };
+      });
+      next[fixtureId] = { name, members };
+      return next;
+    });
+    try {
+      await api("/fixtures", {
+        method: "POST",
+        body: JSON.stringify({ fixture_id: fixtureId, name, members }),
+      });
+    } catch (e) {
+      console.error("Failed to save fixture:", e);
+    }
+  };
+
+  const deleteFixture = async (fixtureId) => {
+    setFixtures(prev => {
+      const next = { ...prev };
+      delete next[fixtureId];
+      return next;
+    });
+    try {
+      await api(`/fixtures/${encodeURIComponent(fixtureId)}`, { method: "DELETE" });
+    } catch (e) {
+      console.error("Failed to delete fixture:", e);
+    }
+  };
+
   if (loading) {
     return (
       <div style={{
@@ -329,6 +368,9 @@ function App() {
                   segmentInfo={segmentInfo}
                   roomLayouts={roomLayouts}
                   onLayoutChange={handleLayoutChange}
+                  fixtures={fixtures}
+                  onFixtureUpsert={upsertFixture}
+                  onFixtureDelete={deleteFixture}
                 />
               );
             })}

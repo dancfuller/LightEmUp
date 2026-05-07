@@ -583,8 +583,29 @@ async def discover_govee_lan(timeout: float = 5.0) -> list[dict]:
         except OSError:
             recv_sock.bind(("", 0))
 
-        # Send scan via broadcast to port 4001
-        send_sock.sendto(scan_message.encode(), ("255.255.255.255", GOVEE_MULTICAST_PORT))
+        # Send scan to every active IPv4 subnet's directed broadcast address.
+        # On multi-NIC hosts (WSL, VPN, virtual adapters), 255.255.255.255 may be
+        # routed to the wrong interface and never reach LAN devices, so we
+        # additionally fan out to each interface's subnet broadcast (e.g. 192.168.0.255).
+        targets = ["255.255.255.255"]
+        try:
+            for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+                ip = info[4][0]
+                if ip.startswith("127.") or ip.startswith("169.254."):
+                    continue
+                parts = ip.split(".")
+                if len(parts) == 4:
+                    subnet_bcast = f"{parts[0]}.{parts[1]}.{parts[2]}.255"
+                    if subnet_bcast not in targets:
+                        targets.append(subnet_bcast)
+        except socket.gaierror:
+            pass
+
+        for target in targets:
+            try:
+                send_sock.sendto(scan_message.encode(), (target, GOVEE_MULTICAST_PORT))
+            except OSError as e:
+                print(f"[Govee] broadcast to {target} failed: {e}")
 
         # Listen for responses
         seen_ips = set()

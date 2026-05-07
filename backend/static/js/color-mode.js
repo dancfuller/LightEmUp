@@ -42,6 +42,7 @@ function extendPalette(baseColors, targetLen) {
 
 // ─── Gradient Direction Picker with Mini Map ──────────────────────────────
 function GradientDirectionPicker({ direction, onDirectionChange, availableDirections, placedLights, layout, preview, lightMap, nicknames, isLinear }) {
+  const isMobile = useIsMobile();
   if (!layout || placedLights.length === 0) return null;
 
   const boundary = layout.boundary || {};
@@ -49,8 +50,8 @@ function GradientDirectionPicker({ direction, onDirectionChange, availableDirect
   const bh = isLinear ? 3 : (boundary.height || 10);
 
   // Mini map sizing — scale to fit within a max width, keep aspect ratio
-  const maxW = 280;
-  const maxH = isLinear ? 48 : 160;
+  const maxW = isMobile ? 220 : 280;
+  const maxH = isLinear ? 48 : (isMobile ? 130 : 160);
   const aspect = bw / bh;
   let mapW, mapH;
   if (aspect > maxW / maxH) {
@@ -99,7 +100,7 @@ function GradientDirectionPicker({ direction, onDirectionChange, availableDirect
   return (
     <div style={{ marginBottom: 12 }}>
       <div style={{ fontSize: 11, color: "#64748b", marginBottom: 6 }}>Direction:</div>
-      <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+      <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", gap: 12, alignItems: "flex-start" }}>
         {/* Mini map */}
         <div style={{
           background: "#0f172a", borderRadius: 8, border: "1px solid #1e293b",
@@ -187,7 +188,7 @@ function GradientDirectionPicker({ direction, onDirectionChange, availableDirect
   );
 }
 
-function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlGovee, favorites, onFavoritesChange, nicknames, segmentInfo, roomLayouts, onApply }) {
+function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlGovee, favorites, onFavoritesChange, nicknames, segmentInfo, roomLayouts, fixtures, onApply }) {
   const isMobile = useIsMobile();
   const [mode, setMode] = useState("gradient"); // "gradient" | "tonal" | "palette"
   const [baseColor, setBaseColor] = useState({ r: 40, g: 180, b: 80 });
@@ -213,6 +214,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
 
   // Apply progress state
   const [applying, setApplying] = useState(false);
+  const [applyPhase, setApplyPhase] = useState(null); // "resetting" | "applying" | null
   const [applyTotal, setApplyTotal] = useState(0);
   const [applyDone, setApplyDone] = useState(0);
   const [applyEndAt, setApplyEndAt] = useState(0);
@@ -264,11 +266,17 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
   const hasLayout = placedColorLights.length > 0;
 
   // ─── Adjacency graph (for palette mode) ─────────────────────────────
-  // Two devices are "adjacent" if they're within a threshold distance on the map
+  // Two entries (lights or segments) are adjacent if any of:
+  //   1. They're within the spatial threshold on the map
+  //   2. Their parent devices share a fixture (intra-fixture distinctness)
+  //   3. One is spatially adjacent to a fixture-mate of the other (any
+  //      fixture member "borrows" all its fixture-mates' adjacencies)
   const buildAdjacency = useCallback((entries) => {
     const threshold = 8; // grid units — roughly "touching" distance
     const adj = {};
     entries.forEach(e => { adj[e.key] = new Set(); });
+
+    // 1. Spatial adjacency
     for (let i = 0; i < entries.length; i++) {
       for (let j = i + 1; j < entries.length; j++) {
         const dx = entries[i].x - entries[j].x;
@@ -280,8 +288,56 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
         }
       }
     }
+
+    // Map parent device key → fixture id, and fixture id → entry keys present
+    // in this room's adjacency (so a fixture's segments inherit membership).
+    const parentKey = (k) => {
+      const m = k.match(/^(.+):seg\d+$/);
+      return m ? m[1] : k;
+    };
+    const deviceToFixture = {};
+    Object.entries(fixtures || {}).forEach(([fid, fix]) => {
+      (fix.members || []).forEach(m => { deviceToFixture[m] = fid; });
+    });
+    const fixtureEntries = {};
+    entries.forEach(e => {
+      const fid = deviceToFixture[parentKey(e.key)];
+      if (fid) (fixtureEntries[fid] ||= []).push(e.key);
+    });
+
+    // 2. Intra-fixture: every pair of fixture-mate entries is adjacent
+    Object.values(fixtureEntries).forEach(members => {
+      for (let i = 0; i < members.length; i++) {
+        for (let j = i + 1; j < members.length; j++) {
+          adj[members[i]].add(members[j]);
+          adj[members[j]].add(members[i]);
+        }
+      }
+    });
+
+    // 3. Propagate: snapshot edges, then for each edge (X, Y) extend to all
+    // of Y's fixture-mates and all of X's fixture-mates
+    const edges = [];
+    Object.entries(adj).forEach(([k, neighbors]) => {
+      neighbors.forEach(n => { if (k < n) edges.push([k, n]); });
+    });
+    edges.forEach(([x, y]) => {
+      const xFid = deviceToFixture[parentKey(x)];
+      const yFid = deviceToFixture[parentKey(y)];
+      if (yFid && fixtureEntries[yFid]) {
+        fixtureEntries[yFid].forEach(yMate => {
+          if (yMate !== x) { adj[x].add(yMate); adj[yMate].add(x); }
+        });
+      }
+      if (xFid && fixtureEntries[xFid]) {
+        fixtureEntries[xFid].forEach(xMate => {
+          if (xMate !== y) { adj[y].add(xMate); adj[xMate].add(y); }
+        });
+      }
+    });
+
     return adj;
-  }, []);
+  }, [fixtures]);
 
   // ─── Gradient mode: project devices along a direction vector ────────
   const computeGradient = useCallback(() => {
@@ -463,7 +519,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     if (mode === "gradient") setPreview(computeGradient());
     else if (mode === "tonal") setPreview(computeTonal());
     else setPreview(computePalette());
-  }, [mode, baseColor, direction, paletteColors, hasLayout, layout]);
+  }, [mode, baseColor, direction, paletteColors, hasLayout, layout, fixtures]);
 
   // ─── Apply colors to lights ─────────────────────────────────────────
   const applyColors = () => {
@@ -473,96 +529,124 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     // Split entries by destination protocol so we can schedule each correctly:
     // Hue lights: parallel (REST API, fast)
     // Govee whole-device: stagger 150ms (LAN UDP, fire-and-forget)
-    // Govee segments: stagger 1800ms on apply (V2 cloud API burst limit);
-    //   1500ms on reset (reset sends only 1 V2 call, no brightness)
-    const SEG_RESET_STAGGER = 1500;
+    // Govee segments: stagger 1800ms on apply (V2 cloud API, burst-bucket limited).
+    //   Reset uses HYBRID: one V1 LAN whole-device white per segmented device
+    //   (parallel UDP, ~3s server roundtrip), then 2s hold before V2 apply pass.
+    //   Confirmed on 2-pack and 4-pack outdoor spots: V1 cleanly substitutes
+    //   for the per-segment V2 reset pass and avoids the burst-bucket pressure.
     const SEG_APPLY_STAGGER = 1800;
     const SEG_WHITE_HOLD = 2000;
+    const V1_RESET_BUDGET = 3500;
     const segmentEntries = entries.filter(([key]) => /^govee:.+:seg\d+$/.test(key));
     const hueEntries = entries.filter(([key]) => key.startsWith("hue:"));
     const goveeEntries = entries.filter(([key]) => /^govee:[^:]+$/.test(key));
 
-    const total = hueEntries.length + goveeEntries.length + segmentEntries.length;
-    if (total === 0) return;
+    // Unique parent device keys for segments needing reset (one V1 white each)
+    const resetDeviceKeys = [...new Set(
+      segmentEntries
+        .map(([key]) => {
+          const m = key.match(/^(govee:[^:]+):seg\d+$/);
+          return m ? m[1] : null;
+        })
+        .filter(Boolean)
+    )];
 
-    // Estimated total wall-clock for the apply sequence
     const segCount = segmentEntries.length;
+    const hueCount = hueEntries.length;
     const goveeCount = goveeEntries.length;
-    const segMs = segCount > 0
-      ? segCount * SEG_RESET_STAGGER + SEG_WHITE_HOLD + segCount * SEG_APPLY_STAGGER
-      : 0;
-    const goveeMs = goveeCount > 0 ? (goveeCount - 1) * 150 + 200 : 0;
-    const totalMs = Math.max(segMs, goveeMs, 300);
+    const resetCount = resetDeviceKeys.length;
+    const applyCount = hueCount + goveeCount + segCount;
+    if (applyCount === 0) return;
+
+    // Wall-clock estimates per phase
+    const resetMs = resetCount > 0 ? V1_RESET_BUDGET : 0;
+    const holdMs = resetCount > 0 ? SEG_WHITE_HOLD : 0;
+    const applyMsSeg = segCount > 0 ? (segCount - 1) * SEG_APPLY_STAGGER + 100 : 0;
+    const applyMsGovee = goveeCount > 0 ? (goveeCount - 1) * 150 + 200 : 0;
+    const applyMs = Math.max(applyMsSeg, applyMsGovee, hueCount > 0 ? 50 : 0);
+    const totalMs = Math.max(resetMs + holdMs + applyMs, 300);
 
     setApplying(true);
-    setApplyTotal(total);
-    setApplyDone(0);
     setApplyEndAt(Date.now() + totalMs);
     setTickNow(Date.now());
 
-    let completed = 0;
-    const tick = () => {
-      completed++;
-      setApplyDone(completed);
-      if (completed >= total) {
-        setApplying(false);
-      }
-    };
+    // ─── Phase 1: V1 LAN whole-device white reset (skipped if no segments) ──
+    if (resetCount > 0) {
+      setApplyPhase("resetting");
+      setApplyTotal(resetCount);
+      setApplyDone(0);
 
-    // Hue lights: fire immediately (Hue bridge handles concurrency well)
-    hueEntries.forEach(([key, color]) => {
-      const light = lightMap[key];
-      if (!light || !light._controlFn) { tick(); return; }
-      const bri = Math.round(brightness * 254 / 100);
-      light._controlFn(light, { on: true, r: color.r, g: color.g, b: color.b, brightness: bri });
-      tick();
-    });
+      let resetCompleted = 0;
+      const resetTick = () => { resetCompleted++; setApplyDone(resetCompleted); };
 
-    // Govee whole-device (LAN UDP, staggered)
-    let goveeDelay = 0;
-    goveeEntries.forEach(([key, color]) => {
-      const light = lightMap[key];
-      if (!light || !light._controlFn) { tick(); return; }
-      const cmd = { on: true, r: color.r, g: color.g, b: color.b, brightness };
-      setTimeout(() => {
-        light._controlFn(light, cmd);
-        tick();
-      }, goveeDelay);
-      goveeDelay += 150;
-    });
-
-    // Govee segments: reset color to white (no brightness change — saves 1 V2
-    // call per segment so the final brightness call isn't rate-limited), hold,
-    // then send color + target brightness.
-    if (segmentEntries.length > 0) {
-      let resetDelay = 0;
-      segmentEntries.forEach(([key]) => {
-        const segMatch = key.match(/^(govee:.+):seg(\d+)$/);
-        const light = lightMap[segMatch[1]];
-        if (!light) return;
-        const resetCmd = { ip: light.ip, sku: light.sku, device_mac: light.mac, segment_idx: parseInt(segMatch[2]), r: 255, g: 255, b: 255 };
-        setTimeout(() => {
-          api("/govee/segment-control", { method: "POST", body: JSON.stringify(resetCmd), headers: { "Content-Type": "application/json" } })
-            .catch(e => console.warn("[ColorMode] Segment reset failed:", key, e));
-        }, resetDelay);
-        resetDelay += SEG_RESET_STAGGER;
+      // All V1 LAN whites fire in parallel — UDP fire-and-forget, no rate limit
+      resetDeviceKeys.forEach(parentKey => {
+        const light = lightMap[parentKey];
+        if (!light) { resetTick(); return; }
+        api("/govee/control", {
+          method: "POST",
+          body: JSON.stringify({ ip: light.ip, r: 255, g: 255, b: 255 }),
+          headers: { "Content-Type": "application/json" },
+        })
+          .catch(e => console.warn("[ColorMode] V1 reset failed:", parentKey, e))
+          .finally(() => resetTick());
       });
-      const segStartDelay = resetDelay + SEG_WHITE_HOLD;
+    }
 
+    // ─── Phase 2: apply (Hue + Govee whole-device + Govee segments) ──
+    const phase2Start = resetMs + holdMs;
+    setTimeout(() => {
+      setApplyPhase("applying");
+      setApplyTotal(applyCount);
+      setApplyDone(0);
+
+      let applyCompleted = 0;
+      const applyTick = () => {
+        applyCompleted++;
+        setApplyDone(applyCompleted);
+        if (applyCompleted >= applyCount) {
+          setApplying(false);
+          setApplyPhase(null);
+        }
+      };
+
+      // Hue lights: fire immediately (Hue bridge handles concurrency well)
+      hueEntries.forEach(([key, color]) => {
+        const light = lightMap[key];
+        if (!light || !light._controlFn) { applyTick(); return; }
+        const bri = Math.round(brightness * 254 / 100);
+        light._controlFn(light, { on: true, r: color.r, g: color.g, b: color.b, brightness: bri });
+        applyTick();
+      });
+
+      // Govee whole-device (LAN UDP, staggered)
+      let goveeDelay = 0;
+      goveeEntries.forEach(([key, color]) => {
+        const light = lightMap[key];
+        if (!light || !light._controlFn) { applyTick(); return; }
+        const cmd = { on: true, r: color.r, g: color.g, b: color.b, brightness };
+        setTimeout(() => {
+          light._controlFn(light, cmd);
+          applyTick();
+        }, goveeDelay);
+        goveeDelay += 150;
+      });
+
+      // Govee segments (V2 cloud, staggered)
       let segDelay = 0;
       segmentEntries.forEach(([key, color]) => {
         const segMatch = key.match(/^(govee:.+):seg(\d+)$/);
         const light = lightMap[segMatch[1]];
-        if (!light) { tick(); return; }
+        if (!light) { applyTick(); return; }
         const cmd = { ip: light.ip, sku: light.sku, device_mac: light.mac, segment_idx: parseInt(segMatch[2]), r: color.r, g: color.g, b: color.b, brightness };
         setTimeout(() => {
           api("/govee/segment-control", { method: "POST", body: JSON.stringify(cmd), headers: { "Content-Type": "application/json" } })
-            .catch(e => console.warn("[ColorMode] Segment control failed:", key, e))
-            .finally(() => tick());
-        }, segStartDelay + segDelay);
+            .catch(e => console.warn("[ColorMode] Segment control failed:", key, e));
+          applyTick();
+        }, segDelay);
         segDelay += SEG_APPLY_STAGGER;
       });
-    }
+    }, phase2Start);
 
     // Notify map so it updates dot colors and clears Identify active state
     if (onApply) onApply(preview);
@@ -986,7 +1070,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
               {applying ? (
                 <>
                   <span style={{ position: "relative", zIndex: 1 }}>
-                    Applying {applyDone}/{applyTotal}{secondsLeft > 0 ? ` · ${secondsLeft}s` : "…"}
+                    {applyPhase === "resetting" ? "Resetting" : "Applying"} {applyDone}/{applyTotal}{secondsLeft > 0 ? ` · ${secondsLeft}s` : "…"}
                   </span>
                   <div style={{
                     position: "absolute", left: 0, bottom: 0, height: 3,

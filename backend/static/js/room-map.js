@@ -398,7 +398,7 @@ function DeviceNode({ deviceKey, pos, gridSize, light, nicknames, colorOverride,
       transform={`translate(${displayX - cx},${displayY - cy})`}
       onMouseDown={startDrag} onTouchStart={startDrag}
       onDragStart={(e) => e.preventDefault()}
-      onClick={(e) => { e.stopPropagation(); if (!didDragRef.current) onSelect(deviceKey); }}
+      onClick={(e) => { e.stopPropagation(); if (!didDragRef.current) onSelect(deviceKey, e.shiftKey || e.ctrlKey || e.metaKey); }}
     >
       <title>{tooltip}</title>
       {/* Pill background */}
@@ -568,10 +568,14 @@ function SegmentNode({ deviceKey, segIndex, pos, gridSize, light, nicknames, pac
   );
 }
 
-function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGovee, favorites, onFavoritesChange, nicknames, onNicknameChange, segmentInfo, roomLayouts, onLayoutChange, appliedColors }) {
+function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGovee, favorites, onFavoritesChange, nicknames, onNicknameChange, segmentInfo, roomLayouts, onLayoutChange, appliedColors, fixtures, onFixtureUpsert, onFixtureDelete }) {
+  const isMobile = useIsMobile();
   const [layout, setLayout] = useState(null);
   const [isEdit, setIsEdit] = useState(false);
-  const [selectedDevice, setSelectedDevice] = useState(null);
+  // selectedDeviceKeys is the multi-select set of placed device keys (edit
+  // mode allows shift/ctrl-click to add). The single-device action bar uses
+  // selectedDeviceKeys[0] when length === 1.
+  const [selectedDeviceKeys, setSelectedDeviceKeys] = useState([]);
   const [placingDevice, setPlacingDevice] = useState(null);
   // Furniture / landmarks
   const [selectedFurniture, setSelectedFurniture] = useState(null);
@@ -961,7 +965,7 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
       }
       setPlacingLandmark(false);
     } else {
-      setSelectedDevice(null);
+      setSelectedDeviceKeys([]);
       setSelectedFurniture(null);
     }
   };
@@ -1021,8 +1025,25 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
       delete newSegments[deviceKey];
       return { ...prev, devices: newDevices, segments: newSegments };
     });
-    setSelectedDevice(null);
+    setSelectedDeviceKeys(prev => prev.filter(k => k !== deviceKey));
   };
+
+  // ─── Fixture selection handler ─────────────────────────────────────────
+  // Click without modifier → single selection. Shift/Ctrl/Cmd-click in edit
+  // mode → toggle the device in the multi-select set.
+  const handleDeviceSelect = (deviceKey, additive) => {
+    if (additive && isEdit) {
+      setSelectedDeviceKeys(prev => prev.includes(deviceKey)
+        ? prev.filter(k => k !== deviceKey)
+        : [...prev, deviceKey]);
+    } else {
+      setSelectedDeviceKeys([deviceKey]);
+    }
+  };
+
+  // Single-selection convenience (matches old `selectedDevice` for the
+  // single-device action bar in non-edit mode).
+  const selectedDevice = selectedDeviceKeys.length === 1 ? selectedDeviceKeys[0] : null;
 
   const toggleMode = () => {
     updateLayout(prev => {
@@ -1099,7 +1120,7 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
       <div style={{
         display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginBottom: 12,
       }}>
-        <button onClick={() => { setIsEdit(!isEdit); setPlacingDevice(null); setSelectedDevice(null); }}
+        <button onClick={() => { setIsEdit(!isEdit); setPlacingDevice(null); setSelectedDeviceKeys([]); }}
           style={{
             padding: "5px 14px", borderRadius: 8, border: "1px solid #334155",
             background: isEdit ? "rgba(99,102,241,0.15)" : "transparent",
@@ -1228,12 +1249,30 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
         </div>
       )}
 
-      {/* SVG Map */}
-      <div style={{ overflowX: "auto", borderRadius: 12, border: "1px solid #1e293b", background: "#0f172a" }}>
+      {/* SVG Map — always scale to fit the container so the whole room is
+          visible without scrolling. The viewBox preserves the room's aspect
+          ratio. touchAction is only blocked while editing (so drag gestures
+          aren't hijacked by the browser); when viewing, the page scrolls
+          normally. body has overflow-x:hidden so a wider-than-viewport map
+          would be clipped silently — fit-to-width avoids that entirely. */}
+      <div style={{
+        borderRadius: 12, border: "1px solid #1e293b", background: "#0f172a",
+        width: "100%", maxWidth: "100%", overflow: "hidden",
+        boxSizing: "border-box",
+      }}>
         <svg
-          width={svgW} height={svgH}
+          width="100%"
+          height="auto"
           viewBox={`0 0 ${svgW} ${svgH}`}
-          style={{ display: "block", touchAction: "none", minWidth: svgW, cursor: placingFurniture ? "crosshair" : undefined }}
+          preserveAspectRatio="xMidYMid meet"
+          style={{
+            display: "block",
+            width: "100%",
+            height: "auto",
+            maxWidth: "100%",
+            touchAction: isEdit ? "none" : "auto",
+            cursor: placingFurniture ? "crosshair" : undefined,
+          }}
           onClick={handleSvgClick}
           onMouseMove={(e) => {
             if (!placingFurniture) { setHoverGrid(null); return; }
@@ -1276,7 +1315,7 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
             <FurnitureItem
               key={item.id} item={item} gridSize={gridSize}
               isEdit={isEdit} isSelected={selectedFurniture === item.id}
-              onSelect={(id) => { setSelectedFurniture(id); setSelectedDevice(null); }}
+              onSelect={(id) => { setSelectedFurniture(id); setSelectedDeviceKeys([]); }}
               onDragEnd={moveFurniture}
               onRotate={rotateFurniture}
               onResize={resizeFurniture}
@@ -1304,6 +1343,50 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
             );
           })}
 
+          {/* Fixture outlines — drawn BEHIND device nodes. A fixture is a
+              group of physically-shared lights (e.g. a triple-bulb sconce);
+              the dashed outline marks them as a unit and a label shows the
+              name. The color-mode adjacency graph treats these as mutually
+              adjacent so they never share a color in palette/tonal scenes. */}
+          {fixtures && Object.entries(fixtures).map(([fid, fix]) => {
+            const placedMembers = (fix.members || []).filter(m => devices[m]);
+            if (placedMembers.length < 2) return null;
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            placedMembers.forEach(m => {
+              // If the device is expanded into segments, encompass the segments;
+              // otherwise use the device's own position.
+              const segData = segments[m];
+              const points = (segData?.expanded && segData.positions)
+                ? Object.values(segData.positions).map(sp => ({ x: sp.x, y: sp.y }))
+                : [devices[m]];
+              points.forEach(p => {
+                const px = isLinear ? p.x : p.x + 0.5;
+                const py = isLinear ? 1.5 : p.y + 0.5;
+                if (px < minX) minX = px; if (px > maxX) maxX = px;
+                if (py < minY) minY = py; if (py > maxY) maxY = py;
+              });
+            });
+            // Pad enough to encompass the pill bodies (pills are ~3 grid units wide at default gs)
+            const padX = isLinear ? 1.6 : 1.8;
+            const padY = isLinear ? 0.8 : 0.9;
+            const rx = (minX - padX) * gridSize;
+            const ry = (minY - padY) * gridSize;
+            const rw = (maxX - minX + 2 * padX) * gridSize;
+            const rh = (maxY - minY + 2 * padY) * gridSize;
+            return (
+              <g key={`fix-${fid}`} style={{ pointerEvents: "none" }}>
+                <rect x={rx} y={ry} width={rw} height={rh} rx={14}
+                  fill="rgba(168,85,247,0.05)"
+                  stroke="rgba(168,85,247,0.55)" strokeWidth={1.5}
+                  strokeDasharray="6,4"
+                />
+                <text x={rx + 10} y={ry + 13} fill="#c4b5fd"
+                  fontSize={10} fontFamily="sans-serif" fontWeight="600"
+                >{fix.name}</text>
+              </g>
+            );
+          })}
+
           {/* Device nodes */}
           {Object.entries(devices).map(([key, pos]) => {
             const light = lightMap[key];
@@ -1323,8 +1406,8 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
                     packLabel={devicePackLabel[key] || ""}
                     colorOverride={segmentColorOverrides[`${key}:seg${si}`] || null}
                     isEdit={isEdit}
-                    isSelected={selectedDevice === key}
-                    onSelect={(dk) => setSelectedDevice(dk)}
+                    isSelected={selectedDeviceKeys.includes(key)}
+                    onSelect={(dk) => handleDeviceSelect(dk, false)}
                     onDragEnd={handleSegDragEnd}
                   />
                 );
@@ -1336,8 +1419,8 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
                 pos={displayPos} gridSize={gridSize}
                 light={light} nicknames={nicknames}
                 colorOverride={deviceColorOverrides[key] || null}
-                isEdit={isEdit} isSelected={selectedDevice === key}
-                onSelect={(dk) => setSelectedDevice(dk)}
+                isEdit={isEdit} isSelected={selectedDeviceKeys.includes(key)}
+                onSelect={handleDeviceSelect}
                 onDragEnd={handleDragEnd}
                 segmentInfo={segmentInfo}
                 segments={segData}
@@ -1422,20 +1505,113 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
         </div>
       )}
 
-      {/* Edit mode: selected device actions */}
-      {selectedDevice && isEdit && lightMap[selectedDevice] && (
-        <div style={{
-          marginTop: 8, padding: 10, borderRadius: 8,
-          background: "#1e293b", border: "1px solid #334155",
-          display: "flex", gap: 8, alignItems: "center", fontSize: 12, color: "#94a3b8",
-        }}>
-          <span style={{ fontWeight: 600, color: "#e2e8f0" }}>{getDeviceLabel(lightMap[selectedDevice], nicknames)}</span>
-          <button onClick={() => removeDevice(selectedDevice)} style={{
-            padding: "4px 10px", borderRadius: 6, border: "1px solid #dc2626",
-            background: "transparent", color: "#f87171", fontSize: 11, cursor: "pointer",
-          }}>Remove from map</button>
-        </div>
-      )}
+      {/* Edit mode: selected device actions (single or multi). Multi-select
+          shows a "Group as fixture" / "Ungroup" button; single-select shows
+          remove + (if in a fixture) the fixture name and Leave button. */}
+      {isEdit && selectedDeviceKeys.length >= 1 && (() => {
+        const keys = selectedDeviceKeys;
+        // Determine fixture membership for each selected key
+        const keyFixtureId = {};
+        Object.entries(fixtures || {}).forEach(([fid, fix]) => {
+          (fix.members || []).forEach(m => { keyFixtureId[m] = fid; });
+        });
+        const selectedFids = new Set(keys.map(k => keyFixtureId[k]).filter(Boolean));
+        const allInSameFixture = keys.length >= 2
+          && selectedFids.size === 1
+          && keys.every(k => keyFixtureId[k]);
+        const sharedFid = allInSameFixture ? [...selectedFids][0] : null;
+
+        const groupAsFixture = () => {
+          const defaultName = keys
+            .map(k => getDeviceLabel(lightMap[k], nicknames).split(" ")[0])
+            .filter((v, i, a) => a.indexOf(v) === i)
+            .join(" / ") || "Fixture";
+          const name = prompt("Name this fixture:", defaultName);
+          if (!name || !name.trim()) return;
+          const fid = "f-" + Date.now() + "-" + Math.floor(Math.random() * 10000);
+          if (onFixtureUpsert) onFixtureUpsert(fid, name.trim(), keys);
+        };
+
+        const ungroup = () => {
+          if (sharedFid && onFixtureDelete) onFixtureDelete(sharedFid);
+        };
+
+        const single = keys.length === 1 ? keys[0] : null;
+        const singleLight = single ? lightMap[single] : null;
+        const singleFid = single ? keyFixtureId[single] : null;
+        const singleFixture = singleFid ? fixtures[singleFid] : null;
+
+        const leaveFixture = () => {
+          if (!singleFid || !singleFixture) return;
+          const remaining = (singleFixture.members || []).filter(m => m !== single);
+          if (remaining.length < 2) {
+            // Fixture would have <2 members → delete the whole fixture
+            if (onFixtureDelete) onFixtureDelete(singleFid);
+          } else {
+            if (onFixtureUpsert) onFixtureUpsert(singleFid, singleFixture.name, remaining);
+          }
+        };
+
+        return (
+          <div style={{
+            marginTop: 8, padding: 10, borderRadius: 8,
+            background: "#1e293b", border: "1px solid #334155",
+            display: "flex", gap: 8, alignItems: "center", fontSize: 12, color: "#94a3b8",
+            flexWrap: "wrap",
+          }}>
+            {single && singleLight ? (
+              <span style={{ fontWeight: 600, color: "#e2e8f0" }}>{getDeviceLabel(singleLight, nicknames)}</span>
+            ) : (
+              <span style={{ fontWeight: 600, color: "#e2e8f0" }}>{keys.length} selected</span>
+            )}
+
+            {single && singleFixture && (
+              <span style={{
+                padding: "2px 8px", borderRadius: 6,
+                background: "rgba(168,85,247,0.12)", color: "#c4b5fd",
+                fontSize: 11, fontWeight: 600,
+              }}>Fixture: {singleFixture.name}</span>
+            )}
+
+            {keys.length >= 2 && !allInSameFixture && (
+              <button onClick={groupAsFixture} style={{
+                padding: "4px 10px", borderRadius: 6, border: "1px solid #a855f7",
+                background: "rgba(168,85,247,0.12)", color: "#c4b5fd",
+                fontSize: 11, fontWeight: 600, cursor: "pointer",
+              }}>Group as fixture</button>
+            )}
+
+            {keys.length >= 2 && allInSameFixture && (
+              <button onClick={ungroup} style={{
+                padding: "4px 10px", borderRadius: 6, border: "1px solid #a855f7",
+                background: "transparent", color: "#c4b5fd",
+                fontSize: 11, fontWeight: 600, cursor: "pointer",
+              }}>Ungroup fixture</button>
+            )}
+
+            {single && singleFixture && (
+              <button onClick={leaveFixture} style={{
+                padding: "4px 10px", borderRadius: 6, border: "1px solid #475569",
+                background: "transparent", color: "#94a3b8",
+                fontSize: 11, fontWeight: 600, cursor: "pointer",
+              }}>Leave fixture</button>
+            )}
+
+            {single && (
+              <button onClick={() => removeDevice(single)} style={{
+                padding: "4px 10px", borderRadius: 6, border: "1px solid #dc2626",
+                background: "transparent", color: "#f87171", fontSize: 11, cursor: "pointer",
+              }}>Remove from map</button>
+            )}
+
+            {keys.length >= 2 && (
+              <span style={{ fontSize: 10, color: "#64748b" }}>
+                Tip: Shift-click to add or remove from selection
+              </span>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Unplaced device palette (edit mode) */}
       {isEdit && unplacedKeys.length > 0 && (

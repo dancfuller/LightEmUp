@@ -190,15 +190,19 @@ function hslToRgb(h, s, l) {
 }
 
 function generateTonalShades(baseR, baseG, baseB, count) {
-  const { h, s } = rgbToHsl(baseR, baseG, baseB);
+  // Vary HSV saturation with V=1 so every shade has max RGB channel = 255.
+  // The device's brightness slider then sets actual brightness; tonal
+  // variation comes from vivid → pastel (saturation), not dark → light
+  // (lightness), so all lights appear at the chosen brightness.
+  // HSV(h, s, 1) → HSL(h, 1, 1 - s/2).
+  const { h } = rgbToHsl(baseR, baseG, baseB);
   const shades = [];
-  // Distribute lightness from 25% to 80%, saturation varies slightly
   for (let i = 0; i < count; i++) {
-    const t = count === 1 ? 0.5 : i / (count - 1);
-    const l = 0.25 + t * 0.55;
-    const sAdj = Math.max(0.3, s * (0.7 + 0.6 * (1 - Math.abs(t - 0.5) * 2)));
+    const t = count === 1 ? 0 : i / (count - 1);
+    const sV = 1.0 - t * 0.80; // HSV saturation: 1.00 (vivid) → 0.20 (near-white)
+    const lH = 1 - sV / 2;     // HSL lightness: 0.50 → 0.90
     const hAdj = h + (t - 0.5) * 0.03; // tiny hue drift for richness
-    shades.push(hslToRgb(((hAdj % 1) + 1) % 1, sAdj, l));
+    shades.push(hslToRgb(((hAdj % 1) + 1) % 1, 1, lH));
   }
   return shades;
 }

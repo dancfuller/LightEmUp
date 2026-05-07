@@ -85,20 +85,21 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
                 background: "#6366f1", color: "#fff", fontSize: 11, fontWeight: 600, cursor: "pointer",
               }}>Save</button>
               <button onClick={() => setEditing(false)} style={{
-                padding: "4px 8px", borderRadius: 6, border: "1px solid #334155",
-                background: "transparent", color: "#94a3b8", fontSize: 11, cursor: "pointer",
+                padding: "4px 10px", borderRadius: 6, border: "1px solid #ef4444",
+                background: "transparent", color: "#ef4444", fontSize: 16, fontWeight: 700,
+                lineHeight: 1, cursor: "pointer",
               }}>&#x2715;</button>
             </div>
           ) : nickname ? (
-            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
               <span style={{ fontSize: 14, fontWeight: 700, color: "#f1f5f9" }}>{nickname}</span>
               <button onClick={startEdit} style={{
                 background: "none", border: "none", cursor: "pointer",
-                color: "#475569", fontSize: 11, padding: 0,
+                color: "#f1f5f9", fontSize: 16, lineHeight: 1, padding: "0 2px",
               }} title="Edit nickname">&#x270E;</button>
               <button onClick={clearNickname} style={{
                 background: "none", border: "none", cursor: "pointer",
-                color: "#475569", fontSize: 11, padding: 0,
+                color: "#64748b", fontSize: 16, fontWeight: 700, lineHeight: 1, padding: "0 2px",
               }} title="Remove nickname">&#x2715;</button>
             </div>
           ) : (
