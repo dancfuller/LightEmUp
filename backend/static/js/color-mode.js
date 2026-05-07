@@ -1,6 +1,14 @@
 // ─── Color Mode Panel ──────────────────────────────────────────────────────
 // Room-level color scheme control. Reads device positions from room layout.
-// Two modes: "Gradient" (directional shades of one color) and "Palette" (distinct colors, no adjacent duplicates).
+// Modes: Gradient (directional shades of one color), Tonal (random tonal
+// variations), Palette (distinct colors, no adjacent duplicates),
+// Beacon (one color, brightness falls off with distance from a chosen source).
+
+// Apply per-entry brightness when present (Beacon), else full color.
+function dimRgbCss(c) {
+  const f = (c.brightness ?? 100) / 100;
+  return `rgb(${Math.round(c.r * f)},${Math.round(c.g * f)},${Math.round(c.b * f)})`;
+}
 
 // ─── Palette extension ────────────────────────────────────────────────────
 // Extend a palette of N colors to targetLen (up to 24) by generating variations
@@ -188,9 +196,76 @@ function GradientDirectionPicker({ direction, onDirectionChange, availableDirect
   );
 }
 
+// ─── Beacon Source Picker with Mini Map ───────────────────────────────────
+// Click a light on the mini-map to set it as the beacon source.
+function BeaconSourcePicker({ sourceKey, onSourceChange, placedLights, layout, preview, lightMap, nicknames, isLinear }) {
+  const isMobile = useIsMobile();
+  if (!layout || placedLights.length === 0) return null;
+
+  const boundary = layout.boundary || {};
+  const bw = isLinear ? (boundary.length || 20) : (boundary.width || 12);
+  const bh = isLinear ? 3 : (boundary.height || 10);
+
+  const maxW = isMobile ? 220 : 280;
+  const maxH = isLinear ? 48 : (isMobile ? 130 : 160);
+  const aspect = bw / bh;
+  let mapW, mapH;
+  if (aspect > maxW / maxH) {
+    mapW = maxW;
+    mapH = maxW / aspect;
+  } else {
+    mapH = maxH;
+    mapW = maxH * aspect;
+  }
+  const scale = mapW / bw;
+
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <div style={{ fontSize: 11, color: "#64748b", marginBottom: 6 }}>
+        Source light (click to change):
+      </div>
+      <div style={{
+        background: "#0f172a", borderRadius: 8, border: "1px solid #1e293b",
+        padding: 6, display: "inline-block",
+      }}>
+        <svg width={mapW + 12} height={mapH + 12} viewBox={`-6 -6 ${mapW + 12} ${mapH + 12}`}>
+          <rect x={0} y={0} width={mapW} height={mapH} rx={4}
+            fill="none" stroke="#334155" strokeWidth={1} strokeDasharray="4,3" />
+          {placedLights.map(d => {
+            const dx = d.x * scale;
+            const dy = isLinear ? mapH / 2 : d.y * scale;
+            const previewColor = preview?.[d.key];
+            const fill = previewColor ? dimRgbCss(previewColor) : "#64748b";
+            const isSource = d.key === sourceKey;
+            const segMatch = d.key.match(/^(.+):seg(\d+)$/);
+            const lookupKey = segMatch ? segMatch[1] : d.key;
+            const baseName = getDeviceLabel(lightMap[lookupKey], nicknames);
+            const segLtr = segMatch ? String.fromCharCode(65 + parseInt(segMatch[2])) : null;
+            const label = segMatch ? `${baseName} ${segLtr}` : baseName;
+            return (
+              <g key={d.key} style={{ cursor: "pointer" }} onClick={() => onSourceChange(d.key)}>
+                {isSource && (
+                  <circle cx={dx} cy={dy} r={11} fill="none" stroke="#34d399"
+                    strokeWidth={1} opacity={0.5} strokeDasharray="2,2" />
+                )}
+                <circle cx={dx} cy={dy} r={isSource ? 7 : 5}
+                  fill={fill}
+                  stroke={isSource ? "#34d399" : "rgba(255,255,255,0.2)"}
+                  strokeWidth={isSource ? 2 : 1} />
+                <title>{label}{isSource ? " (source)" : ""}</title>
+              </g>
+            );
+          })}
+        </svg>
+      </div>
+    </div>
+  );
+}
+
 function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlGovee, favorites, onFavoritesChange, nicknames, segmentInfo, roomLayouts, fixtures, onApply }) {
   const isMobile = useIsMobile();
-  const [mode, setMode] = useState("gradient"); // "gradient" | "tonal" | "palette"
+  const [mode, setMode] = useState("gradient"); // "gradient" | "tonal" | "palette" | "beacon"
+  const [beaconSourceKey, setBeaconSourceKey] = useState(null);
   const [baseColor, setBaseColor] = useState({ r: 40, g: 180, b: 80 });
   // paletteColors = visible/active subset of paletteSource.
   // paletteSource = the "full palette" memory — preserved when count decreases
@@ -506,10 +581,44 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     return result;
   }, [placedColorLights, baseColor, buildAdjacency]);
 
+  // ─── Beacon mode: one color, brightness falls off with distance from source ─
+  const computeBeacon = useCallback(() => {
+    if (placedColorLights.length === 0) return null;
+    const source = placedColorLights.find(d => d.key === beaconSourceKey) || placedColorLights[0];
+
+    const dists = placedColorLights.map(d => {
+      if (isLinear) return Math.abs(d.x - source.x);
+      const dx = d.x - source.x;
+      const dy = d.y - source.y;
+      return Math.sqrt(dx * dx + dy * dy);
+    });
+    const maxDist = Math.max(...dists, 0.0001);
+
+    const result = {};
+    placedColorLights.forEach((d, i) => {
+      const t = dists[i] / maxDist; // 0 at source, 1 at far edge
+      const bri = Math.round(brightness * (1 - t) + 5 * t);
+      result[d.key] = { r: baseColor.r, g: baseColor.g, b: baseColor.b,
+        brightness: Math.max(5, Math.min(100, bri)) };
+    });
+    return result;
+  }, [placedColorLights, baseColor, beaconSourceKey, brightness, isLinear]);
+
+  // Auto-pick a beacon source when entering Beacon mode or when the layout changes
+  // and the current source is no longer placed.
+  useEffect(() => {
+    if (mode !== "beacon") return;
+    const hasCurrent = beaconSourceKey && placedColorLights.some(d => d.key === beaconSourceKey);
+    if (!hasCurrent && placedColorLights.length > 0) {
+      setBeaconSourceKey(placedColorLights[0].key);
+    }
+  }, [mode, layout, fixtures]);
+
   // ─── Generate preview ───────────────────────────────────────────────
   const generatePreview = () => {
     if (mode === "gradient") setPreview(computeGradient());
     else if (mode === "tonal") setPreview(computeTonal());
+    else if (mode === "beacon") setPreview(computeBeacon());
     else setPreview(computePalette());
   };
 
@@ -518,8 +627,9 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     if (!hasLayout) return;
     if (mode === "gradient") setPreview(computeGradient());
     else if (mode === "tonal") setPreview(computeTonal());
+    else if (mode === "beacon") setPreview(computeBeacon());
     else setPreview(computePalette());
-  }, [mode, baseColor, direction, paletteColors, hasLayout, layout, fixtures]);
+  }, [mode, baseColor, direction, paletteColors, hasLayout, layout, fixtures, beaconSourceKey, brightness]);
 
   // ─── Apply colors to lights ─────────────────────────────────────────
   const applyColors = () => {
@@ -614,7 +724,8 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
       hueEntries.forEach(([key, color]) => {
         const light = lightMap[key];
         if (!light || !light._controlFn) { applyTick(); return; }
-        const bri = Math.round(brightness * 254 / 100);
+        const briPct = color.brightness ?? brightness;
+        const bri = Math.round(briPct * 254 / 100);
         light._controlFn(light, { on: true, r: color.r, g: color.g, b: color.b, brightness: bri });
         applyTick();
       });
@@ -624,7 +735,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
       goveeEntries.forEach(([key, color]) => {
         const light = lightMap[key];
         if (!light || !light._controlFn) { applyTick(); return; }
-        const cmd = { on: true, r: color.r, g: color.g, b: color.b, brightness };
+        const cmd = { on: true, r: color.r, g: color.g, b: color.b, brightness: color.brightness ?? brightness };
         setTimeout(() => {
           light._controlFn(light, cmd);
           applyTick();
@@ -638,7 +749,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
         const segMatch = key.match(/^(govee:.+):seg(\d+)$/);
         const light = lightMap[segMatch[1]];
         if (!light) { applyTick(); return; }
-        const cmd = { ip: light.ip, sku: light.sku, device_mac: light.mac, segment_idx: parseInt(segMatch[2]), r: color.r, g: color.g, b: color.b, brightness };
+        const cmd = { ip: light.ip, sku: light.sku, device_mac: light.mac, segment_idx: parseInt(segMatch[2]), r: color.r, g: color.g, b: color.b, brightness: color.brightness ?? brightness };
         setTimeout(() => {
           api("/govee/segment-control", { method: "POST", body: JSON.stringify(cmd), headers: { "Content-Type": "application/json" } })
             .catch(e => console.warn("[ColorMode] Segment control failed:", key, e));
@@ -781,6 +892,9 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
           </button>
           <button onClick={() => setMode("palette")} style={btnStyle(mode === "palette")}>
             Palette
+          </button>
+          <button onClick={() => setMode("beacon")} style={btnStyle(mode === "beacon")}>
+            Beacon
           </button>
         </div>
       </div>
@@ -989,6 +1103,38 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
             </div>
           )}
 
+          {/* ─── Beacon mode ─────────────────────────────────────── */}
+          {mode === "beacon" && (
+            <div>
+              <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 10 }}>
+                One color radiating from a single source. Brightness falls off with distance, down to 5% at the far extent.
+              </div>
+
+              <BeaconSourcePicker
+                sourceKey={beaconSourceKey}
+                onSourceChange={setBeaconSourceKey}
+                placedLights={placedColorLights}
+                layout={layout}
+                preview={preview}
+                lightMap={lightMap}
+                nicknames={nicknames}
+                isLinear={isLinear}
+              />
+
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ fontSize: 11, color: "#64748b", marginBottom: 4 }}>Color:</div>
+                <ColorPicker
+                  size={120}
+                  currentColor={baseColor}
+                  onColorSelect={(r, g, b) => setBaseColor({ r, g, b })}
+                  favorites={favorites}
+                  onFavoritesChange={onFavoritesChange}
+                  compact={true}
+                />
+              </div>
+            </div>
+          )}
+
           {/* ─── Preview swatches ────────────────────────────────── */}
           {preview && (
             <div style={{ marginBottom: 12 }}>
@@ -1014,9 +1160,16 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
                         <div style={{ position: "relative", width: 40, height: 40 }}>
                           <div style={{
                             width: 40, height: 40, borderRadius: sm ? 6 : 8,
-                            background: `rgb(${c.r},${c.g},${c.b})`,
+                            background: dimRgbCss(c),
                             border: sm ? "2px dashed rgba(255,255,255,0.4)" : "1px solid rgba(255,255,255,0.2)",
                           }} />
+                          {c.brightness !== undefined && (
+                            <span style={{
+                              position: "absolute", top: 1, left: 3,
+                              fontSize: 9, fontWeight: 700, color: "rgba(255,255,255,0.85)",
+                              textShadow: "0 0 3px rgba(0,0,0,0.8)",
+                            }}>{Math.round(c.brightness)}%</span>
+                          )}
                           {sm && (
                             <span style={{
                               position: "absolute", bottom: 2, right: 4,
@@ -1038,7 +1191,8 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
           {/* ─── Brightness slider ─────────────────────────────────── */}
           <div style={{ marginBottom: 12 }}>
             <Slider
-              label="Brightness" value={brightness} min={0} max={100}
+              label={mode === "beacon" ? "Source brightness" : "Brightness"}
+              value={brightness} min={0} max={100}
               onChange={(val) => setBrightness(val)}
               color="#fbbf24" unit="%"
             />
@@ -1053,7 +1207,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
                 background: "transparent", color: applying ? "#475569" : "#94a3b8",
                 fontSize: 12, fontWeight: 600, cursor: applying ? "not-allowed" : "pointer",
               }}
-            >{mode === "gradient" ? "Preview" : "Shuffle"}</button>
+            >{mode === "gradient" || mode === "beacon" ? "Preview" : "Shuffle"}</button>
             <button onClick={applyColors}
               disabled={!preview || applying}
               style={{

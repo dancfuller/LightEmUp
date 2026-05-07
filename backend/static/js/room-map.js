@@ -305,7 +305,10 @@ function DeviceNode({ deviceKey, pos, gridSize, light, nicknames, colorOverride,
   const dragPosRef = useRef(null);
   const didDragRef = useRef(false);
   const svgRef = useRef(null);
-  const color = colorOverride ? `rgb(${colorOverride.r},${colorOverride.g},${colorOverride.b})` : getDeviceColor(light);
+  const dimFactor = colorOverride && colorOverride.brightness !== undefined ? colorOverride.brightness / 100 : 1;
+  const color = colorOverride
+    ? `rgb(${Math.round(colorOverride.r * dimFactor)},${Math.round(colorOverride.g * dimFactor)},${Math.round(colorOverride.b * dimFactor)})`
+    : getDeviceColor(light);
   const label = getDeviceLabel(light, nicknames);
   const lines = wrapText(label, 14);
   const cx = pos.x * gridSize;
@@ -452,8 +455,9 @@ function SegmentNode({ deviceKey, segIndex, pos, gridSize, light, nicknames, pac
   const dragPosRef = useRef(null);
   const didDragRef = useRef(false);
   const svgRef = useRef(null);
+  const segDimFactor = colorOverride && colorOverride.brightness !== undefined ? colorOverride.brightness / 100 : 1;
   const color = colorOverride
-    ? `rgb(${colorOverride.r},${colorOverride.g},${colorOverride.b})`
+    ? `rgb(${Math.round(colorOverride.r * segDimFactor)},${Math.round(colorOverride.g * segDimFactor)},${Math.round(colorOverride.b * segDimFactor)})`
     : getDeviceColor(light);
   const cx = pos.x * gridSize;
   const cy = pos.y * gridSize;
