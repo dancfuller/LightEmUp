@@ -283,6 +283,8 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
   const [paletteColors, setPaletteColors] = useState(defaultPalette);
   const [paletteSource, setPaletteSource] = useState(defaultPalette);
   const [editingPaletteIdx, setEditingPaletteIdx] = useState(null);
+  const [paletteCategory, setPaletteCategory] = useState("Featured");
+  const [paletteSearch, setPaletteSearch] = useState("");
   const [direction, setDirection] = useState("left-right");
   const [brightness, setBrightness] = useState(100); // 0-100%
   const [preview, setPreview] = useState(null); // { deviceKey: {r,g,b}, ... }
@@ -475,6 +477,11 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
       return dh * 2 * satWeight + dl + ds * 0.3;
     };
 
+    // Two colors below this perceptual distance are visually too similar to
+    // sit next to each other (e.g. two saturated reds that differ only in
+    // brightness/saturation). Tuned so distinct hues pass and near-duplicates fail.
+    const SIMILARITY_THRESHOLD = 0.15;
+
     // Sort devices by number of neighbors (most constrained first)
     const sorted = [...placedColorLights].sort((a, b) =>
       (adj[b.key]?.size || 0) - (adj[a.key]?.size || 0)
@@ -490,20 +497,37 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
         if (assignment[nk] !== undefined) neighborIdxs.push(assignment[nk]);
       });
       const neighborSet = new Set(neighborIdxs);
+      const tooSimilarToNeighbor = (idx) => {
+        for (const nIdx of neighborIdxs) {
+          if (idx === nIdx) return true;
+          if (colorDist(idx, nIdx) < SIMILARITY_THRESHOLD) return true;
+        }
+        return false;
+      };
 
       // Pick a tier of usage counts: lowest first. Within a tier, prefer
-      // colors not already on a neighbor; if none, fall through to next tier.
+      // colors that are perceptually distinct from every neighbor.
       const tiers = [...new Set(usage)].sort((a, b) => a - b);
       let candidates = [];
       for (const tier of tiers) {
         candidates = [];
         for (let i = 0; i < N; i++) {
-          if (usage[i] === tier && !neighborSet.has(i)) candidates.push(i);
+          if (usage[i] === tier && !tooSimilarToNeighbor(i)) candidates.push(i);
         }
         if (candidates.length > 0) break;
       }
+      // Relax 1: drop the similarity rule but still avoid identical indices
       if (candidates.length === 0) {
-        // Every color is used by a neighbor — pick from the lowest-usage tier
+        for (const tier of tiers) {
+          candidates = [];
+          for (let i = 0; i < N; i++) {
+            if (usage[i] === tier && !neighborSet.has(i)) candidates.push(i);
+          }
+          if (candidates.length > 0) break;
+        }
+      }
+      // Relax 2: any color in the lowest-usage tier
+      if (candidates.length === 0) {
         const minUse = Math.min(...usage);
         for (let i = 0; i < N; i++) if (usage[i] === minUse) candidates.push(i);
       }
@@ -802,54 +826,215 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     setPaletteSource(prev => prev.map((c, i) => i === idx ? { r, g, b } : c));
   };
 
-  // ─── Color scheme presets (grouped into rows, 8 non-repeating colors each) ─
-  const schemePresetRows = [
-    {
-      label: "Spring / Easter",
-      presets: [
-        { name: "Easter Pastel", colors: [{ r: 230, g: 180, b: 230 }, { r: 160, g: 220, b: 190 }, { r: 160, g: 210, b: 240 }, { r: 255, g: 235, b: 150 }, { r: 255, g: 200, b: 210 }, { r: 255, g: 210, b: 180 }, { r: 200, g: 170, b: 240 }, { r: 180, g: 240, b: 180 }] },
-        { name: "Spring Bloom", colors: [{ r: 255, g: 175, b: 200 }, { r: 255, g: 220, b: 40 }, { r: 100, g: 195, b: 100 }, { r: 120, g: 160, b: 235 }, { r: 255, g: 140, b: 120 }, { r: 255, g: 245, b: 180 }, { r: 80, g: 200, b: 170 }, { r: 160, g: 100, b: 220 }] },
-        { name: "Easter Egg", colors: [{ r: 240, g: 130, b: 160 }, { r: 120, g: 170, b: 240 }, { r: 200, g: 145, b: 235 }, { r: 100, g: 215, b: 175 }, { r: 255, g: 170, b: 80 }, { r: 220, g: 190, b: 60 }, { r: 255, g: 100, b: 130 }, { r: 80, g: 220, b: 230 }] },
-        { name: "Spring Garden", colors: [{ r: 195, g: 135, b: 255 }, { r: 255, g: 155, b: 130 }, { r: 155, g: 230, b: 165 }, { r: 135, g: 200, b: 255 }, { r: 255, g: 225, b: 80 }, { r: 255, g: 180, b: 180 }, { r: 160, g: 240, b: 200 }, { r: 100, g: 180, b: 255 }] },
-      ],
-    },
-    {
-      label: "Warm",
-      presets: [
-        { name: "Warm", colors: [{ r: 255, g: 80, b: 40 }, { r: 255, g: 160, b: 30 }, { r: 255, g: 220, b: 80 }, { r: 200, g: 60, b: 60 }, { r: 255, g: 50, b: 20 }, { r: 218, g: 165, b: 32 }, { r: 255, g: 120, b: 80 }, { r: 160, g: 40, b: 20 }] },
-        { name: "Sunset", colors: [{ r: 255, g: 94, b: 77 }, { r: 255, g: 154, b: 0 }, { r: 255, g: 206, b: 84 }, { r: 200, g: 50, b: 100 }, { r: 255, g: 180, b: 120 }, { r: 220, g: 60, b: 130 }, { r: 200, g: 100, b: 20 }, { r: 255, g: 130, b: 160 }] },
-        { name: "Autumn", colors: [{ r: 205, g: 92, b: 40 }, { r: 255, g: 140, b: 0 }, { r: 180, g: 60, b: 30 }, { r: 218, g: 165, b: 32 }, { r: 160, g: 80, b: 20 }, { r: 240, g: 120, b: 30 }, { r: 140, g: 60, b: 20 }, { r: 240, g: 185, b: 50 }] },
-        { name: "Campfire", colors: [{ r: 220, g: 40, b: 20 }, { r: 255, g: 120, b: 0 }, { r: 255, g: 215, b: 0 }, { r: 255, g: 80, b: 20 }, { r: 200, g: 30, b: 10 }, { r: 255, g: 165, b: 0 }, { r: 255, g: 240, b: 200 }, { r: 180, g: 80, b: 30 }] },
-      ],
-    },
-    {
-      label: "Cool",
-      presets: [
-        { name: "Cool", colors: [{ r: 40, g: 120, b: 255 }, { r: 80, g: 200, b: 255 }, { r: 40, g: 255, b: 200 }, { r: 100, g: 80, b: 220 }, { r: 0, g: 220, b: 255 }, { r: 60, g: 60, b: 180 }, { r: 150, g: 130, b: 255 }, { r: 100, g: 240, b: 200 }] },
-        { name: "Ocean", colors: [{ r: 0, g: 105, b: 148 }, { r: 0, g: 168, b: 198 }, { r: 72, g: 202, b: 228 }, { r: 144, g: 224, b: 239 }, { r: 0, g: 60, b: 120 }, { r: 0, g: 80, b: 130 }, { r: 100, g: 210, b: 200 }, { r: 200, g: 230, b: 240 }] },
-        { name: "Aurora", colors: [{ r: 0, g: 230, b: 150 }, { r: 0, g: 200, b: 255 }, { r: 120, g: 60, b: 220 }, { r: 0, g: 180, b: 100 }, { r: 160, g: 40, b: 220 }, { r: 0, g: 220, b: 200 }, { r: 0, g: 180, b: 160 }, { r: 180, g: 40, b: 200 }] },
-        { name: "Midnight", colors: [{ r: 30, g: 60, b: 180 }, { r: 80, g: 30, b: 160 }, { r: 140, g: 60, b: 200 }, { r: 10, g: 100, b: 200 }, { r: 0, g: 80, b: 120 }, { r: 100, g: 20, b: 180 }, { r: 20, g: 80, b: 220 }, { r: 120, g: 40, b: 160 }] },
-      ],
-    },
-    {
-      label: "Nature / Bold",
-      presets: [
-        { name: "Forest", colors: [{ r: 34, g: 139, b: 34 }, { r: 107, g: 142, b: 35 }, { r: 85, g: 107, b: 47 }, { r: 144, g: 238, b: 144 }, { r: 0, g: 168, b: 107 }, { r: 130, g: 170, b: 100 }, { r: 120, g: 200, b: 50 }, { r: 40, g: 100, b: 40 }] },
-        { name: "Neon", colors: [{ r: 255, g: 0, b: 255 }, { r: 0, g: 255, b: 255 }, { r: 255, g: 255, b: 0 }, { r: 0, g: 255, b: 128 }, { r: 255, g: 0, b: 100 }, { r: 255, g: 100, b: 0 }, { r: 0, g: 100, b: 255 }, { r: 100, g: 255, b: 0 }] },
-        { name: "Retro", colors: [{ r: 0, g: 188, b: 188 }, { r: 255, g: 100, b: 90 }, { r: 218, g: 165, b: 0 }, { r: 100, g: 170, b: 100 }, { r: 210, g: 150, b: 80 }, { r: 160, g: 40, b: 80 }, { r: 200, g: 100, b: 40 }, { r: 80, g: 120, b: 160 }] },
-        { name: "Candy", colors: [{ r: 255, g: 0, b: 150 }, { r: 0, g: 200, b: 220 }, { r: 180, g: 255, b: 0 }, { r: 180, g: 100, b: 255 }, { r: 255, g: 100, b: 180 }, { r: 100, g: 255, b: 200 }, { r: 255, g: 220, b: 50 }, { r: 140, g: 60, b: 220 }] },
-      ],
-    },
-    {
-      label: "Seasonal / Rainbow",
-      presets: [
-        { name: "Christmas", colors: [{ r: 220, g: 20, b: 20 }, { r: 0, g: 120, b: 0 }, { r: 218, g: 165, b: 0 }, { r: 240, g: 240, b: 240 }, { r: 180, g: 0, b: 20 }, { r: 0, g: 80, b: 30 }, { r: 255, g: 200, b: 0 }, { r: 180, g: 210, b: 240 }] },
-        { name: "Rainbow", colors: [{ r: 255, g: 0, b: 0 }, { r: 255, g: 127, b: 0 }, { r: 255, g: 255, b: 0 }, { r: 0, g: 200, b: 0 }, { r: 0, g: 0, b: 255 }, { r: 75, g: 0, b: 130 }, { r: 148, g: 0, b: 211 }, { r: 255, g: 0, b: 150 }] },
-        { name: "Hanukkah", colors: [{ r: 65, g: 105, b: 225 }, { r: 135, g: 206, b: 235 }, { r: 192, g: 192, b: 192 }, { r: 255, g: 255, b: 255 }, { r: 0, g: 0, b: 139 }, { r: 100, g: 149, b: 237 }, { r: 220, g: 220, b: 220 }, { r: 180, g: 210, b: 240 }] },
-        { name: "New Year", colors: [{ r: 255, g: 215, b: 0 }, { r: 192, g: 192, b: 192 }, { r: 255, g: 245, b: 180 }, { r: 255, g: 180, b: 160 }, { r: 180, g: 140, b: 0 }, { r: 184, g: 115, b: 51 }, { r: 230, g: 230, b: 230 }, { r: 255, g: 200, b: 200 }] },
-      ],
-    },
+  // ─── Curated palette library — categorized, 8 colors each ──────────────────
+  // To add a palette: append to the appropriate category block. To feature it
+  // in the default "Featured" view, add featured: true.
+  const paletteLibrary = [
+    // Spring
+    { name: "Easter Pastel", category: "Spring", featured: true, colors: [{r:230,g:180,b:230},{r:160,g:220,b:190},{r:160,g:210,b:240},{r:255,g:235,b:150},{r:255,g:200,b:210},{r:255,g:210,b:180},{r:200,g:170,b:240},{r:180,g:240,b:180}] },
+    { name: "Spring Bloom", category: "Spring", colors: [{r:255,g:175,b:200},{r:255,g:220,b:40},{r:100,g:195,b:100},{r:120,g:160,b:235},{r:255,g:140,b:120},{r:255,g:245,b:180},{r:80,g:200,b:170},{r:160,g:100,b:220}] },
+    { name: "Easter Egg", category: "Spring", colors: [{r:240,g:130,b:160},{r:120,g:170,b:240},{r:200,g:145,b:235},{r:100,g:215,b:175},{r:255,g:170,b:80},{r:220,g:190,b:60},{r:255,g:100,b:130},{r:80,g:220,b:230}] },
+    { name: "Spring Garden", category: "Spring", colors: [{r:195,g:135,b:255},{r:255,g:155,b:130},{r:155,g:230,b:165},{r:135,g:200,b:255},{r:255,g:225,b:80},{r:255,g:180,b:180},{r:160,g:240,b:200},{r:100,g:180,b:255}] },
+    { name: "Cherry Blossom", category: "Spring", colors: [{r:255,g:200,b:220},{r:255,g:170,b:200},{r:255,g:230,b:240},{r:200,g:130,b:170},{r:240,g:180,b:200},{r:180,g:140,b:170},{r:255,g:240,b:245},{r:200,g:160,b:190}] },
+    { name: "Daffodil", category: "Spring", colors: [{r:255,g:230,b:80},{r:255,g:200,b:50},{r:255,g:245,b:160},{r:140,g:200,b:90},{r:255,g:180,b:30},{r:200,g:235,b:130},{r:255,g:215,b:0},{r:160,g:210,b:80}] },
+    { name: "Tulip Field", category: "Spring", colors: [{r:230,g:50,b:80},{r:255,g:140,b:60},{r:255,g:220,b:80},{r:200,g:80,b:160},{r:120,g:200,b:80},{r:80,g:170,b:230},{r:200,g:50,b:120},{r:255,g:180,b:200}] },
+    { name: "Morning Dew", category: "Spring", colors: [{r:200,g:240,b:230},{r:160,g:220,b:200},{r:140,g:200,b:220},{r:200,g:230,b:180},{r:230,g:240,b:220},{r:120,g:200,b:180},{r:180,g:230,b:240},{r:160,g:240,b:210}] },
+    { name: "Lavender Field", category: "Spring", colors: [{r:200,g:160,b:240},{r:160,g:120,b:220},{r:220,g:180,b:255},{r:140,g:100,b:200},{r:200,g:200,b:240},{r:180,g:140,b:230},{r:240,g:200,b:255},{r:120,g:80,b:180}] },
+    { name: "Robin's Egg", category: "Spring", colors: [{r:140,g:220,b:230},{r:180,g:230,b:240},{r:120,g:200,b:220},{r:200,g:240,b:240},{r:160,g:210,b:230},{r:100,g:180,b:200},{r:220,g:240,b:240},{r:140,g:200,b:220}] },
+
+    // Summer
+    { name: "Tropical", category: "Summer", featured: true, colors: [{r:255,g:100,b:100},{r:255,g:200,b:50},{r:50,g:200,b:200},{r:80,g:230,b:120},{r:255,g:140,b:50},{r:255,g:80,b:160},{r:130,g:230,b:240},{r:255,g:230,b:100}] },
+    { name: "Beach Day", category: "Summer", colors: [{r:255,g:230,b:180},{r:80,g:200,b:240},{r:255,g:180,b:120},{r:140,g:230,b:240},{r:255,g:240,b:200},{r:80,g:180,b:200},{r:255,g:200,b:140},{r:160,g:220,b:255}] },
+    { name: "Watermelon", category: "Summer", featured: true, colors: [{r:255,g:80,b:100},{r:80,g:200,b:80},{r:255,g:130,b:140},{r:50,g:180,b:60},{r:255,g:200,b:200},{r:120,g:230,b:120},{r:200,g:40,b:60},{r:50,g:140,b:50}] },
+    { name: "Lemonade", category: "Summer", colors: [{r:255,g:240,b:80},{r:200,g:230,b:90},{r:255,g:220,b:140},{r:255,g:180,b:120},{r:255,g:255,b:200},{r:160,g:220,b:60},{r:255,g:200,b:50},{r:200,g:240,b:160}] },
+    { name: "Coral Reef", category: "Summer", colors: [{r:255,g:120,b:100},{r:80,g:200,b:200},{r:255,g:180,b:140},{r:100,g:220,b:180},{r:255,g:140,b:160},{r:140,g:230,b:230},{r:230,g:90,b:80},{r:80,g:180,b:170}] },
+    { name: "Surf & Sand", category: "Summer", colors: [{r:230,g:210,b:170},{r:80,g:170,b:200},{r:255,g:230,b:190},{r:60,g:140,b:180},{r:200,g:180,b:140},{r:120,g:200,b:220},{r:255,g:240,b:210},{r:40,g:120,b:160}] },
+    { name: "Pool Party", category: "Summer", colors: [{r:0,g:200,b:240},{r:255,g:100,b:160},{r:255,g:230,b:80},{r:80,g:240,b:200},{r:255,g:160,b:80},{r:140,g:220,b:255},{r:255,g:80,b:120},{r:60,g:200,b:160}] },
+    { name: "Mango", category: "Summer", colors: [{r:255,g:170,b:50},{r:255,g:120,b:80},{r:255,g:220,b:100},{r:255,g:200,b:80},{r:200,g:240,b:80},{r:255,g:140,b:60},{r:255,g:160,b:120},{r:230,g:180,b:60}] },
+    { name: "Hibiscus", category: "Summer", colors: [{r:255,g:60,b:120},{r:255,g:140,b:80},{r:255,g:200,b:60},{r:200,g:60,b:160},{r:80,g:200,b:120},{r:255,g:80,b:60},{r:255,g:180,b:200},{r:200,g:80,b:200}] },
+    { name: "Citrus", category: "Summer", colors: [{r:255,g:180,b:0},{r:255,g:230,b:60},{r:200,g:240,b:60},{r:255,g:140,b:0},{r:255,g:200,b:80},{r:140,g:220,b:40},{r:255,g:220,b:120},{r:200,g:230,b:80}] },
+
+    // Autumn
+    { name: "Autumn", category: "Autumn", featured: true, colors: [{r:205,g:92,b:40},{r:255,g:140,b:0},{r:180,g:60,b:30},{r:218,g:165,b:32},{r:160,g:80,b:20},{r:240,g:120,b:30},{r:140,g:60,b:20},{r:240,g:185,b:50}] },
+    { name: "Pumpkin Spice", category: "Autumn", colors: [{r:255,g:130,b:50},{r:200,g:100,b:40},{r:160,g:80,b:40},{r:255,g:170,b:80},{r:140,g:70,b:30},{r:220,g:140,b:60},{r:200,g:80,b:30},{r:255,g:200,b:120}] },
+    { name: "Harvest Moon", category: "Autumn", colors: [{r:240,g:180,b:60},{r:200,g:120,b:40},{r:255,g:200,b:100},{r:160,g:100,b:30},{r:240,g:160,b:50},{r:120,g:60,b:20},{r:255,g:220,b:140},{r:200,g:140,b:60}] },
+    { name: "Maple", category: "Autumn", colors: [{r:200,g:50,b:30},{r:255,g:100,b:30},{r:200,g:120,b:30},{r:160,g:50,b:20},{r:255,g:140,b:50},{r:140,g:30,b:10},{r:218,g:165,b:32},{r:200,g:80,b:20}] },
+    { name: "Spiced Cider", category: "Autumn", colors: [{r:160,g:80,b:30},{r:200,g:120,b:60},{r:255,g:170,b:80},{r:120,g:60,b:30},{r:200,g:140,b:80},{r:140,g:80,b:40},{r:220,g:160,b:90},{r:160,g:100,b:50}] },
+    { name: "Falling Leaves", category: "Autumn", colors: [{r:255,g:140,b:30},{r:200,g:60,b:30},{r:240,g:200,b:60},{r:140,g:80,b:30},{r:255,g:180,b:60},{r:160,g:50,b:20},{r:200,g:140,b:40},{r:240,g:120,b:30}] },
+    { name: "Cornfield", category: "Autumn", colors: [{r:240,g:200,b:80},{r:200,g:160,b:60},{r:255,g:230,b:140},{r:160,g:120,b:40},{r:240,g:180,b:60},{r:140,g:110,b:40},{r:255,g:215,b:100},{r:200,g:170,b:80}] },
+    { name: "Cranberry", category: "Autumn", colors: [{r:200,g:30,b:50},{r:160,g:30,b:50},{r:240,g:80,b:80},{r:140,g:30,b:30},{r:200,g:60,b:80},{r:255,g:120,b:120},{r:160,g:40,b:50},{r:200,g:80,b:100}] },
+    { name: "Rust Belt", category: "Autumn", colors: [{r:160,g:60,b:30},{r:120,g:50,b:30},{r:200,g:90,b:50},{r:140,g:80,b:50},{r:180,g:100,b:60},{r:100,g:50,b:30},{r:220,g:120,b:70},{r:160,g:80,b:50}] },
+    { name: "Apple Orchard", category: "Autumn", colors: [{r:200,g:40,b:40},{r:140,g:200,b:60},{r:240,g:180,b:80},{r:160,g:80,b:40},{r:255,g:120,b:80},{r:120,g:160,b:40},{r:200,g:200,b:120},{r:200,g:90,b:40}] },
+
+    // Winter
+    { name: "Frostbite", category: "Winter", featured: true, colors: [{r:200,g:230,b:255},{r:140,g:200,b:240},{r:230,g:240,b:255},{r:100,g:170,b:220},{r:180,g:220,b:240},{r:200,g:240,b:255},{r:120,g:180,b:230},{r:240,g:250,b:255}] },
+    { name: "Snowfall", category: "Winter", colors: [{r:240,g:240,b:255},{r:200,g:220,b:240},{r:255,g:255,b:255},{r:180,g:200,b:230},{r:230,g:230,b:240},{r:160,g:180,b:210},{r:220,g:230,b:250},{r:140,g:160,b:200}] },
+    { name: "Pine", category: "Winter", colors: [{r:30,g:120,b:60},{r:60,g:150,b:80},{r:50,g:100,b:60},{r:90,g:170,b:110},{r:40,g:130,b:70},{r:120,g:190,b:130},{r:70,g:130,b:80},{r:140,g:200,b:140}] },
+    { name: "Icicle", category: "Winter", colors: [{r:200,g:240,b:255},{r:100,g:200,b:240},{r:160,g:220,b:255},{r:80,g:170,b:230},{r:220,g:250,b:255},{r:120,g:200,b:230},{r:90,g:180,b:230},{r:200,g:230,b:255}] },
+    { name: "Glacier", category: "Winter", colors: [{r:140,g:200,b:230},{r:100,g:170,b:210},{r:200,g:230,b:240},{r:80,g:150,b:190},{r:120,g:180,b:220},{r:60,g:130,b:170},{r:160,g:210,b:230},{r:100,g:160,b:200}] },
+    { name: "Arctic Aurora", category: "Winter", colors: [{r:80,g:240,b:200},{r:120,g:160,b:240},{r:60,g:200,b:240},{r:160,g:240,b:200},{r:80,g:140,b:220},{r:200,g:240,b:220},{r:120,g:200,b:240},{r:60,g:180,b:220}] },
+    { name: "Fireside", category: "Winter", colors: [{r:255,g:120,b:40},{r:200,g:80,b:30},{r:255,g:180,b:80},{r:160,g:60,b:30},{r:255,g:220,b:140},{r:200,g:120,b:60},{r:255,g:140,b:60},{r:160,g:80,b:40}] },
+    { name: "Hot Cocoa", category: "Winter", colors: [{r:130,g:90,b:70},{r:170,g:130,b:100},{r:200,g:160,b:120},{r:255,g:230,b:200},{r:150,g:110,b:90},{r:190,g:150,b:110},{r:230,g:200,b:160},{r:120,g:90,b:70}] },
+    { name: "Sleigh Ride", category: "Winter", colors: [{r:200,g:60,b:60},{r:240,g:240,b:240},{r:60,g:120,b:60},{r:180,g:200,b:230},{r:160,g:40,b:50},{r:80,g:160,b:80},{r:220,g:230,b:240},{r:200,g:80,b:80}] },
+    { name: "Crystal Cave", category: "Winter", colors: [{r:180,g:200,b:240},{r:140,g:160,b:220},{r:200,g:230,b:255},{r:120,g:140,b:200},{r:160,g:180,b:230},{r:100,g:120,b:180},{r:220,g:240,b:255},{r:140,g:160,b:210}] },
+
+    // Holidays
+    { name: "Christmas", category: "Holidays", featured: true, colors: [{r:220,g:20,b:20},{r:0,g:120,b:0},{r:218,g:165,b:0},{r:240,g:240,b:240},{r:180,g:0,b:20},{r:0,g:80,b:30},{r:255,g:200,b:0},{r:180,g:210,b:240}] },
+    { name: "Hanukkah", category: "Holidays", colors: [{r:65,g:105,b:225},{r:135,g:206,b:235},{r:192,g:192,b:192},{r:255,g:255,b:255},{r:30,g:60,b:160},{r:100,g:149,b:237},{r:220,g:220,b:220},{r:180,g:210,b:240}] },
+    { name: "New Year", category: "Holidays", colors: [{r:255,g:215,b:0},{r:192,g:192,b:192},{r:255,g:245,b:180},{r:255,g:180,b:160},{r:200,g:160,b:30},{r:184,g:115,b:51},{r:230,g:230,b:230},{r:255,g:200,b:200}] },
+    { name: "Halloween", category: "Holidays", featured: true, colors: [{r:255,g:140,b:0},{r:140,g:60,b:200},{r:255,g:80,b:0},{r:120,g:60,b:160},{r:255,g:200,b:0},{r:90,g:30,b:120},{r:200,g:60,b:0},{r:160,g:100,b:200}] },
+    { name: "Valentine's", category: "Holidays", colors: [{r:255,g:60,b:120},{r:255,g:120,b:160},{r:200,g:30,b:80},{r:255,g:180,b:200},{r:240,g:60,b:120},{r:180,g:40,b:80},{r:255,g:140,b:180},{r:240,g:200,b:220}] },
+    { name: "Fourth of July", category: "Holidays", colors: [{r:220,g:30,b:30},{r:240,g:240,b:240},{r:30,g:60,b:200},{r:200,g:30,b:30},{r:60,g:90,b:220},{r:240,g:240,b:240},{r:255,g:80,b:80},{r:80,g:120,b:240}] },
+    { name: "St. Patrick's", category: "Holidays", colors: [{r:30,g:160,b:80},{r:80,g:200,b:80},{r:30,g:120,b:60},{r:140,g:220,b:140},{r:60,g:180,b:60},{r:200,g:240,b:160},{r:50,g:140,b:70},{r:255,g:215,b:0}] },
+    { name: "Day of the Dead", category: "Holidays", colors: [{r:255,g:140,b:0},{r:255,g:30,b:160},{r:120,g:30,b:200},{r:255,g:230,b:80},{r:30,g:200,b:160},{r:200,g:30,b:80},{r:140,g:60,b:200},{r:255,g:180,b:0}] },
+    { name: "Diwali", category: "Holidays", colors: [{r:255,g:180,b:30},{r:255,g:60,b:80},{r:200,g:60,b:160},{r:255,g:215,b:0},{r:255,g:120,b:30},{r:160,g:30,b:140},{r:255,g:200,b:80},{r:200,g:80,b:30}] },
+    { name: "Lunar New Year", category: "Holidays", colors: [{r:220,g:30,b:30},{r:255,g:215,b:0},{r:255,g:80,b:80},{r:255,g:160,b:60},{r:200,g:30,b:30},{r:255,g:230,b:120},{r:240,g:120,b:60},{r:160,g:30,b:30}] },
+
+    // Warm
+    { name: "Warm", category: "Warm", colors: [{r:255,g:80,b:40},{r:255,g:160,b:30},{r:255,g:220,b:80},{r:200,g:60,b:60},{r:255,g:120,b:60},{r:218,g:165,b:32},{r:255,g:120,b:80},{r:200,g:80,b:40}] },
+    { name: "Sunset", category: "Warm", featured: true, colors: [{r:255,g:94,b:77},{r:255,g:154,b:0},{r:255,g:206,b:84},{r:200,g:50,b:100},{r:255,g:180,b:120},{r:220,g:60,b:130},{r:200,g:100,b:20},{r:255,g:130,b:160}] },
+    { name: "Campfire", category: "Warm", colors: [{r:220,g:40,b:20},{r:255,g:120,b:0},{r:255,g:215,b:0},{r:255,g:80,b:20},{r:200,g:60,b:30},{r:255,g:165,b:0},{r:255,g:240,b:200},{r:180,g:80,b:30}] },
+    { name: "Lava", category: "Warm", colors: [{r:255,g:60,b:0},{r:200,g:30,b:0},{r:255,g:120,b:0},{r:160,g:40,b:20},{r:255,g:180,b:60},{r:140,g:30,b:10},{r:255,g:80,b:30},{r:200,g:80,b:0}] },
+    { name: "Desert Sun", category: "Warm", colors: [{r:255,g:170,b:60},{r:240,g:200,b:120},{r:200,g:140,b:60},{r:255,g:220,b:140},{r:160,g:100,b:40},{r:255,g:200,b:80},{r:220,g:160,b:80},{r:255,g:240,b:180}] },
+    { name: "Ember", category: "Warm", colors: [{r:255,g:60,b:30},{r:200,g:40,b:20},{r:255,g:120,b:60},{r:160,g:30,b:10},{r:240,g:80,b:30},{r:200,g:60,b:30},{r:255,g:160,b:80},{r:140,g:30,b:10}] },
+    { name: "Tangerine", category: "Warm", colors: [{r:255,g:140,b:50},{r:255,g:180,b:80},{r:255,g:120,b:30},{r:255,g:200,b:120},{r:240,g:160,b:60},{r:255,g:100,b:20},{r:255,g:220,b:160},{r:200,g:120,b:40}] },
+    { name: "Sahara", category: "Warm", colors: [{r:240,g:200,b:130},{r:200,g:160,b:100},{r:255,g:220,b:160},{r:160,g:120,b:80},{r:220,g:180,b:120},{r:140,g:100,b:60},{r:255,g:240,b:200},{r:200,g:140,b:80}] },
+    { name: "Brick Oven", category: "Warm", colors: [{r:200,g:80,b:50},{r:160,g:50,b:30},{r:240,g:120,b:60},{r:120,g:40,b:20},{r:200,g:100,b:60},{r:255,g:140,b:80},{r:140,g:60,b:30},{r:200,g:120,b:80}] },
+    { name: "Honey", category: "Warm", colors: [{r:255,g:200,b:60},{r:240,g:170,b:40},{r:255,g:220,b:120},{r:200,g:140,b:30},{r:255,g:180,b:60},{r:220,g:160,b:80},{r:255,g:230,b:160},{r:200,g:150,b:50}] },
+
+    // Cool
+    { name: "Cool", category: "Cool", colors: [{r:40,g:120,b:255},{r:80,g:200,b:255},{r:40,g:255,b:200},{r:100,g:80,b:220},{r:0,g:220,b:255},{r:60,g:60,b:180},{r:150,g:130,b:255},{r:100,g:240,b:200}] },
+    { name: "Ocean", category: "Cool", featured: true, colors: [{r:0,g:105,b:148},{r:0,g:168,b:198},{r:72,g:202,b:228},{r:144,g:224,b:239},{r:30,g:80,b:140},{r:30,g:100,b:150},{r:100,g:210,b:200},{r:200,g:230,b:240}] },
+    { name: "Aurora", category: "Cool", featured: true, colors: [{r:30,g:230,b:150},{r:30,g:200,b:255},{r:120,g:60,b:220},{r:30,g:180,b:100},{r:160,g:40,b:220},{r:30,g:220,b:200},{r:30,g:180,b:160},{r:180,g:40,b:200}] },
+    { name: "Midnight", category: "Cool", colors: [{r:30,g:60,b:180},{r:80,g:30,b:160},{r:140,g:60,b:200},{r:30,g:100,b:200},{r:30,g:80,b:120},{r:100,g:30,b:180},{r:30,g:80,b:220},{r:120,g:40,b:160}] },
+    { name: "Twilight", category: "Cool", colors: [{r:80,g:60,b:160},{r:200,g:120,b:200},{r:60,g:80,b:140},{r:255,g:140,b:200},{r:120,g:80,b:200},{r:160,g:120,b:240},{r:80,g:100,b:180},{r:240,g:160,b:200}] },
+    { name: "Deep Sea", category: "Cool", colors: [{r:30,g:80,b:120},{r:30,g:120,b:160},{r:50,g:100,b:160},{r:60,g:140,b:180},{r:30,g:60,b:100},{r:40,g:120,b:160},{r:80,g:160,b:200},{r:30,g:100,b:140}] },
+    { name: "Mint", category: "Cool", colors: [{r:120,g:240,b:200},{r:80,g:220,b:180},{r:160,g:240,b:220},{r:60,g:200,b:160},{r:200,g:255,b:230},{r:100,g:230,b:190},{r:140,g:240,b:210},{r:50,g:180,b:140}] },
+    { name: "Sapphire", category: "Cool", colors: [{r:40,g:80,b:200},{r:80,g:120,b:240},{r:60,g:100,b:200},{r:120,g:160,b:255},{r:30,g:60,b:160},{r:140,g:180,b:255},{r:80,g:140,b:220},{r:30,g:60,b:140}] },
+    { name: "Periwinkle", category: "Cool", colors: [{r:160,g:170,b:240},{r:130,g:140,b:220},{r:180,g:190,b:250},{r:120,g:140,b:230},{r:200,g:210,b:255},{r:100,g:120,b:200},{r:170,g:180,b:240},{r:140,g:160,b:230}] },
+    { name: "Iceberg", category: "Cool", colors: [{r:200,g:230,b:240},{r:140,g:200,b:230},{r:60,g:140,b:180},{r:180,g:220,b:240},{r:100,g:170,b:210},{r:230,g:240,b:250},{r:80,g:160,b:200},{r:160,g:210,b:230}] },
+
+    // Pastel
+    { name: "Cotton Candy", category: "Pastel", featured: true, colors: [{r:255,g:200,b:230},{r:200,g:230,b:255},{r:255,g:220,b:240},{r:220,g:200,b:240},{r:255,g:230,b:200},{r:200,g:240,b:230},{r:240,g:210,b:240},{r:230,g:240,b:255}] },
+    { name: "Macaron", category: "Pastel", colors: [{r:255,g:210,b:220},{r:210,g:230,b:200},{r:230,g:200,b:230},{r:255,g:230,b:180},{r:200,g:220,b:240},{r:240,g:230,b:200},{r:220,g:240,b:230},{r:240,g:200,b:200}] },
+    { name: "Powder Puff", category: "Pastel", colors: [{r:240,g:230,b:230},{r:220,g:230,b:240},{r:240,g:240,b:220},{r:230,g:220,b:230},{r:220,g:240,b:230},{r:240,g:220,b:230},{r:230,g:240,b:240},{r:240,g:230,b:220}] },
+    { name: "Soft Bloom", category: "Pastel", colors: [{r:255,g:200,b:210},{r:255,g:220,b:200},{r:230,g:240,b:200},{r:200,g:230,b:220},{r:200,g:220,b:240},{r:220,g:200,b:240},{r:240,g:200,b:230},{r:255,g:230,b:200}] },
+    { name: "Baby Nursery", category: "Pastel", colors: [{r:255,g:220,b:230},{r:200,g:230,b:240},{r:230,g:240,b:200},{r:255,g:240,b:200},{r:230,g:220,b:240},{r:200,g:240,b:230},{r:255,g:230,b:220},{r:220,g:240,b:240}] },
+    { name: "Bubblegum", category: "Pastel", colors: [{r:255,g:170,b:200},{r:255,g:200,b:230},{r:240,g:140,b:180},{r:255,g:220,b:230},{r:200,g:130,b:170},{r:255,g:160,b:190},{r:240,g:180,b:210},{r:200,g:170,b:200}] },
+    { name: "Ice Cream", category: "Pastel", colors: [{r:255,g:220,b:200},{r:200,g:240,b:230},{r:255,g:200,b:220},{r:240,g:230,b:180},{r:200,g:220,b:240},{r:240,g:200,b:230},{r:230,g:240,b:200},{r:255,g:230,b:200}] },
+    { name: "Lullaby", category: "Pastel", colors: [{r:200,g:220,b:240},{r:220,g:200,b:230},{r:240,g:230,b:240},{r:200,g:230,b:230},{r:230,g:220,b:200},{r:220,g:240,b:230},{r:230,g:230,b:240},{r:240,g:220,b:230}] },
+    { name: "Petal", category: "Pastel", colors: [{r:255,g:200,b:200},{r:255,g:220,b:200},{r:240,g:200,b:220},{r:255,g:230,b:210},{r:230,g:200,b:230},{r:255,g:210,b:200},{r:240,g:220,b:240},{r:255,g:240,b:220}] },
+    { name: "Seafoam", category: "Pastel", colors: [{r:200,g:240,b:220},{r:180,g:230,b:210},{r:220,g:240,b:230},{r:160,g:220,b:200},{r:200,g:250,b:230},{r:140,g:210,b:190},{r:230,g:250,b:240},{r:170,g:230,b:210}] },
+
+    // Vibrant
+    { name: "Pop Art", category: "Vibrant", featured: true, colors: [{r:255,g:30,b:30},{r:255,g:230,b:30},{r:30,g:60,b:255},{r:240,g:240,b:240},{r:255,g:80,b:200},{r:30,g:200,b:255},{r:255,g:140,b:30},{r:80,g:230,b:30}] },
+    { name: "Bollywood", category: "Vibrant", colors: [{r:255,g:80,b:140},{r:255,g:200,b:30},{r:255,g:140,b:30},{r:80,g:200,b:80},{r:200,g:30,b:120},{r:30,g:160,b:200},{r:255,g:60,b:60},{r:160,g:80,b:200}] },
+    { name: "Carnival", category: "Vibrant", colors: [{r:255,g:60,b:120},{r:255,g:200,b:30},{r:30,g:200,b:200},{r:200,g:30,b:200},{r:255,g:140,b:30},{r:80,g:240,b:80},{r:255,g:80,b:30},{r:120,g:80,b:240}] },
+    { name: "Festival", category: "Vibrant", colors: [{r:255,g:80,b:80},{r:255,g:200,b:60},{r:80,g:200,b:80},{r:80,g:160,b:240},{r:200,g:80,b:200},{r:255,g:140,b:80},{r:80,g:240,b:200},{r:240,g:160,b:80}] },
+    { name: "Color Burst", category: "Vibrant", colors: [{r:255,g:30,b:80},{r:30,g:255,b:160},{r:255,g:200,b:30},{r:120,g:30,b:240},{r:30,g:200,b:255},{r:255,g:120,b:30},{r:160,g:240,b:30},{r:255,g:80,b:200}] },
+    { name: "Holi", category: "Vibrant", colors: [{r:255,g:30,b:120},{r:30,g:200,b:80},{r:255,g:200,b:30},{r:120,g:30,b:200},{r:30,g:160,b:240},{r:255,g:80,b:40},{r:80,g:240,b:160},{r:240,g:60,b:200}] },
+    { name: "Mardi Gras", category: "Vibrant", colors: [{r:120,g:30,b:160},{r:200,g:160,b:30},{r:30,g:140,b:80},{r:160,g:80,b:200},{r:240,g:200,b:60},{r:60,g:180,b:120},{r:200,g:60,b:200},{r:255,g:180,b:30}] },
+    { name: "Confetti", category: "Vibrant", colors: [{r:255,g:80,b:80},{r:80,g:200,b:80},{r:80,g:160,b:255},{r:255,g:200,b:80},{r:200,g:80,b:240},{r:255,g:140,b:80},{r:80,g:240,b:200},{r:255,g:80,b:200}] },
+    { name: "Rainbow", category: "Vibrant", featured: true, colors: [{r:255,g:30,b:30},{r:255,g:127,b:30},{r:255,g:230,b:30},{r:30,g:200,b:30},{r:30,g:60,b:255},{r:75,g:30,b:130},{r:148,g:30,b:211},{r:255,g:30,b:150}] },
+    { name: "Candy", category: "Vibrant", colors: [{r:255,g:30,b:150},{r:30,g:200,b:220},{r:180,g:255,b:30},{r:180,g:100,b:255},{r:255,g:100,b:180},{r:100,g:255,b:200},{r:255,g:220,b:50},{r:140,g:60,b:220}] },
+
+    // Neon
+    { name: "Neon", category: "Neon", featured: true, colors: [{r:255,g:30,b:255},{r:30,g:255,b:255},{r:255,g:255,b:30},{r:30,g:255,b:128},{r:255,g:30,b:100},{r:255,g:100,b:30},{r:30,g:100,b:255},{r:100,g:255,b:30}] },
+    { name: "Cyberpunk", category: "Neon", featured: true, colors: [{r:255,g:30,b:200},{r:30,g:255,b:255},{r:255,g:240,b:30},{r:80,g:30,b:200},{r:255,g:30,b:80},{r:30,g:200,b:255},{r:200,g:30,b:255},{r:255,g:60,b:30}] },
+    { name: "Synthwave", category: "Neon", colors: [{r:255,g:60,b:200},{r:120,g:60,b:240},{r:30,g:200,b:240},{r:255,g:200,b:80},{r:200,g:30,b:160},{r:80,g:80,b:240},{r:255,g:80,b:160},{r:60,g:160,b:240}] },
+    { name: "Vaporwave", category: "Neon", colors: [{r:255,g:100,b:200},{r:100,g:200,b:255},{r:200,g:140,b:255},{r:255,g:200,b:200},{r:120,g:240,b:240},{r:255,g:160,b:240},{r:160,g:200,b:255},{r:240,g:120,b:200}] },
+    { name: "Tokyo Night", category: "Neon", colors: [{r:255,g:30,b:120},{r:30,g:200,b:255},{r:255,g:200,b:30},{r:160,g:30,b:200},{r:30,g:255,b:160},{r:255,g:60,b:60},{r:140,g:60,b:240},{r:60,g:180,b:240}] },
+    { name: "Miami Vice", category: "Neon", colors: [{r:255,g:60,b:200},{r:60,g:240,b:200},{r:255,g:200,b:80},{r:120,g:200,b:255},{r:255,g:120,b:160},{r:80,g:240,b:240},{r:255,g:160,b:200},{r:160,g:240,b:255}] },
+    { name: "Arcade", category: "Neon", colors: [{r:255,g:60,b:60},{r:60,g:255,b:60},{r:60,g:60,b:255},{r:255,g:255,b:60},{r:255,g:60,b:255},{r:60,g:255,b:255},{r:255,g:160,b:30},{r:160,g:30,b:255}] },
+    { name: "Laser Show", category: "Neon", colors: [{r:255,g:30,b:30},{r:30,g:255,b:30},{r:30,g:80,b:255},{r:255,g:30,b:160},{r:30,g:255,b:200},{r:255,g:200,b:30},{r:200,g:30,b:255},{r:80,g:255,b:60}] },
+    { name: "Electric", category: "Neon", colors: [{r:30,g:255,b:255},{r:255,g:30,b:255},{r:200,g:255,b:30},{r:30,g:200,b:255},{r:255,g:80,b:200},{r:80,g:255,b:200},{r:255,g:200,b:30},{r:120,g:30,b:255}] },
+    { name: "Acid", category: "Neon", colors: [{r:200,g:255,b:30},{r:30,g:255,b:120},{r:255,g:255,b:30},{r:120,g:255,b:30},{r:30,g:200,b:60},{r:200,g:240,b:60},{r:80,g:255,b:80},{r:160,g:255,b:60}] },
+
+    // Retro
+    { name: "Retro", category: "Retro", featured: true, colors: [{r:30,g:188,b:188},{r:255,g:100,b:90},{r:218,g:165,b:30},{r:100,g:170,b:100},{r:210,g:150,b:80},{r:160,g:40,b:80},{r:200,g:100,b:40},{r:80,g:120,b:160}] },
+    { name: "50s Diner", category: "Retro", colors: [{r:255,g:80,b:120},{r:60,g:200,b:240},{r:255,g:240,b:240},{r:240,g:200,b:80},{r:200,g:60,b:80},{r:80,g:160,b:200},{r:255,g:180,b:200},{r:120,g:200,b:220}] },
+    { name: "70s Disco", category: "Retro", colors: [{r:240,g:140,b:30},{r:200,g:60,b:120},{r:120,g:200,b:80},{r:240,g:200,b:80},{r:160,g:80,b:200},{r:240,g:120,b:80},{r:200,g:160,b:60},{r:240,g:60,b:140}] },
+    { name: "80s Pop", category: "Retro", colors: [{r:255,g:80,b:200},{r:80,g:240,b:240},{r:255,g:240,b:80},{r:200,g:80,b:240},{r:80,g:200,b:255},{r:255,g:140,b:80},{r:160,g:80,b:240},{r:240,g:200,b:60}] },
+    { name: "90s Grunge", category: "Retro", colors: [{r:160,g:120,b:90},{r:200,g:160,b:120},{r:120,g:140,b:120},{r:220,g:140,b:80},{r:140,g:90,b:60},{r:180,g:160,b:120},{r:140,g:100,b:70},{r:200,g:180,b:140}] },
+    { name: "Y2K", category: "Retro", colors: [{r:200,g:240,b:240},{r:255,g:200,b:240},{r:240,g:240,b:200},{r:200,g:200,b:240},{r:240,g:200,b:200},{r:200,g:240,b:200},{r:240,g:220,b:240},{r:220,g:240,b:240}] },
+    { name: "Polaroid", category: "Retro", colors: [{r:240,g:200,b:140},{r:200,g:160,b:120},{r:240,g:180,b:160},{r:160,g:140,b:120},{r:220,g:180,b:140},{r:200,g:200,b:160},{r:240,g:220,b:180},{r:180,g:160,b:120}] },
+    { name: "Western", category: "Retro", colors: [{r:200,g:120,b:60},{r:160,g:100,b:60},{r:200,g:160,b:100},{r:140,g:80,b:40},{r:240,g:200,b:140},{r:160,g:80,b:40},{r:200,g:100,b:40},{r:255,g:200,b:120}] },
+    { name: "Atomic Age", category: "Retro", colors: [{r:255,g:160,b:80},{r:80,g:200,b:200},{r:255,g:220,b:60},{r:160,g:80,b:140},{r:200,g:120,b:60},{r:120,g:180,b:200},{r:255,g:200,b:120},{r:200,g:80,b:80}] },
+    { name: "Mid-Century", category: "Retro", colors: [{r:200,g:140,b:60},{r:80,g:140,b:120},{r:200,g:180,b:120},{r:160,g:80,b:60},{r:140,g:160,b:120},{r:220,g:200,b:160},{r:120,g:120,b:80},{r:200,g:120,b:80}] },
+
+    // Nature
+    { name: "Forest", category: "Nature", featured: true, colors: [{r:34,g:139,b:34},{r:107,g:142,b:35},{r:85,g:107,b:47},{r:144,g:238,b:144},{r:30,g:168,b:107},{r:130,g:170,b:100},{r:120,g:200,b:50},{r:60,g:120,b:60}] },
+    { name: "Meadow", category: "Nature", colors: [{r:140,g:200,b:80},{r:200,g:230,b:120},{r:255,g:200,b:80},{r:160,g:220,b:140},{r:120,g:180,b:60},{r:255,g:180,b:200},{r:240,g:230,b:120},{r:180,g:200,b:100}] },
+    { name: "Mountain", category: "Nature", colors: [{r:120,g:140,b:160},{r:200,g:220,b:230},{r:80,g:100,b:120},{r:160,g:180,b:200},{r:60,g:80,b:100},{r:140,g:160,b:180},{r:230,g:240,b:240},{r:100,g:120,b:140}] },
+    { name: "Desert", category: "Nature", colors: [{r:240,g:200,b:140},{r:200,g:140,b:80},{r:255,g:220,b:170},{r:160,g:100,b:60},{r:220,g:180,b:120},{r:140,g:80,b:40},{r:255,g:230,b:180},{r:200,g:160,b:100}] },
+    { name: "Jungle", category: "Nature", colors: [{r:30,g:120,b:60},{r:80,g:160,b:60},{r:30,g:80,b:40},{r:140,g:200,b:80},{r:40,g:140,b:80},{r:255,g:140,b:60},{r:200,g:80,b:40},{r:80,g:200,b:120}] },
+    { name: "Savanna", category: "Nature", colors: [{r:240,g:200,b:120},{r:200,g:160,b:80},{r:160,g:100,b:60},{r:220,g:180,b:100},{r:140,g:80,b:40},{r:240,g:220,b:160},{r:120,g:80,b:40},{r:200,g:140,b:80}] },
+    { name: "Wildflower", category: "Nature", colors: [{r:255,g:140,b:200},{r:255,g:200,b:80},{r:120,g:200,b:80},{r:200,g:80,b:200},{r:255,g:80,b:120},{r:80,g:200,b:240},{r:200,g:160,b:240},{r:255,g:200,b:160}] },
+    { name: "Botanical", category: "Nature", colors: [{r:80,g:160,b:80},{r:140,g:200,b:100},{r:60,g:120,b:60},{r:200,g:220,b:120},{r:100,g:180,b:80},{r:160,g:200,b:120},{r:60,g:120,b:60},{r:220,g:240,b:180}] },
+    { name: "Tundra", category: "Nature", colors: [{r:200,g:210,b:200},{r:160,g:170,b:160},{r:220,g:230,b:220},{r:140,g:160,b:160},{r:180,g:200,b:190},{r:120,g:140,b:140},{r:230,g:240,b:230},{r:160,g:180,b:180}] },
+    { name: "Coastline", category: "Nature", colors: [{r:240,g:220,b:170},{r:80,g:170,b:200},{r:200,g:180,b:140},{r:60,g:140,b:170},{r:240,g:230,b:200},{r:120,g:200,b:220},{r:200,g:170,b:130},{r:60,g:120,b:160}] },
+
+    // Cosmic
+    { name: "Galaxy", category: "Cosmic", featured: true, colors: [{r:80,g:30,b:160},{r:255,g:60,b:200},{r:60,g:80,b:240},{r:200,g:120,b:240},{r:60,g:30,b:120},{r:120,g:60,b:240},{r:200,g:60,b:200},{r:80,g:140,b:255}] },
+    { name: "Nebula", category: "Cosmic", colors: [{r:200,g:60,b:200},{r:60,g:200,b:255},{r:255,g:80,b:120},{r:140,g:60,b:240},{r:80,g:200,b:240},{r:255,g:160,b:200},{r:200,g:120,b:255},{r:80,g:80,b:200}] },
+    { name: "Solar Flare", category: "Cosmic", colors: [{r:255,g:200,b:30},{r:255,g:120,b:30},{r:255,g:80,b:60},{r:255,g:240,b:160},{r:240,g:160,b:30},{r:255,g:60,b:30},{r:255,g:180,b:60},{r:200,g:80,b:30}] },
+    { name: "Lunar", category: "Cosmic", colors: [{r:220,g:220,b:240},{r:180,g:200,b:240},{r:200,g:220,b:255},{r:240,g:240,b:240},{r:160,g:180,b:220},{r:220,g:240,b:255},{r:200,g:200,b:240},{r:140,g:160,b:200}] },
+    { name: "Plasma", category: "Cosmic", colors: [{r:255,g:30,b:200},{r:200,g:30,b:255},{r:60,g:80,b:255},{r:30,g:200,b:255},{r:255,g:60,b:160},{r:120,g:60,b:255},{r:60,g:160,b:255},{r:240,g:30,b:240}] },
+    { name: "Stardust", category: "Cosmic", colors: [{r:200,g:180,b:240},{r:240,g:220,b:160},{r:160,g:180,b:240},{r:255,g:240,b:200},{r:180,g:160,b:220},{r:255,g:200,b:240},{r:200,g:220,b:255},{r:240,g:200,b:220}] },
+    { name: "Supernova", category: "Cosmic", colors: [{r:255,g:240,b:120},{r:255,g:140,b:30},{r:255,g:60,b:60},{r:200,g:30,b:140},{r:120,g:30,b:200},{r:255,g:200,b:80},{r:255,g:80,b:160},{r:160,g:60,b:240}] },
+    { name: "Void", category: "Cosmic", colors: [{r:80,g:60,b:200},{r:200,g:120,b:240},{r:60,g:40,b:140},{r:255,g:160,b:60},{r:90,g:60,b:160},{r:160,g:80,b:240},{r:255,g:200,b:120},{r:80,g:80,b:160}] },
+    { name: "Comet", category: "Cosmic", colors: [{r:60,g:140,b:240},{r:200,g:240,b:255},{r:120,g:160,b:240},{r:255,g:240,b:200},{r:80,g:120,b:200},{r:240,g:240,b:255},{r:160,g:200,b:255},{r:80,g:140,b:220}] },
+    { name: "Eclipse", category: "Cosmic", colors: [{r:255,g:160,b:30},{r:200,g:60,b:30},{r:255,g:200,b:60},{r:120,g:60,b:140},{r:255,g:120,b:30},{r:160,g:60,b:200},{r:200,g:80,b:30},{r:140,g:80,b:160}] },
+
+    // Earth
+    { name: "Terracotta", category: "Earth", colors: [{r:200,g:100,b:60},{r:160,g:80,b:50},{r:220,g:140,b:90},{r:140,g:70,b:40},{r:200,g:120,b:80},{r:160,g:80,b:50},{r:240,g:160,b:120},{r:180,g:100,b:60}] },
+    { name: "Sandstone", category: "Earth", colors: [{r:240,g:210,b:170},{r:200,g:170,b:130},{r:220,g:190,b:150},{r:160,g:130,b:90},{r:240,g:220,b:180},{r:180,g:150,b:110},{r:200,g:180,b:140},{r:140,g:110,b:80}] },
+    { name: "Clay", category: "Earth", colors: [{r:180,g:100,b:60},{r:140,g:80,b:40},{r:200,g:140,b:90},{r:160,g:80,b:40},{r:160,g:120,b:80},{r:200,g:80,b:40},{r:140,g:100,b:60},{r:160,g:60,b:30}] },
+    { name: "Mocha", category: "Earth", colors: [{r:140,g:90,b:70},{r:170,g:130,b:100},{r:120,g:80,b:60},{r:200,g:160,b:130},{r:130,g:90,b:70},{r:160,g:120,b:90},{r:110,g:80,b:60},{r:180,g:140,b:110}] },
+    { name: "Driftwood", category: "Earth", colors: [{r:160,g:140,b:120},{r:200,g:180,b:160},{r:120,g:100,b:80},{r:180,g:160,b:140},{r:140,g:120,b:100},{r:220,g:200,b:180},{r:130,g:110,b:90},{r:200,g:180,b:150}] },
+    { name: "Stone", category: "Earth", colors: [{r:160,g:160,b:160},{r:200,g:200,b:200},{r:130,g:130,b:130},{r:180,g:180,b:180},{r:140,g:140,b:140},{r:220,g:220,b:220},{r:140,g:130,b:120},{r:200,g:200,b:180}] },
+    { name: "Adobe", category: "Earth", featured: true, colors: [{r:200,g:120,b:80},{r:240,g:180,b:120},{r:160,g:90,b:50},{r:220,g:160,b:100},{r:180,g:100,b:60},{r:255,g:200,b:140},{r:140,g:80,b:40},{r:200,g:140,b:80}] },
+    { name: "Espresso", category: "Earth", colors: [{r:120,g:80,b:60},{r:160,g:100,b:70},{r:90,g:60,b:40},{r:180,g:140,b:100},{r:130,g:90,b:60},{r:170,g:130,b:90},{r:100,g:70,b:50},{r:200,g:160,b:120}] },
+    { name: "Olive Grove", category: "Earth", colors: [{r:140,g:140,b:80},{r:170,g:170,b:100},{r:120,g:130,b:70},{r:200,g:200,b:140},{r:140,g:160,b:90},{r:180,g:180,b:120},{r:120,g:120,b:60},{r:200,g:210,b:150}] },
+    { name: "Wheat", category: "Earth", colors: [{r:240,g:220,b:170},{r:200,g:180,b:120},{r:240,g:200,b:140},{r:180,g:160,b:100},{r:220,g:200,b:150},{r:160,g:140,b:80},{r:240,g:230,b:180},{r:200,g:170,b:110}] },
+
+    // Mood
+    { name: "Calm", category: "Mood", colors: [{r:160,g:200,b:220},{r:200,g:230,b:240},{r:140,g:180,b:200},{r:220,g:230,b:230},{r:180,g:210,b:220},{r:160,g:220,b:200},{r:200,g:220,b:220},{r:140,g:200,b:220}] },
+    { name: "Energetic", category: "Mood", colors: [{r:255,g:80,b:30},{r:255,g:200,b:30},{r:30,g:200,b:80},{r:30,g:160,b:240},{r:255,g:30,b:120},{r:200,g:80,b:255},{r:255,g:140,b:30},{r:80,g:240,b:200}] },
+    { name: "Romantic", category: "Mood", featured: true, colors: [{r:200,g:60,b:80},{r:255,g:120,b:140},{r:160,g:40,b:60},{r:255,g:180,b:200},{r:200,g:80,b:120},{r:140,g:60,b:80},{r:255,g:160,b:180},{r:200,g:120,b:140}] },
+    { name: "Mysterious", category: "Mood", colors: [{r:80,g:50,b:140},{r:120,g:60,b:160},{r:60,g:40,b:100},{r:90,g:50,b:140},{r:160,g:100,b:200},{r:70,g:50,b:120},{r:100,g:60,b:160},{r:140,g:80,b:180}] },
+    { name: "Joyful", category: "Mood", colors: [{r:255,g:220,b:80},{r:255,g:140,b:60},{r:80,g:240,b:120},{r:80,g:200,b:255},{r:255,g:200,b:200},{r:200,g:240,b:80},{r:255,g:160,b:200},{r:80,g:240,b:200}] },
+    { name: "Melancholy", category: "Mood", colors: [{r:80,g:100,b:140},{r:140,g:160,b:180},{r:60,g:80,b:120},{r:120,g:140,b:160},{r:160,g:180,b:200},{r:80,g:120,b:160},{r:100,g:140,b:180},{r:140,g:160,b:200}] },
+    { name: "Focus", category: "Mood", colors: [{r:200,g:230,b:240},{r:240,g:240,b:200},{r:220,g:230,b:200},{r:230,g:240,b:230},{r:240,g:230,b:220},{r:220,g:240,b:240},{r:230,g:230,b:240},{r:240,g:240,b:230}] },
+    { name: "Cozy", category: "Mood", featured: true, colors: [{r:200,g:120,b:80},{r:240,g:180,b:120},{r:160,g:80,b:60},{r:220,g:160,b:100},{r:255,g:200,b:140},{r:180,g:100,b:60},{r:240,g:200,b:160},{r:200,g:140,b:80}] },
+    { name: "Dreamy", category: "Mood", colors: [{r:200,g:180,b:240},{r:240,g:200,b:240},{r:180,g:200,b:240},{r:240,g:220,b:255},{r:200,g:220,b:240},{r:220,g:200,b:240},{r:255,g:220,b:240},{r:200,g:200,b:255}] },
+    { name: "Zen", category: "Mood", colors: [{r:200,g:220,b:200},{r:230,g:240,b:220},{r:160,g:180,b:160},{r:220,g:230,b:210},{r:180,g:200,b:180},{r:240,g:240,b:230},{r:160,g:200,b:160},{r:210,g:230,b:210}] },
+
+    // Cinematic
+    { name: "Wes Anderson", category: "Cinematic", featured: true, colors: [{r:240,g:180,b:160},{r:200,g:160,b:120},{r:240,g:200,b:140},{r:160,g:200,b:180},{r:220,g:160,b:140},{r:200,g:180,b:160},{r:160,g:120,b:100},{r:240,g:220,b:180}] },
+    { name: "Blade Runner", category: "Cinematic", colors: [{r:255,g:80,b:120},{r:60,g:80,b:200},{r:255,g:180,b:60},{r:120,g:60,b:200},{r:30,g:200,b:240},{r:200,g:60,b:80},{r:80,g:120,b:240},{r:255,g:140,b:30}] },
+    { name: "The Matrix", category: "Cinematic", colors: [{r:30,g:200,b:60},{r:80,g:240,b:120},{r:30,g:140,b:40},{r:120,g:240,b:160},{r:40,g:180,b:80},{r:30,g:120,b:50},{r:160,g:255,b:200},{r:80,g:200,b:100}] },
+    { name: "Tron", category: "Cinematic", colors: [{r:30,g:240,b:255},{r:255,g:120,b:30},{r:30,g:160,b:240},{r:80,g:240,b:255},{r:255,g:60,b:30},{r:30,g:200,b:255},{r:255,g:80,b:60},{r:120,g:240,b:255}] },
+    { name: "Ghibli", category: "Cinematic", colors: [{r:160,g:200,b:140},{r:200,g:230,b:240},{r:240,g:200,b:140},{r:160,g:180,b:200},{r:220,g:240,b:200},{r:240,g:220,b:180},{r:200,g:160,b:140},{r:180,g:220,b:230}] },
+    { name: "Pixar", category: "Cinematic", colors: [{r:255,g:200,b:80},{r:80,g:200,b:240},{r:255,g:140,b:120},{r:160,g:240,b:160},{r:255,g:160,b:200},{r:120,g:160,b:240},{r:255,g:230,b:120},{r:200,g:240,b:200}] },
+    { name: "Cyberscape", category: "Cinematic", colors: [{r:30,g:200,b:255},{r:255,g:60,b:200},{r:120,g:30,b:200},{r:30,g:255,b:160},{r:255,g:200,b:30},{r:80,g:80,b:240},{r:200,g:80,b:240},{r:60,g:240,b:200}] },
+    { name: "Noir", category: "Cinematic", colors: [{r:200,g:200,b:200},{r:120,g:120,b:120},{r:160,g:160,b:160},{r:140,g:140,b:140},{r:240,g:240,b:240},{r:100,g:100,b:100},{r:180,g:180,b:180},{r:130,g:130,b:130}] },
+    { name: "Spaghetti Western", category: "Cinematic", colors: [{r:200,g:160,b:100},{r:160,g:100,b:60},{r:240,g:200,b:140},{r:140,g:80,b:50},{r:220,g:180,b:120},{r:180,g:120,b:80},{r:200,g:140,b:80},{r:160,g:120,b:80}] },
+    { name: "Studio Ghibli Sky", category: "Cinematic", colors: [{r:140,g:200,b:240},{r:200,g:230,b:255},{r:255,g:230,b:200},{r:255,g:200,b:160},{r:180,g:220,b:240},{r:240,g:220,b:200},{r:200,g:240,b:255},{r:255,g:180,b:140}] },
   ];
+
+  // Build category list, with "Featured" and "All" pinned at the front.
+  const paletteCategoryList = (() => {
+    const seen = new Set();
+    const ordered = [];
+    paletteLibrary.forEach(p => {
+      if (!seen.has(p.category)) {
+        seen.add(p.category);
+        ordered.push(p.category);
+      }
+    });
+    return ["Featured", "All", ...ordered];
+  })();
 
   const isLinear = layout?.mode === "linear";
   const availableDirections = isLinear
@@ -987,19 +1172,76 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
                 Distinct colors assigned to devices. Adjacent lights on the map won't share a color.
               </div>
 
-              {/* Scheme presets — grouped rows */}
+              {/* Search + category filter + filtered grid */}
               <div style={{ marginBottom: 12 }}>
-                {schemePresetRows.map((row) => (
-                  <div key={row.label} style={{ marginBottom: 6 }}>
-                    <div style={{ fontSize: 9, color: "#475569", textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 3 }}>
-                      {row.label}
-                    </div>
-                    <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-                      {row.presets.map((scheme) => (
-                        <button key={scheme.name}
+                <input
+                  type="text"
+                  value={paletteSearch}
+                  onChange={(e) => setPaletteSearch(e.target.value)}
+                  placeholder={`Search ${paletteLibrary.length} palettes…`}
+                  style={{
+                    width: "100%", boxSizing: "border-box",
+                    padding: "6px 10px", borderRadius: 6,
+                    border: "1px solid #334155", background: "rgba(15,23,42,0.6)",
+                    color: "#e2e8f0", fontSize: 12, outline: "none", marginBottom: 8,
+                  }}
+                />
+
+                {/* Category chip strip */}
+                <div style={{
+                  display: "flex", gap: 4, marginBottom: 8,
+                  overflowX: isMobile ? "auto" : "visible",
+                  flexWrap: isMobile ? "nowrap" : "wrap",
+                  paddingBottom: isMobile ? 4 : 0,
+                  WebkitOverflowScrolling: "touch",
+                }}>
+                  {paletteCategoryList.map((cat) => {
+                    const active = cat === paletteCategory;
+                    return (
+                      <button key={cat}
+                        onClick={() => setPaletteCategory(cat)}
+                        style={{
+                          padding: "3px 10px", borderRadius: 12,
+                          border: `1px solid ${active ? "#34d399" : "#334155"}`,
+                          background: active ? "rgba(52,211,153,0.15)" : "transparent",
+                          color: active ? "#34d399" : "#94a3b8",
+                          fontSize: 10, fontWeight: 600, cursor: "pointer",
+                          whiteSpace: "nowrap", flexShrink: 0,
+                        }}
+                      >
+                        {cat}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Filtered palette grid */}
+                {(() => {
+                  const q = paletteSearch.trim().toLowerCase();
+                  const filtered = paletteLibrary.filter((p) => {
+                    if (paletteCategory === "Featured" && !p.featured) return false;
+                    if (paletteCategory !== "Featured" && paletteCategory !== "All" && p.category !== paletteCategory) return false;
+                    if (q && !p.name.toLowerCase().includes(q) && !p.category.toLowerCase().includes(q)) return false;
+                    return true;
+                  });
+                  if (filtered.length === 0) {
+                    return (
+                      <div style={{ fontSize: 11, color: "#64748b", padding: "8px 0" }}>
+                        No palettes match.
+                      </div>
+                    );
+                  }
+                  return (
+                    <div style={{
+                      display: "grid",
+                      gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(auto-fill, minmax(140px, 1fr))",
+                      gap: 6,
+                      maxHeight: isMobile ? 280 : 340, overflowY: "auto",
+                      paddingRight: 4,
+                    }}>
+                      {filtered.map((scheme) => (
+                        <button key={`${scheme.category}:${scheme.name}`}
                           onClick={() => {
-                            // Always cache the full preset (up to 24) as source memory,
-                            // then display as many as the user's current count (min = preset length).
                             const visibleLen = Math.max(scheme.colors.length, paletteColors.length);
                             const newSource = extendPalette([...scheme.colors], Math.max(visibleLen, scheme.colors.length));
                             setPaletteSource(newSource);
@@ -1007,26 +1249,29 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
                             setEditingPaletteIdx(null);
                           }}
                           style={{
-                            padding: "4px 10px", borderRadius: 6, border: "1px solid #334155",
-                            background: "transparent", cursor: "pointer",
-                            display: "flex", alignItems: "center", gap: 4,
+                            padding: "6px 8px", borderRadius: 6, border: "1px solid #334155",
+                            background: "rgba(15,23,42,0.4)", cursor: "pointer",
+                            display: "flex", flexDirection: "column", gap: 4, alignItems: "stretch",
+                            textAlign: "left",
                           }}
                         >
-                          <span style={{ display: "flex", gap: 2 }}>
+                          <span style={{ display: "flex", gap: 0, height: 14, borderRadius: 3, overflow: "hidden" }}>
                             {scheme.colors.map((c, j) => (
                               <span key={j} style={{
-                                width: 8, height: 8, borderRadius: 2,
+                                flex: 1,
                                 background: `rgb(${c.r},${c.g},${c.b})`,
-                                display: "inline-block",
                               }} />
                             ))}
                           </span>
-                          <span style={{ fontSize: 10, color: "#94a3b8" }}>{scheme.name}</span>
+                          <span style={{
+                            fontSize: 10, color: "#cbd5e1", fontWeight: 500,
+                            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                          }}>{scheme.name}</span>
                         </button>
                       ))}
                     </div>
-                  </div>
-                ))}
+                  );
+                })()}
               </div>
 
               {/* Color count stepper */}
