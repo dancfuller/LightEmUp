@@ -465,28 +465,36 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     // Precompute HSL for each palette color
     const hsl = colors.map(c => rgbToHsl(c.r, c.g, c.b));
 
-    // Perceptual distance: hue family is the primary axis. Two colors in
-    // the same hue family (≈54° apart) are clamped to a low distance so
-    // a darker/duller variant of the same family doesn't masquerade as
-    // distinct just because its lightness or saturation differs.
+    // Two metrics are needed:
+    //
+    // colorDist (clamped) — used to *gate* adjacency. Same-hue-family pairs
+    //   are capped below the similarity threshold so a darker/duller variant
+    //   of the same family is never considered "distinct enough" to sit next
+    //   to its sibling.
+    //
+    // colorRankDist (unclamped) — used to *rank* candidates when the
+    //   gate passes nothing through (e.g. monochromatic Warm palette). Even
+    //   when every option is in the same family, we still want the most
+    //   tonally different shade picked for adjacent slots, not random.
     const colorDist = (i, j) => {
       const a = hsl[i], b = hsl[j];
       let dh = Math.abs(a.h - b.h);
-      if (dh > 0.5) dh = 1 - dh; // circular
+      if (dh > 0.5) dh = 1 - dh;
       const satWeight = Math.min(a.s, b.s);
       const dl = Math.abs(a.l - b.l);
       const ds = Math.abs(a.s - b.s);
 
-      // Unsaturated — hue is meaningless; rely on lightness/saturation diff.
-      if (satWeight < 0.2) {
-        return dl + ds * 0.3;
-      }
-      // Same hue family — capped distance so adjacent placement is blocked.
-      if (dh < 0.15) {
-        return Math.min(0.13, dh + (dl + ds * 0.3) * 0.2);
-      }
-      // Different hue family — hue dominates with a small L/S bonus.
+      if (satWeight < 0.2) return dl + ds * 0.3;
+      if (dh < 0.15) return Math.min(0.13, dh + (dl + ds * 0.3) * 0.2);
       return dh * 2 + (dl + ds * 0.3) * 0.5;
+    };
+    const colorRankDist = (i, j) => {
+      const a = hsl[i], b = hsl[j];
+      let dh = Math.abs(a.h - b.h);
+      if (dh > 0.5) dh = 1 - dh;
+      const dl = Math.abs(a.l - b.l);
+      const ds = Math.abs(a.s - b.s);
+      return dh * 2 + dl + ds * 0.3;
     };
 
     // Two colors below this perceptual distance are visually too similar to
@@ -544,7 +552,9 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
         for (let i = 0; i < N; i++) if (usage[i] === minUse) candidates.push(i);
       }
 
-      // Among candidates, prefer max min-distance from neighbor colors
+      // Among candidates, prefer max min-distance from neighbor colors.
+      // Use the unclamped ranking metric so monochromatic palettes still
+      // discriminate by lightness/saturation instead of tying at the cap.
       let chosen;
       if (neighborIdxs.length === 0) {
         chosen = candidates[Math.floor(Math.random() * candidates.length)];
@@ -554,7 +564,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
         for (const idx of candidates) {
           let minDist = Infinity;
           for (const nIdx of neighborIdxs) {
-            const d = colorDist(idx, nIdx);
+            const d = colorRankDist(idx, nIdx);
             if (d < minDist) minDist = d;
           }
           if (minDist > bestDist + 1e-9) {
