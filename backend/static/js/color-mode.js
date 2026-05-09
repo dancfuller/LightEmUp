@@ -465,8 +465,10 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     // Precompute HSL for each palette color
     const hsl = colors.map(c => rgbToHsl(c.r, c.g, c.b));
 
-    // Perceptual distance: circular hue distance weighted by min saturation
-    // (low-sat colors are dominated by lightness diff). Larger = more distinct.
+    // Perceptual distance: hue family is the primary axis. Two colors in
+    // the same hue family (≈54° apart) are clamped to a low distance so
+    // a darker/duller variant of the same family doesn't masquerade as
+    // distinct just because its lightness or saturation differs.
     const colorDist = (i, j) => {
       const a = hsl[i], b = hsl[j];
       let dh = Math.abs(a.h - b.h);
@@ -474,7 +476,17 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
       const satWeight = Math.min(a.s, b.s);
       const dl = Math.abs(a.l - b.l);
       const ds = Math.abs(a.s - b.s);
-      return dh * 2 * satWeight + dl + ds * 0.3;
+
+      // Unsaturated — hue is meaningless; rely on lightness/saturation diff.
+      if (satWeight < 0.2) {
+        return dl + ds * 0.3;
+      }
+      // Same hue family — capped distance so adjacent placement is blocked.
+      if (dh < 0.15) {
+        return Math.min(0.13, dh + (dl + ds * 0.3) * 0.2);
+      }
+      // Different hue family — hue dominates with a small L/S bonus.
+      return dh * 2 + (dl + ds * 0.3) * 0.5;
     };
 
     // Two colors below this perceptual distance are visually too similar to

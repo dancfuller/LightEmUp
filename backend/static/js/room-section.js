@@ -18,11 +18,16 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
   ];
   const anyOn = allLights.some(l => l.state?.on);
   const anyColor = allLights.some(l => l.capabilities?.has_color);
-  const anySegmented = goveeDevices.some(d => {
+  const segmentCountFor = (d) => {
     const configured = segmentInfo?.configured_counts?.[d.ip];
     const skuCount = segmentInfo?.sku_table?.[d.sku]?.count;
-    return (configured || skuCount || 0) > 1;
-  });
+    return configured || skuCount || 1;
+  };
+  const anySegmented = goveeDevices.some(d => segmentCountFor(d) > 1);
+  const totalSegments = goveeDevices.reduce((s, d) => {
+    const c = segmentCountFor(d);
+    return c > 1 ? s + c : s;
+  }, 0);
 
   const applyRoomBrightness = (val) => {
     setRoomBrightness(val);
@@ -48,7 +53,10 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
         >
           <span style={{ fontSize: 14, color: "#64748b", transition: "transform 0.2s", transform: collapsed ? "rotate(-90deg)" : "rotate(0deg)", display: "inline-block" }}>&#x25BC;</span>
           <h2 style={{ fontSize: isMobile ? 17 : 20, fontWeight: 700, color: "#f8fafc", margin: 0 }}>{name}</h2>
-          <span style={{ fontSize: 12, color: "#64748b" }}>{allLights.length} lights</span>
+          <span style={{ fontSize: 12, color: "#64748b" }}>
+            {allLights.length} {allLights.length === 1 ? "light" : "lights"}
+            {totalSegments > 0 && <> &middot; {totalSegments} segments</>}
+          </span>
         </div>
         <div style={{ display: "flex", gap: isMobile ? 6 : 8, alignItems: "center", flexWrap: "wrap" }}>
           <button
