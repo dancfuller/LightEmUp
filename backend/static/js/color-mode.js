@@ -553,24 +553,33 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
       }
 
       // Among candidates, prefer max min-distance from neighbor colors.
-      // Use the unclamped ranking metric so monochromatic palettes still
+      // Lexicographic: colorDist (clamped) first so cross-family beats
+      // same-family even when relax-1 dropped the similarity gate; then
+      // colorRankDist (unclamped) so monochromatic palettes still
       // discriminate by lightness/saturation instead of tying at the cap.
       let chosen;
       if (neighborIdxs.length === 0) {
         chosen = candidates[Math.floor(Math.random() * candidates.length)];
       } else {
-        let bestDist = -Infinity;
+        let bestClamped = -Infinity;
+        let bestRank = -Infinity;
         let bestCandidates = [];
         for (const idx of candidates) {
-          let minDist = Infinity;
+          let minClamped = Infinity;
+          let minRank = Infinity;
           for (const nIdx of neighborIdxs) {
-            const d = colorRankDist(idx, nIdx);
-            if (d < minDist) minDist = d;
+            const dc = colorDist(idx, nIdx);
+            const dr = colorRankDist(idx, nIdx);
+            if (dc < minClamped) minClamped = dc;
+            if (dr < minRank) minRank = dr;
           }
-          if (minDist > bestDist + 1e-9) {
-            bestDist = minDist;
+          const clampedBetter = minClamped > bestClamped + 1e-9;
+          const clampedTied = Math.abs(minClamped - bestClamped) < 1e-9;
+          if (clampedBetter || (clampedTied && minRank > bestRank + 1e-9)) {
+            bestClamped = minClamped;
+            bestRank = minRank;
             bestCandidates = [idx];
-          } else if (Math.abs(minDist - bestDist) < 1e-9) {
+          } else if (clampedTied && Math.abs(minRank - bestRank) < 1e-9) {
             bestCandidates.push(idx);
           }
         }

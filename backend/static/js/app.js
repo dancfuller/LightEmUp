@@ -193,8 +193,12 @@ function App() {
 
   // Fixtures: each device_key belongs to at most one fixture. Optimistic
   // local update mirrors the backend's strip-from-other-fixtures behavior.
+  // On failure we roll back so the UI matches disk and surface a banner —
+  // a silent failure here is how fixtures vanished after a refresh before.
   const upsertFixture = async (fixtureId, name, members) => {
+    let snapshot;
     setFixtures(prev => {
+      snapshot = prev;
       const next = {};
       const incoming = new Set(members);
       Object.entries(prev).forEach(([fid, fix]) => {
@@ -212,11 +216,15 @@ function App() {
       });
     } catch (e) {
       console.error("Failed to save fixture:", e);
+      setFixtures(snapshot);
+      setError(`Failed to save fixture "${name}" — change rolled back. (${e.message})`);
     }
   };
 
   const deleteFixture = async (fixtureId) => {
+    let snapshot;
     setFixtures(prev => {
+      snapshot = prev;
       const next = { ...prev };
       delete next[fixtureId];
       return next;
@@ -225,6 +233,9 @@ function App() {
       await api(`/fixtures/${encodeURIComponent(fixtureId)}`, { method: "DELETE" });
     } catch (e) {
       console.error("Failed to delete fixture:", e);
+      setFixtures(snapshot);
+      const fixName = snapshot?.[fixtureId]?.name || fixtureId;
+      setError(`Failed to delete fixture "${fixName}" — change rolled back. (${e.message})`);
     }
   };
 
