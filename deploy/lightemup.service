@@ -1,0 +1,19 @@
+[Unit]
+Description=LightEmUp - local Hue/Govee unified control
+Documentation=https://github.com/dancfuller/LightEmUp
+After=network-online.target avahi-daemon.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/lightemup/backend
+ExecStart=/home/pi/lightemup/backend/venv/bin/python main.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

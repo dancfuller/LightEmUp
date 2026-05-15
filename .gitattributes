@@ -1,0 +1,5 @@
+* text=auto
+
+deploy/*.sh text eol=lf
+deploy/*.service text eol=lf
+deploy/*.avahi.service text eol=lf
