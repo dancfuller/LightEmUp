@@ -760,15 +760,26 @@ async def server_shutdown():
 
 @app.post("/api/server/restart")
 async def server_restart():
-    """Restart the LightEmUp server by spawning a new process and exiting."""
+    """Restart the server. Under systemd we just exit cleanly and let the
+    unit respawn us (requires Restart=always). Standalone we spawn a
+    detached child before exiting — flags are platform-specific because
+    subprocess.DETACHED_PROCESS only exists on Windows."""
     async def _do_restart():
         await asyncio.sleep(0.5)
-        subprocess.Popen(
-            [sys.executable, os.path.abspath(__file__)],
-            cwd=os.path.dirname(os.path.abspath(__file__)),
-            creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
-        )
-        await asyncio.sleep(0.3)
+        if not os.environ.get("INVOCATION_ID"):
+            if sys.platform == "win32":
+                subprocess.Popen(
+                    [sys.executable, os.path.abspath(__file__)],
+                    cwd=os.path.dirname(os.path.abspath(__file__)),
+                    creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+                )
+            else:
+                subprocess.Popen(
+                    [sys.executable, os.path.abspath(__file__)],
+                    cwd=os.path.dirname(os.path.abspath(__file__)),
+                    start_new_session=True,
+                )
+            await asyncio.sleep(0.3)
         if _server_ref:
             _server_ref.should_exit = True
         else:
