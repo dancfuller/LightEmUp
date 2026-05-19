@@ -590,6 +590,54 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
       usage[chosen]++;
     });
 
+    // Post-pass: greedy local-search swap. The forward pass is myopic —
+    // when relax-1 drops the similarity gate it can leave same-family
+    // colors on adjacent devices even though a global rearrangement
+    // would resolve the conflict. Swapping two device assignments
+    // preserves global color usage (and tier counts) but can eliminate
+    // a violation that no single-device re-choice could fix.
+    const violation = (ci, cj) =>
+      (ci === cj || colorDist(ci, cj) < SIMILARITY_THRESHOLD) ? 1 : 0;
+    const deltaSwap = (a, b) => {
+      const ca = assignment[a], cb = assignment[b];
+      if (ca === cb) return 0;
+      let before = 0, after = 0;
+      adj[a]?.forEach(nk => {
+        if (nk === b) return;
+        const cn = assignment[nk];
+        if (cn === undefined) return;
+        before += violation(ca, cn);
+        after += violation(cb, cn);
+      });
+      adj[b]?.forEach(nk => {
+        if (nk === a) return;
+        const cn = assignment[nk];
+        if (cn === undefined) return;
+        before += violation(cb, cn);
+        after += violation(ca, cn);
+      });
+      return after - before;
+    };
+    const deviceKeys = Object.keys(assignment);
+    for (let iter = 0; iter < 100; iter++) {
+      let bestSwap = null;
+      let bestDelta = 0;
+      for (let i = 0; i < deviceKeys.length; i++) {
+        for (let j = i + 1; j < deviceKeys.length; j++) {
+          const d = deltaSwap(deviceKeys[i], deviceKeys[j]);
+          if (d < bestDelta) {
+            bestDelta = d;
+            bestSwap = [deviceKeys[i], deviceKeys[j]];
+          }
+        }
+      }
+      if (!bestSwap) break;
+      const [a, b] = bestSwap;
+      const tmp = assignment[a];
+      assignment[a] = assignment[b];
+      assignment[b] = tmp;
+    }
+
     const result = {};
     Object.entries(assignment).forEach(([key, ci]) => {
       result[key] = colors[ci];
