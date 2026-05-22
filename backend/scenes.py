@@ -196,6 +196,21 @@ class SceneManager:
         hue_ids: list[str] = room_config.get("hue_light_ids", [])
         govee_ips: list[str] = room_config.get("govee_devices", [])
 
+        # ── fixture grouping ──────────────────────────────────────────
+        # Devices in the same fixture share a single flash pattern so the
+        # whole housing reads as one light source. For each device_key, the
+        # seed group is the fixture_id when grouped, else the device's own
+        # key. Multi-segment Govee devices in a fixture also collapse to a
+        # single whole-device pattern (segments would otherwise stagger).
+        fixtures: dict = room_config.get("fixtures", {})
+        device_to_fixture: dict[str, str] = {}
+        for fid, fix in fixtures.items():
+            for member in fix.get("members", []):
+                device_to_fixture[member] = fid
+
+        def seed_key(device_key: str) -> str:
+            return device_to_fixture.get(device_key, device_key)
+
         # ── snapshot current state ────────────────────────────────────
         hue_snapshots: dict = {}
         govee_snapshots: dict = {}
@@ -214,7 +229,7 @@ class SceneManager:
         # ── Hue tasks ─────────────────────────────────────────────────
         if hue_ip and hue_username:
             for idx, light_id in enumerate(hue_ids):
-                pattern = generate_pattern(settings, seed=hash((room_name, "hue", light_id, idx)))
+                pattern = generate_pattern(settings, seed=hash((room_name, "group", seed_key(f"hue:{light_id}"))))
                 task = asyncio.create_task(
                     self._run_hue_light(room_name, light_id, pattern, hue_ip, hue_username, settings, stop_event),
                     name=f"lightning-hue-{room_name}-{light_id}",
@@ -233,7 +248,10 @@ class SceneManager:
                 continue
 
             # Determine if this is an H6061 that should use segment mode.
-            segment_count = room_config.get("govee_segments", {}).get(ip, 0)
+            # If the device belongs to a fixture, collapse to whole-device
+            # mode so the strip flashes in unison with its fixture-mates.
+            in_fixture = f"govee:{ip}" in device_to_fixture
+            segment_count = 0 if in_fixture else room_config.get("govee_segments", {}).get(ip, 0)
 
             if segment_count > 0:
                 # Per-segment mode (H6061).
@@ -255,7 +273,7 @@ class SceneManager:
                 tasks.append(ka_task)
             else:
                 # Whole-device mode.
-                pattern = generate_pattern(settings, seed=hash((room_name, "govee", ip, idx)))
+                pattern = generate_pattern(settings, seed=hash((room_name, "group", seed_key(f"govee:{ip}"))))
                 task = asyncio.create_task(
                     self._run_govee_device(room_name, ip, pattern, settings, stop_event),
                     name=f"lightning-govee-{room_name}-{ip}",

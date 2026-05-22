@@ -454,6 +454,7 @@ async def start_lightning(req: LightningStartRequest):
             if count > 0:
                 govee_segments[ip] = count
     room_config["govee_segments"] = govee_segments
+    room_config["fixtures"] = config.get("fixtures", {})
 
     hue_ip = config.get("hue_bridge_ip")
     hue_username = config.get("hue_username")
