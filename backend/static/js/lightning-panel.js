@@ -33,7 +33,8 @@ function LightningPanel({ roomName, isActive, onStart, onStop, goveeDevices, seg
           color_temp_kelvin: 6500, use_color_temp: true,
           color_r: 220, color_g: 240, color_b: 255,
           background_brightness: 10, background_color_temp_k: 2700,
-          govee_flash: false, thunder_enabled: false, thunder_immediate: false, thunder_funny: false,
+          govee_flash: false, storm_start_delay_s: 7,
+          thunder_enabled: false, thunder_immediate: false, thunder_funny: false,
           min_gap_ms: 15000, max_gap_ms: 60000,
           flash_duration_min_ms: 50, flash_duration_max_ms: 200,
           burst_count_min: 1, burst_count_max: 2, inter_burst_gap_ms: 80,
@@ -212,6 +213,21 @@ function LightningPanel({ roomName, isActive, onStart, onStop, goveeDevices, seg
               min={2000} max={4000} onChange={(v) => updateSetting("background_color_temp_k", v)}
               color="#fb923c" unit="K"
             />
+          </div>
+
+          {/* Storm Start Delay */}
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 600, color: "#a5b4fc", textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 8 }}>
+              Storm Start Delay
+            </div>
+            <Slider
+              label="Delay before flashes" value={settings.storm_start_delay_s ?? 7}
+              min={0} max={120} onChange={(v) => updateSetting("storm_start_delay_s", v)}
+              color="#a78bfa" unit="s"
+            />
+            <div style={{ fontSize: 10, color: "#475569", marginTop: 4 }}>
+              Lights dim to background immediately; flashing (and thunder) start after this delay.
+            </div>
           </div>
 
           {/* Lightning Frequency */}

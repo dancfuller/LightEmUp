@@ -147,6 +147,7 @@ class LightningSettingsRequest(BaseModel):
     burst_count_max: Optional[int] = None
     inter_burst_gap_ms: Optional[int] = None
     govee_flash: Optional[bool] = None
+    storm_start_delay_s: Optional[int] = None
     thunder_enabled: Optional[bool] = None
     thunder_immediate: Optional[bool] = None
     thunder_funny: Optional[bool] = None

@@ -47,6 +47,7 @@ class LightningSettings(BaseModel):
     background_brightness: int = 10  # percent 0-100
     background_color_temp_k: int = 2700
     govee_flash: bool = False  # when False, Govee lights hold background color only
+    storm_start_delay_s: int = 7  # seconds of dim background before flashes begin
     min_gap_ms: int = 15000
     max_gap_ms: int = 60000
     flash_duration_min_ms: int = 50
@@ -483,6 +484,25 @@ class SceneManager:
         bg_ct = _kelvin_to_mirek(settings.background_color_temp_k)
         flash_ct = _kelvin_to_mirek(settings.color_temp_kelvin)
 
+        # Drop to the background immediately and hold for storm_start_delay_s
+        # so the room dims before any flashing or thunder begins.
+        if settings.use_color_temp:
+            dim_state = {"on": True, "bri": bg_bri, "ct": bg_ct, "transitiontime": 2}
+        else:
+            h, s = _rgb_to_hue_sat(*_GOVEE_BG_COLOR)
+            dim_state = {"on": True, "bri": bg_bri, "hue": h, "sat": s, "transitiontime": 2}
+        try:
+            async with self._hue_semaphore:
+                await set_hue_light_state(hue_ip, username, light_id, dim_state)
+        except Exception as exc:
+            log.debug("Hue dim-on-start failed for %s: %s", light_id, exc)
+        if settings.storm_start_delay_s > 0:
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=settings.storm_start_delay_s)
+                return
+            except asyncio.TimeoutError:
+                pass
+
         while not stop_event.is_set():
             for event in pattern:
                 if stop_event.is_set():
@@ -555,11 +575,23 @@ class SceneManager:
         stop_event: asyncio.Event,
     ) -> None:
         """Loop *pattern* on a whole Govee device until *stop_event* is set."""
-        # Ensure the device is on before we start.
+        # Ensure the device is on and dimmed to background before we start,
+        # then hold for storm_start_delay_s before flashing.
         try:
             await govee_lan_turn(ip, True)
-        except Exception:
-            pass
+            await govee_lan_brightness(ip, settings.background_brightness)
+            if settings.use_color_temp:
+                await govee_lan_color_temp(ip, settings.background_color_temp_k)
+            else:
+                await govee_lan_color(ip, *_GOVEE_BG_COLOR)
+        except Exception as exc:
+            log.debug("Govee dim-on-start failed for %s: %s", ip, exc)
+        if settings.storm_start_delay_s > 0:
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=settings.storm_start_delay_s)
+                return
+            except asyncio.TimeoutError:
+                pass
 
         while not stop_event.is_set():
             for event in pattern:
@@ -641,12 +673,23 @@ class SceneManager:
                 timeline.append(TimelineEvent(abs_ms=abs_time, segment=seg_idx, action=ev.action))
         timeline.sort(key=lambda e: e.abs_ms)
 
-        # Enable Razer mode.
+        # Enable Razer mode and paint all segments dim, then hold for
+        # storm_start_delay_s before running the merged timeline.
         try:
             await govee_razer_enable(ip)
         except Exception as exc:
             log.warning("Failed to enable Razer mode for %s: %s", ip, exc)
             return
+        try:
+            await govee_razer_set_segments(ip, [dim_color] * num_segments)
+        except Exception as exc:
+            log.debug("Razer dim-on-start failed for %s: %s", ip, exc)
+        if settings.storm_start_delay_s > 0:
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=settings.storm_start_delay_s)
+                return
+            except asyncio.TimeoutError:
+                pass
 
         while not stop_event.is_set():
             # Track per-segment state: start all dim.
