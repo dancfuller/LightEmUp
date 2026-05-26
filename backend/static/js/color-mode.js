@@ -771,11 +771,12 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     // Split entries by destination protocol so we can schedule each correctly:
     // Hue lights: parallel (REST API, fast)
     // Govee whole-device: stagger 150ms (LAN UDP, fire-and-forget)
-    // Govee segments: stagger 1800ms on apply (V2 cloud API, burst-bucket limited).
-    //   Reset uses HYBRID: one V1 LAN whole-device white per segmented device
-    //   (parallel UDP, ~3s server roundtrip), then 2s hold before V2 apply pass.
-    //   Confirmed on 2-pack and 4-pack outdoor spots: V1 cleanly substitutes
-    //   for the per-segment V2 reset pass and avoids the burst-bucket pressure.
+    // Govee segments — split by parent device's protocol:
+    //   cloud_v2 (H7065/H7066): stagger 1800ms per segment (V2 cloud API,
+    //     burst-bucket limited). V1 LAN whole-device white reset first.
+    //   razer (H6061 hexa): one bulk LAN packet carries all segments at once.
+    //     Skip the V1 reset — V1 commands knock the device out of razer mode,
+    //     which is exactly what we don't want.
     const SEG_APPLY_STAGGER = 1800;
     const SEG_WHITE_HOLD = 2000;
     const V1_RESET_BUDGET = 3500;
@@ -783,15 +784,24 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     const hueEntries = entries.filter(([key]) => key.startsWith("hue:"));
     const goveeEntries = entries.filter(([key]) => /^govee:[^:]+$/.test(key));
 
-    // Unique parent device keys for segments needing reset (one V1 white each)
-    const resetDeviceKeys = [...new Set(
-      segmentEntries
-        .map(([key]) => {
-          const m = key.match(/^(govee:[^:]+):seg\d+$/);
-          return m ? m[1] : null;
-        })
-        .filter(Boolean)
-    )];
+    // Group segments by parent device and classify by protocol.
+    const segGroups = {};
+    segmentEntries.forEach(([key, color]) => {
+      const m = key.match(/^(govee:[^:]+):seg(\d+)$/);
+      if (!m) return;
+      (segGroups[m[1]] ||= []).push({ idx: parseInt(m[2]), color });
+    });
+    const razerGroups = [];
+    const cloudGroups = [];
+    Object.entries(segGroups).forEach(([parent, segs]) => {
+      const light = lightMap[parent];
+      const proto = light?.sku && segmentInfo?.sku_table?.[light.sku]?.protocol;
+      if (proto === "razer") razerGroups.push({ parent, light, segs });
+      else cloudGroups.push({ parent, light, segs });
+    });
+
+    // V1 LAN white reset is only used for cloud_v2 devices.
+    const resetDeviceKeys = cloudGroups.map(g => g.parent);
 
     const segCount = segmentEntries.length;
     const hueCount = hueEntries.length;
@@ -800,10 +810,13 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     const applyCount = hueCount + goveeCount + segCount;
     if (applyCount === 0) return;
 
-    // Wall-clock estimates per phase
+    // Wall-clock estimates per phase. Razer is essentially instant
+    // (one LAN packet per device), so only cloud_v2 segments drive the seg
+    // budget.
+    const cloudSegCount = cloudGroups.reduce((s, g) => s + g.segs.length, 0);
     const resetMs = resetCount > 0 ? V1_RESET_BUDGET : 0;
     const holdMs = resetCount > 0 ? SEG_WHITE_HOLD : 0;
-    const applyMsSeg = segCount > 0 ? (segCount - 1) * SEG_APPLY_STAGGER + 100 : 0;
+    const applyMsSeg = cloudSegCount > 0 ? (cloudSegCount - 1) * SEG_APPLY_STAGGER + 100 : 0;
     const applyMsGovee = goveeCount > 0 ? (goveeCount - 1) * 150 + 200 : 0;
     const applyMs = Math.max(applyMsSeg, applyMsGovee, hueCount > 0 ? 50 : 0);
     const totalMs = Math.max(resetMs + holdMs + applyMs, 300);
@@ -875,19 +888,39 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
         goveeDelay += 150;
       });
 
-      // Govee segments (V2 cloud, staggered)
+      // Razer-protocol segments (H6061 hexa): one bulk LAN packet per device.
+      // We must send all N segments at once. Any segments without a preview
+      // entry fall back to black so the packet is well-formed.
+      razerGroups.forEach(({ parent, light, segs }) => {
+        if (!light) { segs.forEach(() => applyTick()); return; }
+        const segCountFromInfo = segmentInfo?.sku_table?.[light.sku]?.count || segs.length;
+        const colorsArr = Array.from({ length: segCountFromInfo }, () => [0, 0, 0]);
+        segs.forEach(({ idx, color }) => {
+          const f = (color.brightness ?? brightness) / 100;
+          colorsArr[idx] = [Math.round(color.r * f), Math.round(color.g * f), Math.round(color.b * f)];
+        });
+        api("/govee/segments-bulk", {
+          method: "POST",
+          body: JSON.stringify({ ip: light.ip, sku: light.sku, colors: colorsArr }),
+          headers: { "Content-Type": "application/json" },
+        })
+          .catch(e => console.warn("[ColorMode] Razer bulk failed:", parent, e))
+          .finally(() => { segs.forEach(() => applyTick()); });
+      });
+
+      // Cloud V2 segments (H7065/H7066): staggered per-segment cloud calls.
       let segDelay = 0;
-      segmentEntries.forEach(([key, color]) => {
-        const segMatch = key.match(/^(govee:.+):seg(\d+)$/);
-        const light = lightMap[segMatch[1]];
-        if (!light) { applyTick(); return; }
-        const cmd = { ip: light.ip, sku: light.sku, device_mac: light.mac, segment_idx: parseInt(segMatch[2]), r: color.r, g: color.g, b: color.b, brightness: color.brightness ?? brightness };
-        setTimeout(() => {
-          api("/govee/segment-control", { method: "POST", body: JSON.stringify(cmd), headers: { "Content-Type": "application/json" } })
-            .catch(e => console.warn("[ColorMode] Segment control failed:", key, e));
-          applyTick();
-        }, segDelay);
-        segDelay += SEG_APPLY_STAGGER;
+      cloudGroups.forEach(({ parent, light, segs }) => {
+        if (!light) { segs.forEach(() => applyTick()); return; }
+        segs.forEach(({ idx, color }) => {
+          const cmd = { ip: light.ip, sku: light.sku, device_mac: light.mac, segment_idx: idx, r: color.r, g: color.g, b: color.b, brightness: color.brightness ?? brightness };
+          setTimeout(() => {
+            api("/govee/segment-control", { method: "POST", body: JSON.stringify(cmd), headers: { "Content-Type": "application/json" } })
+              .catch(e => console.warn("[ColorMode] Segment control failed:", parent, idx, e));
+            applyTick();
+          }, segDelay);
+          segDelay += SEG_APPLY_STAGGER;
+        });
       });
     }, phase2Start);
 

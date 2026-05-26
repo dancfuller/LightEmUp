@@ -33,6 +33,8 @@ from discovery import (
     govee_get_segment_info,
     govee_v2_segment_color,
     govee_v2_segment_brightness,
+    govee_razer_enable,
+    govee_razer_set_segments,
     GOVEE_SEGMENT_INFO,
 )
 from scenes import scene_manager, LightningSettings
@@ -599,6 +601,34 @@ async def control_govee_segment(req: GoveeSegmentControlRequest):
             api_key, req.sku, req.device_mac, req.segment_idx, req.brightness
         )
     return {"results": results}
+
+
+# ─── Razer-protocol bulk segment apply (LAN) ────────────────────────────────
+# H6061 ("Glide Hexa") and other razer-protocol Govee devices can't take
+# per-segment commands — the wire protocol carries the full N-segment color
+# array in a single packet. This endpoint takes one bulk request, enables
+# razer mode (required after any V1 whole-device command), and sends the
+# packed colors. Cloud V2 devices keep using /api/govee/segment-control.
+
+class GoveeSegmentsBulkRequest(BaseModel):
+    ip: str
+    sku: str
+    colors: list[list[int]]  # [[r,g,b], ...] one entry per segment, in order
+
+
+@app.post("/api/govee/segments-bulk")
+async def control_govee_segments_bulk(req: GoveeSegmentsBulkRequest):
+    seg_info = GOVEE_SEGMENT_INFO.get(req.sku)
+    if not seg_info or seg_info.get("protocol") != "razer":
+        raise HTTPException(400, f"SKU {req.sku} is not a razer-protocol segmented device")
+    expected = seg_info.get("count")
+    if expected and len(req.colors) != expected:
+        raise HTTPException(400, f"Expected {expected} segments, got {len(req.colors)}")
+    colors_tuples = [(max(0, min(255, c[0])), max(0, min(255, c[1])), max(0, min(255, c[2])))
+                     for c in req.colors]
+    await govee_razer_enable(req.ip)
+    await govee_razer_set_segments(req.ip, colors_tuples)
+    return {"success": True}
 
 
 # ─── Config Endpoint ────────────────────────────────────────────────────────
