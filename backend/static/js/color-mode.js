@@ -344,34 +344,63 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
 
   // ─── Adjacency graph (for palette mode) ─────────────────────────────
   // Two entries (lights or segments) are adjacent if any of:
-  //   1. They're within the spatial threshold on the map
-  //   2. Their parent devices share a fixture (intra-fixture distinctness)
-  //   3. One is spatially adjacent to a fixture-mate of the other (any
-  //      fixture member "borrows" all its fixture-mates' adjacencies)
+  //   1. They're within the spatial threshold on the map — EXCEPT when one
+  //      side is a segment and they don't share a parent device. Multi-
+  //      segment devices (e.g. Govee hexa) are physically one fixture, so
+  //      their segments must NOT spatially constrain (or be constrained by)
+  //      surrounding lights — palette colors can repeat across that border.
+  //   2. They're segments of the same parent device (intra-device segments
+  //      are mutually adjacent regardless of distance — siblings of one hexa
+  //      must all be distinct).
+  //   3. Their parent devices share a fixture (intra-fixture distinctness).
+  //   4. One is spatially adjacent to a fixture-mate of the other (any
+  //      fixture member "borrows" all its fixture-mates' adjacencies).
   const buildAdjacency = useCallback((entries) => {
     const threshold = 8; // grid units — roughly "touching" distance
     const adj = {};
     entries.forEach(e => { adj[e.key] = new Set(); });
 
-    // 1. Spatial adjacency
-    for (let i = 0; i < entries.length; i++) {
-      for (let j = i + 1; j < entries.length; j++) {
-        const dx = entries[i].x - entries[j].x;
-        const dy = entries[i].y - entries[j].y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        if (dist < threshold) {
-          adj[entries[i].key].add(entries[j].key);
-          adj[entries[j].key].add(entries[i].key);
-        }
-      }
-    }
-
-    // Map parent device key → fixture id, and fixture id → entry keys present
-    // in this room's adjacency (so a fixture's segments inherit membership).
     const parentKey = (k) => {
       const m = k.match(/^(.+):seg\d+$/);
       return m ? m[1] : k;
     };
+    const isSegment = (k) => /:seg\d+$/.test(k);
+
+    // 1. Spatial adjacency, with the hexa-segment relaxation: if either side
+    // is a segment, the pair must share a parent device for the spatial edge
+    // to count. Segments-of-X don't spatially constrain non-mates.
+    for (let i = 0; i < entries.length; i++) {
+      for (let j = i + 1; j < entries.length; j++) {
+        const ki = entries[i].key, kj = entries[j].key;
+        if ((isSegment(ki) || isSegment(kj)) && parentKey(ki) !== parentKey(kj)) continue;
+        const dx = entries[i].x - entries[j].x;
+        const dy = entries[i].y - entries[j].y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < threshold) {
+          adj[ki].add(kj);
+          adj[kj].add(ki);
+        }
+      }
+    }
+
+    // 1b. Intra-device segments: every segment pair of the same parent is
+    // adjacent, regardless of spatial distance, so the 7 hexa panels always
+    // pick 7 distinct palette colors.
+    const segByParent = {};
+    entries.forEach(e => {
+      if (isSegment(e.key)) (segByParent[parentKey(e.key)] ||= []).push(e.key);
+    });
+    Object.values(segByParent).forEach(siblings => {
+      for (let i = 0; i < siblings.length; i++) {
+        for (let j = i + 1; j < siblings.length; j++) {
+          adj[siblings[i]].add(siblings[j]);
+          adj[siblings[j]].add(siblings[i]);
+        }
+      }
+    });
+
+    // Map parent device key → fixture id, and fixture id → entry keys present
+    // in this room's adjacency (so a fixture's segments inherit membership).
     const deviceToFixture = {};
     Object.entries(fixtures || {}).forEach(([fid, fix]) => {
       (fix.members || []).forEach(m => { deviceToFixture[m] = fid; });

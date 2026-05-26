@@ -329,7 +329,10 @@ function DeviceNode({ deviceKey, pos, gridSize, light, nicknames, colorOverride,
   const configuredCount = light.ip && segmentInfo?.configured_counts?.[light.ip];
   const segCount = configuredCount || segInfo?.count;
   const isExpanded = segments?.expanded;
-  const canExpand = segCount > 0 && isEdit;
+  // Show the toggle whenever the device supports segments, even outside
+  // edit mode — splitting a hexa into 7 controllable panels is a primary
+  // discovery point for the feature.
+  const canExpand = segCount > 0;
 
   const startDrag = (e) => {
     if (!isEdit) return;
@@ -433,13 +436,17 @@ function DeviceNode({ deviceKey, pos, gridSize, light, nicknames, colorOverride,
           dominantBaseline="middle"
         >{line}</text>
       ))}
-      {/* Segment expand badge (edit mode) */}
+      {/* Segment expand/collapse badge. Visible whenever the device
+          supports segments. Tooltip clarifies what it does on hover. */}
       {canExpand && (
         <g onClick={(e) => { e.stopPropagation(); onToggleSegments(deviceKey); }} style={{ cursor: "pointer" }}>
-          <circle cx={pillX + pillW - 4} cy={pillY + 4} r={8} fill="#334155" stroke="#64748b" strokeWidth={1} />
+          <title>{isExpanded ? "Collapse to one light" : `Split into ${segCount} segments`}</title>
+          <circle cx={pillX + pillW - 4} cy={pillY + 4} r={8}
+            fill={isExpanded ? "#6366f1" : "#334155"}
+            stroke={isExpanded ? "#a5b4fc" : "#64748b"} strokeWidth={1} />
           <text x={pillX + pillW - 4} y={pillY + 8} textAnchor="middle"
-            fill="#a5b4fc" fontSize={9} fontFamily="sans-serif" fontWeight="bold" pointerEvents="none"
-          >{isExpanded ? "-" : String(segCount)}</text>
+            fill={isExpanded ? "#fff" : "#a5b4fc"} fontSize={9} fontFamily="sans-serif" fontWeight="bold" pointerEvents="none"
+          >{isExpanded ? "−" : String(segCount)}</text>
         </g>
       )}
     </g>
