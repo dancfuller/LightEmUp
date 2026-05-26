@@ -26,6 +26,7 @@ from discovery import (
     govee_razer_disable,
     govee_razer_set_segments,
 )
+from razer_keeper import razer_keeper
 
 log = logging.getLogger("lightemup.scenes")
 
@@ -196,6 +197,12 @@ class SceneManager:
 
         hue_ids: list[str] = room_config.get("hue_light_ids", [])
         govee_ips: list[str] = room_config.get("govee_devices", [])
+
+        # Cancel any razer keepers on these devices — the scene is about
+        # to take over razer mode itself and a stale keeper refresh would
+        # clobber the lightning frames.
+        for ip in govee_ips:
+            razer_keeper.cancel(ip)
 
         # ── fixture grouping ──────────────────────────────────────────
         # Devices in the same fixture share a single flash pattern so the

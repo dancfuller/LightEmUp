@@ -38,6 +38,7 @@ from discovery import (
     GOVEE_SEGMENT_INFO,
 )
 from scenes import scene_manager, LightningSettings
+from razer_keeper import razer_keeper
 
 # ─── Config ──────────────────────────────────────────────────────────────────
 
@@ -330,6 +331,10 @@ async def control_hue_light(req: HueLightStateRequest):
 
 @app.post("/api/govee/control")
 async def control_govee(req: GoveeCommandRequest):
+    # Whole-device command on this IP overrides any razer segment state we
+    # were keeping refreshed — cancel before sending so a stale refresh
+    # doesn't fight the user's new command 45s from now.
+    razer_keeper.cancel(req.ip)
     results = {}
 
     if req.on is not None:
@@ -397,6 +402,7 @@ async def control_room(req: RoomStateRequest):
 
     # Control Govee devices in the room
     for device_ip in room.get("govee_devices", []):
+        razer_keeper.cancel(device_ip)
         if req.on is not None:
             await govee_lan_turn(device_ip, req.on)
         if req.brightness is not None:
@@ -628,6 +634,10 @@ async def control_govee_segments_bulk(req: GoveeSegmentsBulkRequest):
                      for c in req.colors]
     await govee_razer_enable(req.ip)
     await govee_razer_set_segments(req.ip, colors_tuples)
+    # Keep the state alive — razer mode auto-disables after ~60s of no LED
+    # data, so we re-send the same segments every 45s until the user issues
+    # a whole-device command or starts a scene.
+    await razer_keeper.apply(req.ip, req.sku, colors_tuples)
     return {"success": True}
 
 
