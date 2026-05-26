@@ -27,6 +27,7 @@ from discovery import (
     govee_razer_set_segments,
 )
 from razer_keeper import razer_keeper
+import segment_state
 
 log = logging.getLogger("lightemup.scenes")
 
@@ -200,9 +201,11 @@ class SceneManager:
 
         # Cancel any razer keepers on these devices — the scene is about
         # to take over razer mode itself and a stale keeper refresh would
-        # clobber the lightning frames.
+        # clobber the lightning frames. Also drop the displayed segment
+        # state so the UI doesn't show stale colors while the scene runs.
         for ip in govee_ips:
             razer_keeper.cancel(ip)
+            segment_state.clear(ip)
 
         # ── fixture grouping ──────────────────────────────────────────
         # Devices in the same fixture share a single flash pattern so the

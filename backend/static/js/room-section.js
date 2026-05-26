@@ -1,6 +1,6 @@
 // ─── Room Section ──────────────────────────────────────────────────────────
 
-function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGovee, onControlRoom, favorites, onFavoritesChange, nicknames, onNicknameChange, lightningActive, onLightningStart, onLightningStop, segmentInfo, roomLayouts, onLayoutChange, fixtures, onFixtureUpsert, onFixtureDelete }) {
+function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGovee, onControlRoom, favorites, onFavoritesChange, nicknames, onNicknameChange, lightningActive, onLightningStart, onLightningStop, segmentInfo, segmentState, onSegmentStateRefresh, roomLayouts, onLayoutChange, fixtures, onFixtureUpsert, onFixtureDelete }) {
   const isMobile = useIsMobile();
   const [collapsed, setCollapsed] = useState(true);
   const [showRoomControls, setShowRoomControls] = useState(false);
@@ -204,7 +204,15 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
             segmentInfo={segmentInfo}
             roomLayouts={roomLayouts}
             fixtures={fixtures}
-            onApply={setColorModeApplied}
+            onApply={(applied) => {
+              setColorModeApplied(applied);
+              // After the apply pipeline finishes (~4-15s depending on
+              // device mix), pull fresh segment state so other views
+              // (room map, page reload) reflect what the server stored.
+              if (onSegmentStateRefresh) {
+                setTimeout(onSegmentStateRefresh, 5000);
+              }
+            }}
           />
         )}
 
@@ -212,6 +220,7 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
         {showMap && (
           <RoomMap
             roomName={name}
+            segmentState={segmentState}
             hueLights={hueLights} goveeDevices={goveeDevices}
             onControlHue={onControlHue} onControlGovee={onControlGovee}
             favorites={favorites} onFavoritesChange={onFavoritesChange}
@@ -232,7 +241,15 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
           }}>
             {allLights.map((light, i) => {
               const devKey = light.type === "hue" ? `hue:${light.id}` : `govee:${light.ip}`;
+              // Merge: this-session apply (colorModeApplied) takes precedence
+              // over the server's persistent state, since the user just
+              // pressed Apply and may not have re-fetched state yet.
               const segColors = {};
+              if (light.ip && segmentState && segmentState[light.ip]) {
+                Object.entries(segmentState[light.ip]).forEach(([k, v]) => {
+                  segColors[parseInt(k)] = v;
+                });
+              }
               if (colorModeApplied) {
                 Object.entries(colorModeApplied).forEach(([k, v]) => {
                   const m = k.match(/^(.+):seg(\d+)$/);
@@ -243,7 +260,15 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
                 <LightCard
                   key={`${light.type}-${light.id || light.ip}-${i}`}
                   light={light}
-                  onControl={(l, cmd) => l._controlFn(l, cmd)}
+                  onControl={(l, cmd) => {
+                    l._controlFn(l, cmd);
+                    // A whole-device color/on-off command clears server
+                    // segment state; refresh so the strip disappears.
+                    if (l.type === "govee" && onSegmentStateRefresh &&
+                        (cmd.r !== undefined || cmd.on === false)) {
+                      setTimeout(onSegmentStateRefresh, 200);
+                    }
+                  }}
                   favorites={favorites}
                   onFavoritesChange={onFavoritesChange}
                   nicknames={nicknames}

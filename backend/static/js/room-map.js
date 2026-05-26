@@ -299,7 +299,7 @@ function wrapText(text, maxCharsPerLine) {
   return lines;
 }
 
-function DeviceNode({ deviceKey, pos, gridSize, light, nicknames, colorOverride, isEdit, isSelected, onSelect, onDragEnd, segmentInfo, segments, onToggleSegments }) {
+function DeviceNode({ deviceKey, pos, gridSize, light, nicknames, colorOverride, liveSegmentColors, isEdit, isSelected, onSelect, onDragEnd, segmentInfo, segments, onToggleSegments }) {
   const [dragging, setDragging] = useState(false);
   const [dragPos, setDragPos] = useState(null);
   const dragPosRef = useRef(null);
@@ -414,16 +414,52 @@ function DeviceNode({ deviceKey, pos, gridSize, light, nicknames, colorOverride,
         strokeWidth={isSelected ? 2 : 1}
         style={{ filter: isOn ? `drop-shadow(0 0 6px ${color}40)` : "none" }}
       />
-      {/* Color dot on the left side of the pill */}
-      <circle cx={pillX + 16} cy={cy} r={dotR}
-        fill={color}
-        opacity={isOn ? 1 : 0.35}
-        stroke={isOn ? "rgba(255,255,255,0.3)" : "rgba(255,255,255,0.1)"}
-        strokeWidth={1.5}
-        style={{ filter: isOn ? `drop-shadow(0 0 4px ${color})` : "none" }}
-      />
+      {/* Color dot. If the device is in segment mode (server-known segment
+          colors), render a striped multi-color dot instead of a single
+          fill — otherwise the user sees a stale whole-device color that
+          doesn't match what the panels actually show. */}
+      {liveSegmentColors && Object.keys(liveSegmentColors).length > 1 ? (() => {
+        const segs = Object.keys(liveSegmentColors).map(k => parseInt(k)).sort((a, b) => a - b);
+        const cxDot = pillX + 16;
+        const cyDot = cy;
+        // Use stroked horizontal stripes clipped to a circle via clipPath.
+        const stripeH = (dotR * 2) / segs.length;
+        const clipId = `segdot-${deviceKey.replace(/[^a-z0-9]/gi, "_")}`;
+        return (
+          <g opacity={isOn ? 1 : 0.35}>
+            <defs>
+              <clipPath id={clipId}>
+                <circle cx={cxDot} cy={cyDot} r={dotR} />
+              </clipPath>
+            </defs>
+            <g clipPath={`url(#${clipId})`}>
+              {segs.map((segIdx, i) => {
+                const c = liveSegmentColors[segIdx];
+                return (
+                  <rect key={segIdx}
+                    x={cxDot - dotR} y={cyDot - dotR + i * stripeH}
+                    width={dotR * 2} height={stripeH + 0.5}
+                    fill={`rgb(${c.r},${c.g},${c.b})`}
+                  />
+                );
+              })}
+            </g>
+            <circle cx={cxDot} cy={cyDot} r={dotR} fill="none"
+              stroke={isOn ? "rgba(255,255,255,0.4)" : "rgba(255,255,255,0.1)"}
+              strokeWidth={1.5} />
+          </g>
+        );
+      })() : (
+        <circle cx={pillX + 16} cy={cy} r={dotR}
+          fill={color}
+          opacity={isOn ? 1 : 0.35}
+          stroke={isOn ? "rgba(255,255,255,0.3)" : "rgba(255,255,255,0.1)"}
+          strokeWidth={1.5}
+          style={{ filter: isOn ? `drop-shadow(0 0 4px ${color})` : "none" }}
+        />
+      )}
       {/* Off indicator on dot */}
-      {!isOn && (
+      {!isOn && !liveSegmentColors && (
         <text x={pillX + 16} y={cy + 4} textAnchor="middle"
           fill="#94a3b8" fontSize={8} fontFamily="sans-serif" fontWeight="bold" pointerEvents="none"
         >OFF</text>
@@ -579,7 +615,7 @@ function SegmentNode({ deviceKey, segIndex, pos, gridSize, light, nicknames, pac
   );
 }
 
-function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGovee, favorites, onFavoritesChange, nicknames, onNicknameChange, segmentInfo, roomLayouts, onLayoutChange, appliedColors, fixtures, onFixtureUpsert, onFixtureDelete }) {
+function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGovee, favorites, onFavoritesChange, nicknames, onNicknameChange, segmentInfo, segmentState, roomLayouts, onLayoutChange, appliedColors, fixtures, onFixtureUpsert, onFixtureDelete }) {
   const isMobile = useIsMobile();
   const [layout, setLayout] = useState(null);
   const [isEdit, setIsEdit] = useState(false);
@@ -1424,12 +1460,18 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
                 );
               });
             }
+            // If this device has server-known segment state (set via
+            // ColorMode apply, persisting across reloads), surface those
+            // colors to DeviceNode so it can render a striped dot instead
+            // of the stale whole-device color.
+            const liveSegColors = light.ip && segmentState?.[light.ip] ? segmentState[light.ip] : null;
             return (
               <DeviceNode
                 key={key} deviceKey={key}
                 pos={displayPos} gridSize={gridSize}
                 light={light} nicknames={nicknames}
                 colorOverride={deviceColorOverrides[key] || null}
+                liveSegmentColors={liveSegColors}
                 isEdit={isEdit} isSelected={selectedDeviceKeys.includes(key)}
                 onSelect={handleDeviceSelect}
                 onDragEnd={handleDragEnd}

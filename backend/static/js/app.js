@@ -1,5 +1,21 @@
 // ─── Main App ───────────────────────────────────────────────────────────────
 
+// Convert server segment state shape { ip: { "0": [r,g,b], ... } } to the
+// frontend's { ip: { 0: {r,g,b}, ... } }.
+function normalizeSegmentState(raw) {
+  const out = {};
+  Object.entries(raw || {}).forEach(([ip, segs]) => {
+    const m = {};
+    Object.entries(segs || {}).forEach(([k, v]) => {
+      if (Array.isArray(v) && v.length === 3) {
+        m[parseInt(k)] = { r: v[0], g: v[1], b: v[2] };
+      }
+    });
+    if (Object.keys(m).length > 0) out[ip] = m;
+  });
+  return out;
+}
+
 function App() {
   const isMobile = useIsMobile();
   const [config, setConfig] = useState(null);
@@ -17,6 +33,11 @@ function App() {
   const [refreshing, setRefreshing] = useState(false);
   const [lightningActiveRooms, setLightningActiveRooms] = useState([]);
   const [segmentInfo, setSegmentInfo] = useState({ sku_table: {}, configured_counts: {}, segment_mode: {} });
+  // segmentState: server-side last-known per-segment colors for any Govee
+  // device currently in segment mode. Shape: { ip: { segIdx: {r,g,b} } }.
+  // Used by LightCard and RoomMap so the UI reflects segments instead of
+  // showing a stale whole-device color.
+  const [segmentState, setSegmentState] = useState({});
   const [roomLayouts, setRoomLayouts] = useState({});
   const [fixtures, setFixtures] = useState({});
 
@@ -50,6 +71,7 @@ function App() {
         api("/discover/govee").catch(() => ({ devices: [] })),
         api("/scenes/lightning/status").catch(() => ({ active: [] })),
         api("/govee/segment-info").catch(() => ({ sku_table: {}, configured_counts: {}, segment_mode: {} })),
+        api("/govee/segment-state").catch(() => ({ state: {} })),
       ];
 
       if (cfg.hue_paired) {
@@ -63,10 +85,11 @@ function App() {
       setGoveeDevices(results[0].devices || []);
       setLightningActiveRooms(results[1].active || []);
       setSegmentInfo(results[2]);
+      setSegmentState(normalizeSegmentState(results[3]?.state || {}));
 
       if (cfg.hue_paired) {
-        setHueLights(results[3]?.lights || []);
-        setHueGroups(results[4]?.groups || []);
+        setHueLights(results[4]?.lights || []);
+        setHueGroups(results[5]?.groups || []);
       }
     } catch (e) {
       setError(e.message);
@@ -75,6 +98,15 @@ function App() {
   }, []);
 
   useEffect(() => { loadAll(); }, [loadAll]);
+
+  const refreshSegmentState = useCallback(async () => {
+    try {
+      const data = await api("/govee/segment-state");
+      setSegmentState(normalizeSegmentState(data?.state || {}));
+    } catch (e) {
+      console.warn("Failed to refresh segment state:", e);
+    }
+  }, []);
 
   // Reload segment info when toggled from LightningPanel
   useEffect(() => {
@@ -378,6 +410,8 @@ function App() {
                   onLightningStart={() => startLightning(roomName)}
                   onLightningStop={() => stopLightning(roomName)}
                   segmentInfo={segmentInfo}
+                  segmentState={segmentState}
+                  onSegmentStateRefresh={refreshSegmentState}
                   roomLayouts={roomLayouts}
                   onLayoutChange={handleLayoutChange}
                   fixtures={fixtures}

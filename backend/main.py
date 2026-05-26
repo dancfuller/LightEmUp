@@ -41,6 +41,7 @@ from discovery import (
 )
 from scenes import scene_manager, LightningSettings
 from razer_keeper import razer_keeper
+import segment_state
 
 # ─── Config ──────────────────────────────────────────────────────────────────
 
@@ -363,8 +364,11 @@ async def control_hue_light(req: HueLightStateRequest):
 async def control_govee(req: GoveeCommandRequest):
     # Whole-device command on this IP overrides any razer segment state we
     # were keeping refreshed — cancel before sending so a stale refresh
-    # doesn't fight the user's new command 45s from now.
+    # doesn't fight the user's new command 45s from now. Also clear the
+    # last-known segment colors so the UI stops showing the stale strip.
     razer_keeper.cancel(req.ip)
+    if req.r is not None or req.color_temp_kelvin is not None or req.on is False:
+        segment_state.clear(req.ip)
     results = {}
 
     if req.on is not None:
@@ -433,6 +437,8 @@ async def control_room(req: RoomStateRequest):
     # Control Govee devices in the room
     for device_ip in room.get("govee_devices", []):
         razer_keeper.cancel(device_ip)
+        if req.r is not None or req.on is False:
+            segment_state.clear(device_ip)
         if req.on is not None:
             await govee_lan_turn(device_ip, req.on)
         if req.brightness is not None:
@@ -629,6 +635,7 @@ async def control_govee_segment(req: GoveeSegmentControlRequest):
         results["color"] = await govee_v2_segment_color(
             api_key, req.sku, req.device_mac, req.segment_idx, req.r, req.g, req.b
         )
+        segment_state.set_one(req.ip, req.segment_idx, req.r, req.g, req.b)
     if req.brightness is not None:
         # Rate limit: wait before second call
         if results:
@@ -668,7 +675,16 @@ async def control_govee_segments_bulk(req: GoveeSegmentsBulkRequest):
     # data, so we re-send the same segments every 45s until the user issues
     # a whole-device command or starts a scene.
     await razer_keeper.apply(req.ip, req.sku, colors_tuples)
+    segment_state.set_bulk(req.ip, colors_tuples)
     return {"success": True}
+
+
+@app.get("/api/govee/segment-state")
+async def get_segment_state():
+    """Return the last-known per-segment colors for every Govee device the
+    server has set segments on. UI uses this to render segment strips on
+    the LightCard and multi-color dots on the room map."""
+    return {"state": segment_state.snapshot()}
 
 
 # ─── Config Endpoint ────────────────────────────────────────────────────────
