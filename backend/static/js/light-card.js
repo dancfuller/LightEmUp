@@ -1,22 +1,26 @@
 // ─── Light Card Component ───────────────────────────────────────────────────
 
-function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, onNicknameChange, roomName, segmentColors, segmentInfo }) {
+function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, onNicknameChange, roomName, segmentColors, segmentInfo, segmentBrightness }) {
   const isMobile = useIsMobile();
-  const [brightness, setBrightness] = useState(
-    light.type === "hue" ? Math.round((light.state?.brightness || 0) / 254 * 100) : (light.state?.brightness ?? 50)
-  );
+  const deviceBrightness = light.type === "hue"
+    ? Math.round((light.state?.brightness || 0) / 254 * 100)
+    : (light.state?.brightness ?? 50);
+  // When the device is in segment mode, the device's own brightness state
+  // is meaningless (razer packets carry brightness inline as RGB scale).
+  // Prefer the server-stored segment brightness so the slider reflects
+  // what the segments are actually showing.
+  const initialBrightness = segmentBrightness != null ? segmentBrightness : deviceBrightness;
+  const [brightness, setBrightness] = useState(initialBrightness);
   const [lightColor, setLightColor] = useState(() => getInitialColor(light));
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState("");
 
-  // Sync state when light prop changes (e.g. after refresh)
+  // Sync state when light prop or segment brightness changes
   useEffect(() => {
-    setBrightness(
-      light.type === "hue" ? Math.round((light.state?.brightness || 0) / 254 * 100) : (light.state?.brightness ?? 50)
-    );
+    setBrightness(segmentBrightness != null ? segmentBrightness : deviceBrightness);
     const c = getInitialColor(light);
     if (c) setLightColor(c);
-  }, [light.state?.on, light.state?.brightness, light.state?.hue, light.state?.saturation, light.state?.xy, light.state?.color?.r, light.state?.color?.g, light.state?.color?.b]);
+  }, [light.state?.on, light.state?.brightness, light.state?.hue, light.state?.saturation, light.state?.xy, light.state?.color?.r, light.state?.color?.g, light.state?.color?.b, segmentBrightness]);
   const isOn = light.state?.on ?? false;
   const isReachable = light.state?.reachable ?? true;
   const hasColor = light.capabilities?.has_color;
@@ -160,6 +164,19 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
               setBrightness(v);
               if (light.type === "hue") {
                 onControl(light, { brightness: Math.round(v * 254 / 100) });
+              } else if (hasSegmentColors) {
+                // Device is in segment mode — route through the segments
+                // brightness endpoint so segment colors are preserved. The
+                // whole-device LAN brightness command would knock razer
+                // devices out of segment mode entirely.
+                api("/govee/segments-brightness", {
+                  method: "POST",
+                  body: JSON.stringify({
+                    ip: light.ip, sku: light.sku, brightness: v,
+                    device_mac: light.mac,
+                  }),
+                  headers: { "Content-Type": "application/json" },
+                }).catch(e => console.warn("[LightCard] segments-brightness failed:", e));
               } else {
                 onControl(light, { brightness: v });
               }

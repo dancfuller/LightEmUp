@@ -245,8 +245,9 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
               // over the server's persistent state, since the user just
               // pressed Apply and may not have re-fetched state yet.
               const segColors = {};
-              if (light.ip && segmentState && segmentState[light.ip]) {
-                Object.entries(segmentState[light.ip]).forEach(([k, v]) => {
+              const persistedEntry = light.ip && segmentState ? segmentState[light.ip] : null;
+              if (persistedEntry?.colors) {
+                Object.entries(persistedEntry.colors).forEach(([k, v]) => {
                   segColors[parseInt(k)] = v;
                 });
               }
@@ -275,6 +276,7 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
                   onNicknameChange={onNicknameChange}
                   segmentInfo={segmentInfo}
                   segmentColors={Object.keys(segColors).length > 0 ? segColors : null}
+                  segmentBrightness={persistedEntry?.brightness}
                 />
               );
             })}

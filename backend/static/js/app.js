@@ -1,17 +1,22 @@
 // ─── Main App ───────────────────────────────────────────────────────────────
 
-// Convert server segment state shape { ip: { "0": [r,g,b], ... } } to the
-// frontend's { ip: { 0: {r,g,b}, ... } }.
+// Convert server segment state shape
+//   { ip: { colors: { "0": [r,g,b], ... }, brightness: N } }
+// to the frontend's
+//   { ip: { colors: { 0: {r,g,b}, ... }, brightness: N } }.
 function normalizeSegmentState(raw) {
   const out = {};
-  Object.entries(raw || {}).forEach(([ip, segs]) => {
+  Object.entries(raw || {}).forEach(([ip, entry]) => {
+    const segs = entry?.colors || {};
     const m = {};
-    Object.entries(segs || {}).forEach(([k, v]) => {
+    Object.entries(segs).forEach(([k, v]) => {
       if (Array.isArray(v) && v.length === 3) {
         m[parseInt(k)] = { r: v[0], g: v[1], b: v[2] };
       }
     });
-    if (Object.keys(m).length > 0) out[ip] = m;
+    if (Object.keys(m).length > 0) {
+      out[ip] = { colors: m, brightness: entry?.brightness ?? 100 };
+    }
   });
   return out;
 }

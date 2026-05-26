@@ -1464,7 +1464,7 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
             // ColorMode apply, persisting across reloads), surface those
             // colors to DeviceNode so it can render a striped dot instead
             // of the stale whole-device color.
-            const liveSegColors = light.ip && segmentState?.[light.ip] ? segmentState[light.ip] : null;
+            const liveSegColors = light.ip && segmentState?.[light.ip]?.colors ? segmentState[light.ip].colors : null;
             return (
               <DeviceNode
                 key={key} deviceKey={key}

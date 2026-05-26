@@ -966,17 +966,28 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
       // Razer-protocol segments (H6061 hexa): one bulk LAN packet per device.
       // We must send all N segments at once. Any segments without a preview
       // entry fall back to black so the packet is well-formed.
+      // Colors are sent at full brightness (with per-entry beacon dimming
+      // folded in); the device-level `brightness` is sent separately so the
+      // server can store unscaled colors and re-scale later when the
+      // LightCard brightness slider moves.
       razerGroups.forEach(({ parent, light, segs }) => {
         if (!light) { segs.forEach(() => applyTick()); return; }
         const segCountFromInfo = segmentInfo?.sku_table?.[light.sku]?.count || segs.length;
         const colorsArr = Array.from({ length: segCountFromInfo }, () => [0, 0, 0]);
         segs.forEach(({ idx, color }) => {
-          const f = (color.brightness ?? brightness) / 100;
-          colorsArr[idx] = [Math.round(color.r * f), Math.round(color.g * f), Math.round(color.b * f)];
+          // Beacon mode sets per-entry brightness — fold that in (spatial
+          // falloff is inherent to the chosen color). Global slider brightness
+          // is NOT folded; the server scales by it on send.
+          const perEntryF = color.brightness !== undefined ? color.brightness / 100 : 1;
+          colorsArr[idx] = [
+            Math.round(color.r * perEntryF),
+            Math.round(color.g * perEntryF),
+            Math.round(color.b * perEntryF),
+          ];
         });
         api("/govee/segments-bulk", {
           method: "POST",
-          body: JSON.stringify({ ip: light.ip, sku: light.sku, colors: colorsArr }),
+          body: JSON.stringify({ ip: light.ip, sku: light.sku, colors: colorsArr, brightness: brightness }),
           headers: { "Content-Type": "application/json" },
         })
           .catch(e => console.warn("[ColorMode] Razer bulk failed:", parent, e))

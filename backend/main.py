@@ -656,7 +656,13 @@ async def control_govee_segment(req: GoveeSegmentControlRequest):
 class GoveeSegmentsBulkRequest(BaseModel):
     ip: str
     sku: str
-    colors: list[list[int]]  # [[r,g,b], ...] one entry per segment, in order
+    colors: list[list[int]]  # [[r,g,b], ...] at full brightness (100%), one per segment
+    brightness: Optional[int] = 100  # device-level multiplier 0..100
+
+
+def _scale_colors(colors: list[tuple[int, int, int]], brightness: int) -> list[tuple[int, int, int]]:
+    f = max(0, min(100, brightness)) / 100.0
+    return [(int(c[0] * f), int(c[1] * f), int(c[2] * f)) for c in colors]
 
 
 @app.post("/api/govee/segments-bulk")
@@ -669,21 +675,75 @@ async def control_govee_segments_bulk(req: GoveeSegmentsBulkRequest):
         raise HTTPException(400, f"Expected {expected} segments, got {len(req.colors)}")
     colors_tuples = [(max(0, min(255, c[0])), max(0, min(255, c[1])), max(0, min(255, c[2])))
                      for c in req.colors]
+    brightness = max(0, min(100, req.brightness if req.brightness is not None else 100))
+    scaled = _scale_colors(colors_tuples, brightness)
     await govee_razer_enable(req.ip)
-    await govee_razer_set_segments(req.ip, colors_tuples)
-    # Keep the state alive — razer mode auto-disables after ~60s of no LED
-    # data, so we re-send the same segments every 45s until the user issues
-    # a whole-device command or starts a scene.
-    await razer_keeper.apply(req.ip, req.sku, colors_tuples)
-    segment_state.set_bulk(req.ip, colors_tuples)
+    await govee_razer_set_segments(req.ip, scaled)
+    # Keep the SCALED state alive — razer mode auto-disables after ~60s of
+    # no LED data, so we re-send the same packet every 45s until the user
+    # issues a whole-device command or starts a scene.
+    await razer_keeper.apply(req.ip, req.sku, scaled)
+    # Store unscaled colors + brightness separately so a later brightness
+    # change can re-scale without losing the per-segment palette.
+    segment_state.set_bulk(req.ip, colors_tuples, brightness)
     return {"success": True}
+
+
+class GoveeSegmentsBrightnessRequest(BaseModel):
+    ip: str
+    sku: str
+    brightness: int
+    device_mac: Optional[str] = None  # required for cloud_v2 devices
+
+
+@app.post("/api/govee/segments-brightness")
+async def control_govee_segments_brightness(req: GoveeSegmentsBrightnessRequest):
+    """Change the device-level brightness of a segmented Govee device
+    without losing the per-segment colors. Razer devices get a re-sent
+    bulk packet with scaled colors. Cloud_v2 devices receive per-segment
+    brightness commands."""
+    entry = segment_state.get(req.ip)
+    if not entry:
+        raise HTTPException(400, "No segment state for this device")
+    seg_info = GOVEE_SEGMENT_INFO.get(req.sku)
+    if not seg_info:
+        raise HTTPException(400, f"Unknown SKU {req.sku}")
+    brightness = max(0, min(100, req.brightness))
+    proto = seg_info.get("protocol")
+    count = seg_info.get("count") or (max(entry["colors"].keys()) + 1 if entry["colors"] else 0)
+
+    if proto == "razer":
+        ordered = []
+        for i in range(count):
+            c = entry["colors"].get(i) or (0, 0, 0)
+            ordered.append(c)
+        scaled = _scale_colors(ordered, brightness)
+        await govee_razer_enable(req.ip)
+        await govee_razer_set_segments(req.ip, scaled)
+        await razer_keeper.apply(req.ip, req.sku, scaled)
+    elif proto == "cloud_v2":
+        api_key = config.get("govee_api_key")
+        if not api_key:
+            raise HTTPException(400, "No Govee API key configured")
+        if not req.device_mac:
+            raise HTTPException(400, "device_mac required for cloud_v2 devices")
+        # Cloud V2 brightness is per-segment. Send each (staggered slightly
+        # — burst-bucket limited).
+        for i in range(count):
+            if i in entry["colors"]:
+                await govee_v2_segment_brightness(api_key, req.sku, req.device_mac, i, brightness)
+                await asyncio.sleep(1.5)
+    else:
+        raise HTTPException(400, f"SKU {req.sku} does not support segmented control")
+
+    segment_state.set_brightness(req.ip, brightness)
+    return {"success": True, "brightness": brightness}
 
 
 @app.get("/api/govee/segment-state")
 async def get_segment_state():
-    """Return the last-known per-segment colors for every Govee device the
-    server has set segments on. UI uses this to render segment strips on
-    the LightCard and multi-color dots on the room map."""
+    """Return the last-known per-segment colors + brightness for every
+    Govee device the server has set segments on."""
     return {"state": segment_state.snapshot()}
 
 
