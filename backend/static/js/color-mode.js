@@ -619,14 +619,37 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
       usage[chosen]++;
     });
 
+    // Identify fixture-mate edges so we can enforce them strictly. Fixture
+    // membership is the user's explicit "must be distinct" signal — a
+    // violation here is much worse than a spatial adjacency violation.
+    const parentKeyOf = (k) => {
+      const m = k.match(/^(.+):seg\d+$/);
+      return m ? m[1] : k;
+    };
+    const keyToFixture = {};
+    Object.entries(fixtures || {}).forEach(([fid, fix]) => {
+      (fix.members || []).forEach(m => { keyToFixture[m] = fid; });
+    });
+    const sharedFixture = (a, b) => {
+      const fa = keyToFixture[parentKeyOf(a)];
+      const fb = keyToFixture[parentKeyOf(b)];
+      return fa && fa === fb;
+    };
+
     // Post-pass: greedy local-search swap. The forward pass is myopic —
     // when relax-1 drops the similarity gate it can leave same-family
     // colors on adjacent devices even though a global rearrangement
-    // would resolve the conflict. Swapping two device assignments
-    // preserves global color usage (and tier counts) but can eliminate
-    // a violation that no single-device re-choice could fix.
-    const violation = (ci, cj) =>
-      (ci === cj || colorDist(ci, cj) < SIMILARITY_THRESHOLD) ? 1 : 0;
+    // would resolve the conflict. Fixture-mate violations are weighted
+    // FIXTURE_VIOL_COST × heavier than spatial violations so the swap
+    // pass accepts a swap that fixes a fixture conflict even if it
+    // creates a smaller non-fixture conflict elsewhere.
+    const FIXTURE_VIOL_COST = 100;
+    const pairCost = (a, b, ca, cb) => {
+      if (ca === cb || colorDist(ca, cb) < SIMILARITY_THRESHOLD) {
+        return sharedFixture(a, b) ? FIXTURE_VIOL_COST : 1;
+      }
+      return 0;
+    };
     const deltaSwap = (a, b) => {
       const ca = assignment[a], cb = assignment[b];
       if (ca === cb) return 0;
@@ -635,15 +658,15 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
         if (nk === b) return;
         const cn = assignment[nk];
         if (cn === undefined) return;
-        before += violation(ca, cn);
-        after += violation(cb, cn);
+        before += pairCost(a, nk, ca, cn);
+        after += pairCost(a, nk, cb, cn);
       });
       adj[b]?.forEach(nk => {
         if (nk === a) return;
         const cn = assignment[nk];
         if (cn === undefined) return;
-        before += violation(cb, cn);
-        after += violation(ca, cn);
+        before += pairCost(b, nk, cb, cn);
+        after += pairCost(b, nk, ca, cn);
       });
       return after - before;
     };
@@ -667,12 +690,54 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
       assignment[b] = tmp;
     }
 
+    // Final fixture-repair pass. If a fixture-mate pair is still violating
+    // the similarity gate (typical for isolated fixtures where no external
+    // device exists to swap with), force one member to recolor — any palette
+    // color that doesn't violate against its neighbors is accepted, ignoring
+    // global usage balance because fixture correctness outranks balance.
+    for (let pass = 0; pass < 8; pass++) {
+      let repaired = false;
+      for (const a of deviceKeys) {
+        for (const b of adj[a] || []) {
+          if (a >= b) continue;
+          if (!sharedFixture(a, b)) continue;
+          const ca = assignment[a], cb = assignment[b];
+          if (ca !== cb && colorDist(ca, cb) >= SIMILARITY_THRESHOLD) continue;
+          // Try to recolor b first, then a, with any palette color that
+          // doesn't violate against its neighbors.
+          let fixed = false;
+          for (const target of [b, a]) {
+            const otherNeighbors = [];
+            (adj[target] || []).forEach(nk => {
+              if (assignment[nk] !== undefined) otherNeighbors.push(assignment[nk]);
+            });
+            for (let i = 0; i < N; i++) {
+              let ok = true;
+              for (const nIdx of otherNeighbors) {
+                if (i === nIdx || colorDist(i, nIdx) < SIMILARITY_THRESHOLD) { ok = false; break; }
+              }
+              if (ok) {
+                usage[assignment[target]]--;
+                assignment[target] = i;
+                usage[i]++;
+                fixed = true;
+                repaired = true;
+                break;
+              }
+            }
+            if (fixed) break;
+          }
+        }
+      }
+      if (!repaired) break;
+    }
+
     const result = {};
     Object.entries(assignment).forEach(([key, ci]) => {
       result[key] = colors[ci];
     });
     return result;
-  }, [placedColorLights, paletteColors, buildAdjacency]);
+  }, [placedColorLights, paletteColors, buildAdjacency, fixtures]);
 
   // ─── Tonal mode: 8 shades of one color, randomly assigned with adjacency gap ─
   const computeTonal = useCallback(() => {
