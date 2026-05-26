@@ -11,6 +11,7 @@ function App() {
   const [error, setError] = useState(null);
   const [activeTab, setActiveTab] = useState("rooms");
   const [showHueSetup, setShowHueSetup] = useState(false);
+  const [showLogs, setShowLogs] = useState(false);
   const [favoriteColors, setFavoriteColors] = useState(() => loadFavoriteColors());
   const [nicknames, setNicknames] = useState({});
   const [refreshing, setRefreshing] = useState(false);
@@ -543,7 +544,15 @@ function App() {
             </div>
             <div style={{ background: "#1e293b", borderRadius: 16, padding: 20, border: "1px solid #334155" }}>
               <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 12, color: "#e2e8f0" }}>Server</h3>
-              <div style={{ display: "flex", gap: 12 }}>
+              <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                <button
+                  onClick={() => setShowLogs(true)}
+                  style={{
+                    padding: "10px 20px", borderRadius: 10, border: "1px solid #334155",
+                    background: "transparent", color: "#a5b4fc", fontSize: 13,
+                    fontWeight: 600, cursor: "pointer",
+                  }}
+                >View Logs</button>
                 <button
                   onClick={async () => {
                     if (!confirm("Restart the LightEmUp server? The page will reconnect automatically.")) return;
@@ -577,6 +586,11 @@ function App() {
             </div>
           </div>
         )}
+      {/* Server Logs Modal */}
+      {showLogs && (
+        <ServerLogs onClose={() => setShowLogs(false)} />
+      )}
+
       {/* Hue Setup Modal */}
       {showHueSetup && (
         <div style={{

@@ -4,9 +4,11 @@ LightEmUp - FastAPI backend for controlling Hue and Govee lights.
 
 import asyncio
 import json
+import logging
 import os
 import sys
 import subprocess
+from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 from contextlib import asynccontextmanager
 
@@ -67,6 +69,34 @@ def save_config(config: dict):
 
 
 config = load_config()
+
+
+# ─── Logging ────────────────────────────────────────────────────────────────
+# Hourly rotating log file kept for 48 hours. Console output is preserved so
+# `journalctl -u lightemup` still works under systemd. /api/logs serves the
+# concatenated tail of these files to the web UI.
+
+LOG_DIR = Path(__file__).parent / "logs"
+LOG_DIR.mkdir(exist_ok=True)
+LOG_FILE = LOG_DIR / "server.log"
+
+_log_formatter = logging.Formatter(
+    "%(asctime)s %(levelname)-7s %(name)s %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+_root_logger = logging.getLogger()
+_root_logger.setLevel(logging.INFO)
+if not any(isinstance(h, TimedRotatingFileHandler) for h in _root_logger.handlers):
+    _fh = TimedRotatingFileHandler(LOG_FILE, when="H", interval=1, backupCount=48, encoding="utf-8")
+    _fh.setFormatter(_log_formatter)
+    _root_logger.addHandler(_fh)
+if not any(isinstance(h, logging.StreamHandler) and not isinstance(h, TimedRotatingFileHandler)
+           for h in _root_logger.handlers):
+    _ch = logging.StreamHandler()
+    _ch.setFormatter(_log_formatter)
+    _root_logger.addHandler(_ch)
+
+log = logging.getLogger("lightemup.main")
 
 
 # ─── App ─────────────────────────────────────────────────────────────────────
@@ -828,6 +858,39 @@ async def server_restart():
             os._exit(0)
     asyncio.create_task(_do_restart())
     return {"success": True, "message": "Server restarting..."}
+
+
+@app.get("/api/logs")
+async def get_logs(lines: int = 500, level: Optional[str] = None):
+    """Return the most recent log lines from the rotating file set.
+
+    Reads all log files in chronological order (rotated backups + current),
+    optionally filters by level (substring match on the level field), and
+    returns the tail of *lines* entries — newest last.
+    """
+    if not LOG_DIR.exists():
+        return {"lines": [], "available": 0}
+
+    # Collect log files: current + rotated backups (named server.log.YYYY-...)
+    files = sorted(LOG_DIR.glob("server.log*"), key=lambda p: p.stat().st_mtime)
+    if not files:
+        return {"lines": [], "available": 0}
+
+    # Read everything (logs cap at ~48h of hourly files — small).
+    all_lines: list[str] = []
+    for f in files:
+        try:
+            with open(f, encoding="utf-8", errors="replace") as fh:
+                all_lines.extend(fh.read().splitlines())
+        except Exception as exc:
+            log.warning("Failed to read log file %s: %s", f, exc)
+
+    if level:
+        wanted = level.upper()
+        all_lines = [ln for ln in all_lines if f" {wanted}" in ln[:40]]
+
+    tail = all_lines[-max(1, lines):]
+    return {"lines": tail, "available": len(all_lines), "retention_hours": 48}
 
 
 # ─── Static Files (frontend) ─────────────────────────────────────────────────
