@@ -619,21 +619,30 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
       usage[chosen]++;
     });
 
-    // Identify fixture-mate edges so we can enforce them strictly. Fixture
-    // membership is the user's explicit "must be distinct" signal — a
-    // violation here is much worse than a spatial adjacency violation.
+    // Identify strict-distinctness edges. Two cases:
+    //   - Fixture mates: user's explicit "this housing holds multiple
+    //     bulbs that should never match" grouping.
+    //   - Segment siblings: physically-adjacent panels of one multi-segment
+    //     device (e.g. H6061 hexa). Siblings should never share a color.
+    // Both outrank a spatial adjacency conflict — a violation here costs
+    // FIXTURE_VIOL_COST × more in the swap pass and is force-repaired
+    // afterwards.
     const parentKeyOf = (k) => {
       const m = k.match(/^(.+):seg\d+$/);
       return m ? m[1] : k;
     };
+    const isSegmentKey = (k) => /:seg\d+$/.test(k);
     const keyToFixture = {};
     Object.entries(fixtures || {}).forEach(([fid, fix]) => {
       (fix.members || []).forEach(m => { keyToFixture[m] = fid; });
     });
-    const sharedFixture = (a, b) => {
-      const fa = keyToFixture[parentKeyOf(a)];
-      const fb = keyToFixture[parentKeyOf(b)];
-      return fa && fa === fb;
+    const mustBeDistinct = (a, b) => {
+      if (a === b) return false;
+      const pa = parentKeyOf(a), pb = parentKeyOf(b);
+      if (isSegmentKey(a) && isSegmentKey(b) && pa === pb) return true;
+      const fa = keyToFixture[pa];
+      const fb = keyToFixture[pb];
+      return !!(fa && fa === fb);
     };
 
     // Post-pass: greedy local-search swap. The forward pass is myopic —
@@ -646,7 +655,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     const FIXTURE_VIOL_COST = 100;
     const pairCost = (a, b, ca, cb) => {
       if (ca === cb || colorDist(ca, cb) < SIMILARITY_THRESHOLD) {
-        return sharedFixture(a, b) ? FIXTURE_VIOL_COST : 1;
+        return mustBeDistinct(a, b) ? FIXTURE_VIOL_COST : 1;
       }
       return 0;
     };
@@ -690,17 +699,18 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
       assignment[b] = tmp;
     }
 
-    // Final fixture-repair pass. If a fixture-mate pair is still violating
-    // the similarity gate (typical for isolated fixtures where no external
-    // device exists to swap with), force one member to recolor — any palette
-    // color that doesn't violate against its neighbors is accepted, ignoring
-    // global usage balance because fixture correctness outranks balance.
+    // Final strict-distinctness repair pass. If a fixture-mate or
+    // segment-sibling pair still violates the similarity gate (typical for
+    // isolated fixtures and lone hexa devices where no external device
+    // exists to swap with), force one member to recolor — any palette color
+    // that doesn't violate against its neighbors is accepted, ignoring
+    // global usage balance because strict-distinctness outranks balance.
     for (let pass = 0; pass < 8; pass++) {
       let repaired = false;
       for (const a of deviceKeys) {
         for (const b of adj[a] || []) {
           if (a >= b) continue;
-          if (!sharedFixture(a, b)) continue;
+          if (!mustBeDistinct(a, b)) continue;
           const ca = assignment[a], cb = assignment[b];
           if (ca !== cb && colorDist(ca, cb) >= SIMILARITY_THRESHOLD) continue;
           // Try to recolor b first, then a, with any palette color that
