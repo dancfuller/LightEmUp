@@ -846,55 +846,51 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     return result;
   }, [placedColorLights, baseColor, beaconSourceKey, brightness, isLinear]);
 
-  // ─── Custom mode: 1-4 seed colors, lights split into groups along the
-  // direction, each group gets tonal shades of its seed color ──────────
+  // ─── Custom mode: 1-4 seed colors. Each light gets a random
+  // (seed, shade) pair. Adjacency-aware: neighbors prefer a different
+  // seed family. Pure random distribution — no direction concept.
+  // Shuffle re-rolls the assignment so the user can ask for a different
+  // proposal if the current one isn't appealing. ─────────────────────
   const computeCustom = useCallback(() => {
     if (placedColorLights.length === 0 || customColors.length === 0) return null;
-
-    const dirVectors = {
-      "left-right": { dx: 1, dy: 0 },
-      "right-left": { dx: -1, dy: 0 },
-      "top-bottom": { dx: 0, dy: 1 },
-      "bottom-top": { dx: 0, dy: -1 },
-      "center-out": null,
-    };
-
-    const count = placedColorLights.length;
     const M = customColors.length;
+    const SHADES_PER_SEED = 4;
 
-    let sorted;
-    if (direction === "center-out") {
-      const cx = placedColorLights.reduce((s, d) => s + d.x, 0) / count;
-      const cy = placedColorLights.reduce((s, d) => s + d.y, 0) / count;
-      sorted = placedColorLights.map(d => ({
-        key: d.key,
-        proj: Math.sqrt((d.x - cx) ** 2 + (d.y - cy) ** 2),
-      })).sort((a, b) => a.proj - b.proj);
-    } else {
-      const vec = dirVectors[direction];
-      sorted = placedColorLights.map(d => ({
-        key: d.key,
-        proj: d.x * vec.dx + d.y * vec.dy,
-      })).sort((a, b) => a.proj - b.proj);
-    }
+    const shadesBySeed = customColors.map(c =>
+      generateTonalShades(c.r, c.g, c.b, SHADES_PER_SEED)
+    );
 
-    // Distribute lights as evenly as possible across the M seed groups.
+    const adj = buildAdjacency(placedColorLights);
+
+    // Most-constrained first so the hardest devices get picked when the
+    // most seed options are still free.
+    const sorted = [...placedColorLights].sort((a, b) =>
+      (adj[b.key]?.size || 0) - (adj[a.key]?.size || 0)
+    );
+
+    const assignment = {}; // key → { seedIdx, shadeIdx }
+
+    sorted.forEach(d => {
+      const neighborSeeds = new Set();
+      adj[d.key]?.forEach(nk => {
+        if (assignment[nk] !== undefined) neighborSeeds.add(assignment[nk].seedIdx);
+      });
+
+      // Shuffled seed order, then pick first one not used by a neighbor.
+      const order = Array.from({ length: M }, (_, i) => i)
+        .sort(() => Math.random() - 0.5);
+      let seedIdx = order.find(s => !neighborSeeds.has(s));
+      if (seedIdx === undefined) seedIdx = order[0];
+      const shadeIdx = Math.floor(Math.random() * SHADES_PER_SEED);
+      assignment[d.key] = { seedIdx, shadeIdx };
+    });
+
     const result = {};
-    let cursor = 0;
-    for (let g = 0; g < M; g++) {
-      const start = Math.floor(g * count / M);
-      const end = Math.floor((g + 1) * count / M);
-      const size = end - start;
-      if (size === 0) continue;
-      const c = customColors[g];
-      const shades = generateTonalShades(c.r, c.g, c.b, size);
-      for (let i = 0; i < size; i++) {
-        result[sorted[cursor].key] = shades[i];
-        cursor++;
-      }
-    }
+    Object.entries(assignment).forEach(([k, a]) => {
+      result[k] = shadesBySeed[a.seedIdx][a.shadeIdx];
+    });
     return result;
-  }, [placedColorLights, customColors, direction]);
+  }, [placedColorLights, customColors, buildAdjacency]);
 
   // Auto-pick a beacon source when entering Beacon mode or when the layout changes
   // and the current source is no longer placed.
@@ -1697,23 +1693,11 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
           {mode === "custom" && (
             <div>
               <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 8 }}>
-                1-4 of your own colors. Each color is expanded into a tonal range and assigned to a band of lights along the chosen direction.
+                1-4 of your own colors. Each color is expanded into a tonal range; lights are randomly assigned a (seed, shade) pair so neighbors prefer different seed families. Shuffle to re-roll.
               </div>
 
-              <GradientDirectionPicker
-                direction={direction}
-                onDirectionChange={setDirection}
-                availableDirections={availableDirections}
-                placedLights={placedColorLights}
-                layout={layout}
-                preview={preview}
-                lightMap={lightMap}
-                nicknames={nicknames}
-                isLinear={isLinear}
-              />
-
               {/* Color slots */}
-              <div style={{ marginTop: 12, marginBottom: 12 }}>
+              <div style={{ marginBottom: 12 }}>
                 <div style={{ fontSize: 11, color: "#64748b", marginBottom: 6 }}>
                   Seed colors ({customColors.length} of 4):
                 </div>
@@ -1897,7 +1881,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
                 background: "transparent", color: applying ? "#475569" : "#94a3b8",
                 fontSize: 12, fontWeight: 600, cursor: applying ? "not-allowed" : "pointer",
               }}
-            >{mode === "gradient" || mode === "beacon" || mode === "custom" ? "Preview" : "Shuffle"}</button>
+            >{mode === "gradient" || mode === "beacon" ? "Preview" : "Shuffle"}</button>
             <button onClick={applyColors}
               disabled={!preview || applying}
               style={{
