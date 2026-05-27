@@ -1,6 +1,6 @@
 // ─── Light Card Component ───────────────────────────────────────────────────
 
-function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, onNicknameChange, roomName, segmentColors, segmentInfo, segmentBrightness }) {
+function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, onNicknameChange, roomName, segmentColors, segmentInfo, segmentBrightness, onSegmentStateRefresh }) {
   const isMobile = useIsMobile();
   const deviceBrightness = light.type === "hue"
     ? Math.round((light.state?.brightness || 0) / 254 * 100)
@@ -14,6 +14,22 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
   const [lightColor, setLightColor] = useState(() => getInitialColor(light));
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState("");
+  // controlMode = "whole" | "segments". Default depends on whether the
+  // server already has segment state for this device. The toggle is purely
+  // a UI switch — flipping it doesn't push anything to the device. The
+  // device only changes when the user actually adjusts a control.
+  const supportsSegments = light.type !== "hue" && (segmentInfo?.sku_table?.[light.sku]?.count || 0) > 0;
+  const initialMode = (segmentColors && Object.keys(segmentColors).length > 0) ? "segments" : "whole";
+  const [controlMode, setControlMode] = useState(initialMode);
+  const [selectedSegment, setSelectedSegment] = useState(0);
+
+  // Promote to segments mode when segments first appear from the server
+  // (e.g. a ColorMode apply lands while the card is open).
+  useEffect(() => {
+    if (segmentColors && Object.keys(segmentColors).length > 0 && controlMode === "whole" && supportsSegments) {
+      setControlMode("segments");
+    }
+  }, [segmentColors, supportsSegments]);
 
   // Sync state when light prop or segment brightness changes
   useEffect(() => {
@@ -158,17 +174,37 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
       </div>
       {isOn && (
         <>
+          {/* Whole / Segments mode toggle (only for segment-capable devices) */}
+          {supportsSegments && hasColor && (
+            <div style={{
+              display: "flex", gap: 4, marginBottom: 12,
+              background: "#0f172a", borderRadius: 8, padding: 3,
+              border: "1px solid #1e293b",
+            }}>
+              {["whole", "segments"].map(m => (
+                <button
+                  key={m}
+                  onClick={() => setControlMode(m)}
+                  style={{
+                    flex: 1, padding: "6px 10px", borderRadius: 6, border: "none",
+                    background: controlMode === m ? "#6366f1" : "transparent",
+                    color: controlMode === m ? "#fff" : "#94a3b8",
+                    fontSize: 11, fontWeight: 600, cursor: "pointer",
+                  }}
+                >{m === "whole" ? "Whole light" : "Segments"}</button>
+              ))}
+            </div>
+          )}
+
           <Slider
             label="Brightness" value={brightness} min={0} max={100}
             onChange={(v) => {
               setBrightness(v);
               if (light.type === "hue") {
                 onControl(light, { brightness: Math.round(v * 254 / 100) });
-              } else if (hasSegmentColors) {
-                // Device is in segment mode — route through the segments
-                // brightness endpoint so segment colors are preserved. The
-                // whole-device LAN brightness command would knock razer
-                // devices out of segment mode entirely.
+              } else if (controlMode === "segments" && supportsSegments) {
+                // Segment mode: scale segment colors via the segments
+                // brightness endpoint so per-segment colors are preserved.
                 api("/govee/segments-brightness", {
                   method: "POST",
                   body: JSON.stringify({
@@ -178,47 +214,82 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
                   headers: { "Content-Type": "application/json" },
                 }).catch(e => console.warn("[LightCard] segments-brightness failed:", e));
               } else {
+                // Whole-light mode: standard LAN brightness. This clears
+                // server segment state via the control endpoint.
                 onControl(light, { brightness: v });
               }
             }}
             color="#fbbf24" unit="%"
           />
-          {hasColor && (
-            <>
-              {hasSegmentColors && (
-                <div style={{ marginBottom: 10 }}>
-                  <div style={{ fontSize: 10, color: "#64748b", marginBottom: 5 }}>Segment colors:</div>
-                  <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-                    {Array.from({ length: segCount }, (_, i) => {
-                      const c = segmentColors[i];
-                      return (
-                        <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
-                          <div style={{
-                            width: 20, height: 20, borderRadius: 4,
-                            background: c ? `rgb(${c.r},${c.g},${c.b})` : "#1e293b",
-                            border: "1px solid rgba(255,255,255,0.15)",
-                          }} />
-                          <span style={{ fontSize: 8, color: "#64748b" }}>
-                            {String.fromCharCode(65 + i)}
-                          </span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
+
+          {hasColor && controlMode === "whole" && (
+            <ColorPicker
+              size={130}
+              compact={true}
+              currentColor={lightColor}
+              onColorSelect={(r, g, b) => {
+                setLightColor({ r, g, b });
+                onControl(light, { r, g, b });
+              }}
+              favorites={favorites}
+              onFavoritesChange={onFavoritesChange}
+            />
+          )}
+
+          {hasColor && controlMode === "segments" && supportsSegments && (
+            <div>
+              <div style={{ fontSize: 10, color: "#64748b", marginBottom: 6 }}>
+                Tap a segment to edit, then pick a color below
+              </div>
+              <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginBottom: 10 }}>
+                {Array.from({ length: segCount }, (_, i) => {
+                  const c = segmentColors?.[i];
+                  const isSel = i === selectedSegment;
+                  return (
+                    <button key={i}
+                      onClick={() => setSelectedSegment(i)}
+                      style={{
+                        display: "flex", flexDirection: "column", alignItems: "center", gap: 2,
+                        background: "transparent", border: "none", cursor: "pointer", padding: 0,
+                      }}
+                    >
+                      <div style={{
+                        width: 26, height: 26, borderRadius: 6,
+                        background: c ? `rgb(${c.r},${c.g},${c.b})` : "#1e293b",
+                        border: isSel ? "2px solid #a5b4fc" : "1px solid rgba(255,255,255,0.15)",
+                        boxShadow: isSel ? "0 0 8px rgba(165,180,252,0.55)" : "none",
+                        transition: "all 0.12s",
+                      }} />
+                      <span style={{
+                        fontSize: 9, fontWeight: isSel ? 700 : 500,
+                        color: isSel ? "#a5b4fc" : "#64748b",
+                      }}>
+                        {String.fromCharCode(65 + i)}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
               <ColorPicker
                 size={130}
                 compact={true}
-                currentColor={lightColor}
+                currentColor={segmentColors?.[selectedSegment] || lightColor}
                 onColorSelect={(r, g, b) => {
-                  setLightColor({ r, g, b });
-                  onControl(light, { r, g, b });
+                  api("/govee/segment-control", {
+                    method: "POST",
+                    body: JSON.stringify({
+                      ip: light.ip, sku: light.sku, device_mac: light.mac,
+                      segment_idx: selectedSegment, r, g, b,
+                    }),
+                    headers: { "Content-Type": "application/json" },
+                  })
+                    .then(() => onSegmentStateRefresh && onSegmentStateRefresh())
+                    .catch(e => console.warn("[LightCard] segment-control failed:", e));
                 }}
                 favorites={favorites}
                 onFavoritesChange={onFavoritesChange}
               />
-            </>
+            </div>
           )}
         </>
       )}

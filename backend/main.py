@@ -621,14 +621,47 @@ class GoveeSegmentControlRequest(BaseModel):
 
 @app.post("/api/govee/segment-control")
 async def control_govee_segment(req: GoveeSegmentControlRequest):
-    """Control a single segment on a Govee device via the V2 Platform API."""
+    """Control a single segment on a Govee device. Routes by protocol:
+    cloud_v2 → V2 Platform API per-segment. razer → patch the segment in
+    server-side state and re-send the full bulk packet (the razer protocol
+    only accepts all segments at once)."""
+    seg_info = GOVEE_SEGMENT_INFO.get(req.sku)
+    if not seg_info:
+        raise HTTPException(400, f"Unknown SKU {req.sku}")
+    proto = seg_info.get("protocol")
+
+    if proto == "razer":
+        if req.r is None or req.g is None or req.b is None:
+            raise HTTPException(400, "razer segment-control needs r,g,b")
+        count = seg_info.get("count") or 0
+        if count <= 0:
+            raise HTTPException(400, f"razer SKU {req.sku} has no known segment count")
+        if not (0 <= req.segment_idx < count):
+            raise HTTPException(400, f"segment_idx out of range (0..{count-1})")
+        existing = segment_state.get(req.ip)
+        current_colors = list(existing["colors"].values()) if existing else []
+        # Build full list at full brightness from current state, then patch.
+        ordered = []
+        for i in range(count):
+            c = (existing["colors"].get(i) if existing else None) or (0, 0, 0)
+            ordered.append(c)
+        ordered[req.segment_idx] = (
+            max(0, min(255, req.r)), max(0, min(255, req.g)), max(0, min(255, req.b))
+        )
+        brightness = existing["brightness"] if existing else 100
+        scaled = _scale_colors(ordered, brightness)
+        await govee_razer_enable(req.ip)
+        await govee_razer_set_segments(req.ip, scaled)
+        await razer_keeper.apply(req.ip, req.sku, scaled)
+        segment_state.set_bulk(req.ip, ordered, brightness)
+        return {"results": {"color": True}, "protocol": "razer"}
+
+    if proto != "cloud_v2":
+        raise HTTPException(400, f"SKU {req.sku} does not support per-segment control")
+
     api_key = config.get("govee_api_key")
     if not api_key:
         raise HTTPException(400, "No Govee API key configured")
-
-    seg_info = GOVEE_SEGMENT_INFO.get(req.sku)
-    if not seg_info or seg_info.get("protocol") != "cloud_v2":
-        raise HTTPException(400, f"SKU {req.sku} does not support cloud_v2 segment control")
 
     results = {}
     if req.r is not None and req.g is not None and req.b is not None:
@@ -643,7 +676,7 @@ async def control_govee_segment(req: GoveeSegmentControlRequest):
         results["brightness"] = await govee_v2_segment_brightness(
             api_key, req.sku, req.device_mac, req.segment_idx, req.brightness
         )
-    return {"results": results}
+    return {"results": results, "protocol": "cloud_v2"}
 
 
 # ─── Razer-protocol bulk segment apply (LAN) ────────────────────────────────

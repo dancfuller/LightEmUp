@@ -277,6 +277,7 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
                   segmentInfo={segmentInfo}
                   segmentColors={Object.keys(segColors).length > 0 ? segColors : null}
                   segmentBrightness={persistedEntry?.brightness}
+                  onSegmentStateRefresh={onSegmentStateRefresh}
                 />
               );
             })}

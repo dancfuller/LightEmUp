@@ -288,6 +288,14 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
   const [direction, setDirection] = useState("left-right");
   const [brightness, setBrightness] = useState(100); // 0-100%
   const [preview, setPreview] = useState(null); // { deviceKey: {r,g,b}, ... }
+  // addressSegments: "individual" (default) treats each segmented device as
+  // N entries (one per segment, each potentially getting its own color);
+  // "unit" treats the device as a single entry and sends a whole-device
+  // command. The map's per-device expand badge still controls layout
+  // positions when present; otherwise "individual" mode auto-clusters
+  // segments around the device position so gradient/beacon have spatial
+  // variation.
+  const [addressSegments, setAddressSegments] = useState("individual");
 
   // Apply progress state
   const [applying, setApplying] = useState(false);
@@ -324,17 +332,39 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
   const segments = layout?.segments || {};
   const gridSize = layout?.grid_size || 40;
 
-  // Build placed lights list, expanding segments where applicable
+  // Build placed lights list. Three cases per device:
+  //   addressSegments=individual + map has expanded positions → use them
+  //   addressSegments=individual + no positions → auto-cluster N segments
+  //     near the device position so gradient/beacon get spatial variation
+  //   addressSegments=unit                       → single entry at device pos
   const placedColorLights = [];
   Object.entries(devices).forEach(([key, pos]) => {
     const light = lightMap[key];
     if (!light?.capabilities?.has_color) return;
     const segData = segments[key];
-    if (segData?.expanded && segData.positions) {
-      // Expanded: add each segment as its own entry
+    const segCountForDevice = light?.sku ? (segmentInfo?.sku_table?.[light.sku]?.count || 0) : 0;
+    const addressIndividual = addressSegments === "individual" && segCountForDevice > 1;
+
+    if (addressIndividual && segData?.expanded && segData.positions) {
+      // Layout-placed: use explicit positions.
       Object.entries(segData.positions).forEach(([si, sp]) => {
         placedColorLights.push({ key: `${key}:seg${si}`, x: sp.x, y: sp.y, parentKey: key, segIndex: parseInt(si) });
       });
+    } else if (addressIndividual) {
+      // Synthetic cluster: spread N segments horizontally over ~3 grid
+      // units at the device's position. Just enough variation for
+      // gradient/beacon to produce distinct shades.
+      const spread = Math.min(3, segCountForDevice * 0.5);
+      const step = segCountForDevice > 1 ? spread / (segCountForDevice - 1) : 0;
+      for (let i = 0; i < segCountForDevice; i++) {
+        placedColorLights.push({
+          key: `${key}:seg${i}`,
+          x: pos.x - spread / 2 + step * i,
+          y: pos.y,
+          parentKey: key,
+          segIndex: i,
+        });
+      }
     } else {
       placedColorLights.push({ key, x: pos.x, y: pos.y });
     }
@@ -836,7 +866,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     else if (mode === "tonal") setPreview(computeTonal());
     else if (mode === "beacon") setPreview(computeBeacon());
     else setPreview(computePalette());
-  }, [mode, baseColor, direction, paletteColors, hasLayout, layout, fixtures, beaconSourceKey, brightness]);
+  }, [mode, baseColor, direction, paletteColors, hasLayout, layout, fixtures, beaconSourceKey, brightness, addressSegments]);
 
   // ─── Apply colors to lights ─────────────────────────────────────────
   const applyColors = () => {
@@ -1288,7 +1318,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
       border: "1px solid #334155",
     }}>
       {/* Header with mode tabs */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
         <div style={{
           fontSize: 12, fontWeight: 600, color: "#34d399",
           textTransform: "uppercase", letterSpacing: 0.8,
@@ -1310,6 +1340,34 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
           </button>
         </div>
       </div>
+
+      {/* Address-segments toggle. Only shown when this room actually has a
+          segmented device — otherwise it has no effect and is just noise. */}
+      {allLights.some(l => l?.sku && (segmentInfo?.sku_table?.[l.sku]?.count || 0) > 1) && (
+        <div style={{
+          display: "flex", alignItems: "center", gap: 8, marginBottom: 14,
+          padding: "8px 10px", background: "rgba(15,23,42,0.5)",
+          borderRadius: 8, border: "1px solid #1e293b", flexWrap: "wrap",
+        }}>
+          <span style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600 }}>Segmented devices:</span>
+          <div style={{ display: "flex", gap: 4, background: "#0f172a", borderRadius: 6, padding: 2 }}>
+            {[
+              { key: "individual", label: "Address individually" },
+              { key: "unit", label: "Address as a unit" },
+            ].map(opt => (
+              <button key={opt.key}
+                onClick={() => setAddressSegments(opt.key)}
+                style={{
+                  padding: "5px 10px", borderRadius: 5, border: "none",
+                  background: addressSegments === opt.key ? "#6366f1" : "transparent",
+                  color: addressSegments === opt.key ? "#fff" : "#94a3b8",
+                  fontSize: 11, fontWeight: 600, cursor: "pointer",
+                }}
+              >{opt.label}</button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {!hasLayout && (
         <div style={{ fontSize: 12, color: "#64748b", padding: "12px 0" }}>
