@@ -264,7 +264,12 @@ function BeaconSourcePicker({ sourceKey, onSourceChange, placedLights, layout, p
 
 function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlGovee, favorites, onFavoritesChange, nicknames, segmentInfo, roomLayouts, fixtures, onApply }) {
   const isMobile = useIsMobile();
-  const [mode, setMode] = useState("gradient"); // "gradient" | "tonal" | "palette" | "beacon"
+  const [mode, setMode] = useState("gradient"); // "gradient" | "tonal" | "palette" | "beacon" | "custom"
+  // customColors: 1-4 user-chosen seed colors. Custom mode divides the
+  // lights into N groups along the direction and assigns tonal shades of
+  // each seed to its group.
+  const [customColors, setCustomColors] = useState([{ r: 60, g: 100, b: 255 }]);
+  const [editingCustomIdx, setEditingCustomIdx] = useState(null);
   const [beaconSourceKey, setBeaconSourceKey] = useState(null);
   const [baseColor, setBaseColor] = useState({ r: 40, g: 180, b: 80 });
   // paletteColors = visible/active subset of paletteSource.
@@ -841,6 +846,56 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     return result;
   }, [placedColorLights, baseColor, beaconSourceKey, brightness, isLinear]);
 
+  // ─── Custom mode: 1-4 seed colors, lights split into groups along the
+  // direction, each group gets tonal shades of its seed color ──────────
+  const computeCustom = useCallback(() => {
+    if (placedColorLights.length === 0 || customColors.length === 0) return null;
+
+    const dirVectors = {
+      "left-right": { dx: 1, dy: 0 },
+      "right-left": { dx: -1, dy: 0 },
+      "top-bottom": { dx: 0, dy: 1 },
+      "bottom-top": { dx: 0, dy: -1 },
+      "center-out": null,
+    };
+
+    const count = placedColorLights.length;
+    const M = customColors.length;
+
+    let sorted;
+    if (direction === "center-out") {
+      const cx = placedColorLights.reduce((s, d) => s + d.x, 0) / count;
+      const cy = placedColorLights.reduce((s, d) => s + d.y, 0) / count;
+      sorted = placedColorLights.map(d => ({
+        key: d.key,
+        proj: Math.sqrt((d.x - cx) ** 2 + (d.y - cy) ** 2),
+      })).sort((a, b) => a.proj - b.proj);
+    } else {
+      const vec = dirVectors[direction];
+      sorted = placedColorLights.map(d => ({
+        key: d.key,
+        proj: d.x * vec.dx + d.y * vec.dy,
+      })).sort((a, b) => a.proj - b.proj);
+    }
+
+    // Distribute lights as evenly as possible across the M seed groups.
+    const result = {};
+    let cursor = 0;
+    for (let g = 0; g < M; g++) {
+      const start = Math.floor(g * count / M);
+      const end = Math.floor((g + 1) * count / M);
+      const size = end - start;
+      if (size === 0) continue;
+      const c = customColors[g];
+      const shades = generateTonalShades(c.r, c.g, c.b, size);
+      for (let i = 0; i < size; i++) {
+        result[sorted[cursor].key] = shades[i];
+        cursor++;
+      }
+    }
+    return result;
+  }, [placedColorLights, customColors, direction]);
+
   // Auto-pick a beacon source when entering Beacon mode or when the layout changes
   // and the current source is no longer placed.
   useEffect(() => {
@@ -856,6 +911,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     if (mode === "gradient") setPreview(computeGradient());
     else if (mode === "tonal") setPreview(computeTonal());
     else if (mode === "beacon") setPreview(computeBeacon());
+    else if (mode === "custom") setPreview(computeCustom());
     else setPreview(computePalette());
   };
 
@@ -865,8 +921,9 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     if (mode === "gradient") setPreview(computeGradient());
     else if (mode === "tonal") setPreview(computeTonal());
     else if (mode === "beacon") setPreview(computeBeacon());
+    else if (mode === "custom") setPreview(computeCustom());
     else setPreview(computePalette());
-  }, [mode, baseColor, direction, paletteColors, hasLayout, layout, fixtures, beaconSourceKey, brightness, addressSegments]);
+  }, [mode, baseColor, direction, paletteColors, customColors, hasLayout, layout, fixtures, beaconSourceKey, brightness, addressSegments]);
 
   // ─── Apply colors to lights ─────────────────────────────────────────
   const applyColors = () => {
@@ -1325,7 +1382,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
         }}>
           Color Mode
         </div>
-        <div style={{ display: "flex", gap: 6 }}>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
           <button onClick={() => setMode("gradient")} style={btnStyle(mode === "gradient")}>
             Gradient
           </button>
@@ -1334,6 +1391,9 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
           </button>
           <button onClick={() => setMode("palette")} style={btnStyle(mode === "palette")}>
             Palette
+          </button>
+          <button onClick={() => setMode("custom")} style={btnStyle(mode === "custom")}>
+            Custom
           </button>
           <button onClick={() => setMode("beacon")} style={btnStyle(mode === "beacon")}>
             Beacon
@@ -1633,6 +1693,106 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
             </div>
           )}
 
+          {/* ─── Custom mode ─────────────────────────────────────── */}
+          {mode === "custom" && (
+            <div>
+              <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 8 }}>
+                1-4 of your own colors. Each color is expanded into a tonal range and assigned to a band of lights along the chosen direction.
+              </div>
+
+              <GradientDirectionPicker
+                direction={direction}
+                onDirectionChange={setDirection}
+                availableDirections={availableDirections}
+                placedLights={placedColorLights}
+                layout={layout}
+                preview={preview}
+                lightMap={lightMap}
+                nicknames={nicknames}
+                isLinear={isLinear}
+              />
+
+              {/* Color slots */}
+              <div style={{ marginTop: 12, marginBottom: 12 }}>
+                <div style={{ fontSize: 11, color: "#64748b", marginBottom: 6 }}>
+                  Seed colors ({customColors.length} of 4):
+                </div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                  {customColors.map((c, idx) => {
+                    const isEditing = editingCustomIdx === idx;
+                    const isFirst = idx === 0;
+                    return (
+                      <div key={idx} style={{ position: "relative" }}>
+                        <button
+                          onClick={() => setEditingCustomIdx(isEditing ? null : idx)}
+                          style={{
+                            width: 40, height: 40, borderRadius: 8,
+                            background: `rgb(${c.r},${c.g},${c.b})`,
+                            border: isEditing ? "2px solid #a5b4fc" : "2px solid rgba(255,255,255,0.15)",
+                            cursor: "pointer", padding: 0,
+                          }}
+                          title={`Slot ${idx + 1}`}
+                        />
+                        {!isFirst && (
+                          <button
+                            onClick={() => {
+                              setCustomColors(prev => prev.filter((_, i) => i !== idx));
+                              setEditingCustomIdx(null);
+                            }}
+                            style={{
+                              position: "absolute", top: -6, right: -6,
+                              width: 18, height: 18, borderRadius: 9,
+                              background: "#0f172a", color: "#f87171",
+                              border: "1px solid #334155", cursor: "pointer",
+                              fontSize: 11, fontWeight: 700, lineHeight: 1,
+                              padding: 0,
+                            }}
+                            title="Remove slot"
+                          >×</button>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {customColors.length < 4 && (
+                    <button
+                      onClick={() => {
+                        const last = customColors[customColors.length - 1];
+                        setCustomColors(prev => [...prev, { ...last }]);
+                        setEditingCustomIdx(customColors.length);
+                      }}
+                      style={{
+                        width: 40, height: 40, borderRadius: 8,
+                        background: "transparent", color: "#a5b4fc",
+                        border: "2px dashed #475569", cursor: "pointer",
+                        fontSize: 20, fontWeight: 700, padding: 0,
+                      }}
+                      title="Add color slot"
+                    >+</button>
+                  )}
+                </div>
+              </div>
+
+              {/* Picker for the selected slot */}
+              {editingCustomIdx !== null && customColors[editingCustomIdx] && (
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ fontSize: 11, color: "#64748b", marginBottom: 4 }}>
+                    Editing slot {editingCustomIdx + 1}:
+                  </div>
+                  <ColorPicker
+                    size={120}
+                    currentColor={customColors[editingCustomIdx]}
+                    onColorSelect={(r, g, b) => {
+                      setCustomColors(prev => prev.map((c, i) => i === editingCustomIdx ? { r, g, b } : c));
+                    }}
+                    favorites={favorites}
+                    onFavoritesChange={onFavoritesChange}
+                    compact={true}
+                  />
+                </div>
+              )}
+            </div>
+          )}
+
           {/* ─── Beacon mode ─────────────────────────────────────── */}
           {mode === "beacon" && (
             <div>
@@ -1737,7 +1897,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
                 background: "transparent", color: applying ? "#475569" : "#94a3b8",
                 fontSize: 12, fontWeight: 600, cursor: applying ? "not-allowed" : "pointer",
               }}
-            >{mode === "gradient" || mode === "beacon" ? "Preview" : "Shuffle"}</button>
+            >{mode === "gradient" || mode === "beacon" || mode === "custom" ? "Preview" : "Shuffle"}</button>
             <button onClick={applyColors}
               disabled={!preview || applying}
               style={{
