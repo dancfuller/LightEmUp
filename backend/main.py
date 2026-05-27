@@ -61,6 +61,8 @@ DEFAULT_CONFIG = {
     },
     "ui_prefs": {       # UI-only preferences shared across browsers
         "color_picker_style": "huebar",  # "huebar" | "wheel"
+        "min_saturation_enabled": True,  # clamp generated colors to a floor
+        "min_saturation_pct": 35,        # 0..100; saturation in HSL terms
     },
 }
 
@@ -958,6 +960,8 @@ async def set_device_modes_bulk(req: DeviceModesBulkRequest):
 
 class UiPrefsRequest(BaseModel):
     color_picker_style: Optional[str] = None  # "huebar" | "wheel"
+    min_saturation_enabled: Optional[bool] = None
+    min_saturation_pct: Optional[int] = None
 
 
 @app.post("/api/ui-prefs")
@@ -966,6 +970,10 @@ async def set_ui_prefs(req: UiPrefsRequest):
         config["ui_prefs"] = {}
     if req.color_picker_style in ("huebar", "wheel"):
         config["ui_prefs"]["color_picker_style"] = req.color_picker_style
+    if req.min_saturation_enabled is not None:
+        config["ui_prefs"]["min_saturation_enabled"] = bool(req.min_saturation_enabled)
+    if req.min_saturation_pct is not None:
+        config["ui_prefs"]["min_saturation_pct"] = max(0, min(100, req.min_saturation_pct))
     save_config(config)
     return {"success": True, "ui_prefs": config["ui_prefs"]}
 

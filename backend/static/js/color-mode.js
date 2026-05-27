@@ -262,7 +262,27 @@ function BeaconSourcePicker({ sourceKey, onSourceChange, placedLights, layout, p
   );
 }
 
-function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlGovee, favorites, onFavoritesChange, nicknames, segmentInfo, roomLayouts, fixtures, onApply }) {
+// Boost an RGB color so its HSL saturation is at least minS (0..1). Used
+// to keep generated palette/gradient/etc colors from being so washed-out
+// they read as "white with a tint" on the lights.
+function clampSaturation(c, minS) {
+  if (!c) return c;
+  const { h, s, l } = rgbToHsl(c.r, c.g, c.b);
+  if (s >= minS) return c;
+  const boosted = hslToRgb(h, minS, l);
+  // Preserve any extra fields (e.g. beacon's per-entry brightness).
+  return { ...c, r: boosted.r, g: boosted.g, b: boosted.b };
+}
+
+function applyMinSat(preview, enabled, pct) {
+  if (!preview || !enabled) return preview;
+  const minS = Math.max(0, Math.min(1, (pct || 0) / 100));
+  const out = {};
+  Object.entries(preview).forEach(([k, v]) => { out[k] = clampSaturation(v, minS); });
+  return out;
+}
+
+function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlGovee, favorites, onFavoritesChange, nicknames, segmentInfo, roomLayouts, fixtures, onApply, minSatEnabled, minSatPct }) {
   const isMobile = useIsMobile();
   const [mode, setMode] = useState("palette"); // "palette" | "gradient" | "tonal" | "custom" | "beacon"
   // customColors: 1-4 user-chosen seed colors. Custom mode randomly
@@ -908,23 +928,22 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
   }, [mode, layout, fixtures]);
 
   // ─── Generate preview ───────────────────────────────────────────────
+  const computeForMode = () => {
+    if (mode === "gradient") return computeGradient();
+    if (mode === "tonal") return computeTonal();
+    if (mode === "beacon") return computeBeacon();
+    if (mode === "custom") return computeCustom();
+    return computePalette();
+  };
   const generatePreview = () => {
-    if (mode === "gradient") setPreview(computeGradient());
-    else if (mode === "tonal") setPreview(computeTonal());
-    else if (mode === "beacon") setPreview(computeBeacon());
-    else if (mode === "custom") setPreview(computeCustom());
-    else setPreview(computePalette());
+    setPreview(applyMinSat(computeForMode(), minSatEnabled, minSatPct));
   };
 
   // Auto-generate preview when inputs change
   useEffect(() => {
     if (!hasLayout) return;
-    if (mode === "gradient") setPreview(computeGradient());
-    else if (mode === "tonal") setPreview(computeTonal());
-    else if (mode === "beacon") setPreview(computeBeacon());
-    else if (mode === "custom") setPreview(computeCustom());
-    else setPreview(computePalette());
-  }, [mode, baseColor, direction, paletteColors, customColors, customShadeMode, hasLayout, layout, fixtures, beaconSourceKey, brightness, addressSegments]);
+    setPreview(applyMinSat(computeForMode(), minSatEnabled, minSatPct));
+  }, [mode, baseColor, direction, paletteColors, customColors, customShadeMode, hasLayout, layout, fixtures, beaconSourceKey, brightness, addressSegments, minSatEnabled, minSatPct]);
 
   // ─── Apply colors to lights ─────────────────────────────────────────
   const applyColors = () => {

@@ -1,6 +1,6 @@
 // ─── Room Section ──────────────────────────────────────────────────────────
 
-function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGovee, onControlRoom, favorites, onFavoritesChange, nicknames, onNicknameChange, lightningActive, onLightningStart, onLightningStop, segmentInfo, segmentState, onSegmentStateRefresh, deviceModes, onDeviceModeChange, onDeviceModesBulkChange, roomLayouts, onLayoutChange, fixtures, onFixtureUpsert, onFixtureDelete }) {
+function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGovee, onControlRoom, favorites, onFavoritesChange, nicknames, onNicknameChange, lightningActive, onLightningStart, onLightningStop, segmentInfo, segmentState, onSegmentStateRefresh, deviceModes, onDeviceModeChange, onDeviceModesBulkChange, roomLayouts, onLayoutChange, fixtures, onFixtureUpsert, onFixtureDelete, minSatEnabled, minSatPct }) {
   const isMobile = useIsMobile();
   const [collapsed, setCollapsed] = useState(true);
   const [showRoomControls, setShowRoomControls] = useState(false);
@@ -256,6 +256,8 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
             segmentInfo={segmentInfo}
             roomLayouts={roomLayouts}
             fixtures={fixtures}
+            minSatEnabled={minSatEnabled}
+            minSatPct={minSatPct}
             onApply={(applied, addressMode) => {
               setColorModeApplied(applied);
               // After the apply pipeline finishes (~4-15s depending on
