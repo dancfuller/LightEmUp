@@ -1,5 +1,77 @@
 // ─── Shared Color Picker & Controls ────────────────────────────────────────
 
+// HueBar: a single-row horizontal hue strip (ROYGBIV). Click or drag to
+// pick a hue at full saturation and 50% lightness. Compact alternative to
+// the full ColorPicker when you only need a primary hue and don't care
+// about tinting/shading. Returns full RGB via onChange.
+function HueBar({ currentColor, onChange, height = 22 }) {
+  const ref = useRef(null);
+  const draggingRef = useRef(false);
+
+  const pickAt = (clientX) => {
+    const el = ref.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const t = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    const rgb = hslToRgb(t, 1, 0.5);
+    onChange(rgb);
+  };
+
+  const onDown = (e) => {
+    draggingRef.current = true;
+    pickAt(e.touches ? e.touches[0].clientX : e.clientX);
+    e.preventDefault();
+  };
+  const onMove = (e) => {
+    if (!draggingRef.current) return;
+    pickAt(e.touches ? e.touches[0].clientX : e.clientX);
+  };
+  const onUp = () => { draggingRef.current = false; };
+
+  useEffect(() => {
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    window.addEventListener("touchmove", onMove, { passive: false });
+    window.addEventListener("touchend", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("touchmove", onMove);
+      window.removeEventListener("touchend", onUp);
+    };
+  }, []);
+
+  // Compute thumb position from currentColor's hue.
+  const { h } = currentColor
+    ? rgbToHsl(currentColor.r, currentColor.g, currentColor.b)
+    : { h: 0 };
+
+  return (
+    <div
+      ref={ref}
+      onMouseDown={onDown}
+      onTouchStart={onDown}
+      style={{
+        flex: 1, height, borderRadius: height / 2, position: "relative",
+        cursor: "pointer", userSelect: "none",
+        background: "linear-gradient(to right, "
+          + "hsl(0,100%,50%), hsl(30,100%,50%), hsl(60,100%,50%), "
+          + "hsl(120,100%,50%), hsl(180,100%,50%), hsl(240,100%,50%), "
+          + "hsl(275,100%,50%), hsl(300,100%,50%), hsl(360,100%,50%))",
+        border: "1px solid rgba(255,255,255,0.1)",
+      }}
+    >
+      <div style={{
+        position: "absolute", top: -2, bottom: -2,
+        left: `${h * 100}%`, width: 4, transform: "translateX(-2px)",
+        background: "#fff", borderRadius: 2,
+        boxShadow: "0 0 4px rgba(0,0,0,0.6), 0 0 0 1px rgba(0,0,0,0.4)",
+        pointerEvents: "none",
+      }} />
+    </div>
+  );
+}
+
 function RgbSliderInput({ label, value, onChange, color }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>

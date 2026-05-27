@@ -265,11 +265,13 @@ function BeaconSourcePicker({ sourceKey, onSourceChange, placedLights, layout, p
 function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlGovee, favorites, onFavoritesChange, nicknames, segmentInfo, roomLayouts, fixtures, onApply }) {
   const isMobile = useIsMobile();
   const [mode, setMode] = useState("gradient"); // "gradient" | "tonal" | "palette" | "beacon" | "custom"
-  // customColors: 1-4 user-chosen seed colors. Custom mode divides the
-  // lights into N groups along the direction and assigns tonal shades of
-  // each seed to its group.
+  // customColors: 1-4 user-chosen seed colors. Custom mode randomly
+  // assigns each light a (seed, shade) pair with adjacency preference,
+  // or — when customShadeMode === "exact" — assigns each light exactly
+  // one of the seed colors with no shading.
   const [customColors, setCustomColors] = useState([{ r: 60, g: 100, b: 255 }]);
   const [editingCustomIdx, setEditingCustomIdx] = useState(null);
+  const [customShadeMode, setCustomShadeMode] = useState("shades"); // "shades" | "exact"
   const [beaconSourceKey, setBeaconSourceKey] = useState(null);
   const [baseColor, setBaseColor] = useState({ r: 40, g: 180, b: 80 });
   // paletteColors = visible/active subset of paletteSource.
@@ -854,10 +856,13 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
   const computeCustom = useCallback(() => {
     if (placedColorLights.length === 0 || customColors.length === 0) return null;
     const M = customColors.length;
-    const SHADES_PER_SEED = 4;
+    const exact = customShadeMode === "exact";
+    const SHADES_PER_SEED = exact ? 1 : 4;
 
+    // In "exact" mode each seed contributes only itself (one shade).
+    // In "shades" mode we generate a tonal range per seed.
     const shadesBySeed = customColors.map(c =>
-      generateTonalShades(c.r, c.g, c.b, SHADES_PER_SEED)
+      exact ? [c] : generateTonalShades(c.r, c.g, c.b, SHADES_PER_SEED)
     );
 
     const adj = buildAdjacency(placedColorLights);
@@ -890,7 +895,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
       result[k] = shadesBySeed[a.seedIdx][a.shadeIdx];
     });
     return result;
-  }, [placedColorLights, customColors, buildAdjacency]);
+  }, [placedColorLights, customColors, customShadeMode, buildAdjacency]);
 
   // Auto-pick a beacon source when entering Beacon mode or when the layout changes
   // and the current source is no longer placed.
@@ -919,7 +924,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     else if (mode === "beacon") setPreview(computeBeacon());
     else if (mode === "custom") setPreview(computeCustom());
     else setPreview(computePalette());
-  }, [mode, baseColor, direction, paletteColors, customColors, hasLayout, layout, fixtures, beaconSourceKey, brightness, addressSegments]);
+  }, [mode, baseColor, direction, paletteColors, customColors, customShadeMode, hasLayout, layout, fixtures, beaconSourceKey, brightness, addressSegments]);
 
   // ─── Apply colors to lights ─────────────────────────────────────────
   const applyColors = () => {
@@ -1692,88 +1697,85 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
           {/* ─── Custom mode ─────────────────────────────────────── */}
           {mode === "custom" && (
             <div>
-              <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 8 }}>
-                1-4 of your own colors. Each color is expanded into a tonal range; lights are randomly assigned a (seed, shade) pair so neighbors prefer different seed families. Shuffle to re-roll.
+              <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 10 }}>
+                1-4 of your own colors. Lights are randomly assigned a seed so neighbors prefer different families. Shuffle to re-roll.
               </div>
 
-              {/* Color slots */}
-              <div style={{ marginBottom: 12 }}>
-                <div style={{ fontSize: 11, color: "#64748b", marginBottom: 6 }}>
-                  Seed colors ({customColors.length} of 4):
-                </div>
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                  {customColors.map((c, idx) => {
-                    const isEditing = editingCustomIdx === idx;
-                    const isFirst = idx === 0;
-                    return (
-                      <div key={idx} style={{ position: "relative" }}>
-                        <button
-                          onClick={() => setEditingCustomIdx(isEditing ? null : idx)}
-                          style={{
-                            width: 40, height: 40, borderRadius: 8,
-                            background: `rgb(${c.r},${c.g},${c.b})`,
-                            border: isEditing ? "2px solid #a5b4fc" : "2px solid rgba(255,255,255,0.15)",
-                            cursor: "pointer", padding: 0,
-                          }}
-                          title={`Slot ${idx + 1}`}
-                        />
-                        {!isFirst && (
-                          <button
-                            onClick={() => {
-                              setCustomColors(prev => prev.filter((_, i) => i !== idx));
-                              setEditingCustomIdx(null);
-                            }}
-                            style={{
-                              position: "absolute", top: -6, right: -6,
-                              width: 18, height: 18, borderRadius: 9,
-                              background: "#0f172a", color: "#f87171",
-                              border: "1px solid #334155", cursor: "pointer",
-                              fontSize: 11, fontWeight: 700, lineHeight: 1,
-                              padding: 0,
-                            }}
-                            title="Remove slot"
-                          >×</button>
-                        )}
-                      </div>
-                    );
-                  })}
-                  {customColors.length < 4 && (
-                    <button
-                      onClick={() => {
-                        const last = customColors[customColors.length - 1];
-                        setCustomColors(prev => [...prev, { ...last }]);
-                        setEditingCustomIdx(customColors.length);
-                      }}
-                      style={{
-                        width: 40, height: 40, borderRadius: 8,
-                        background: "transparent", color: "#a5b4fc",
-                        border: "2px dashed #475569", cursor: "pointer",
-                        fontSize: 20, fontWeight: 700, padding: 0,
-                      }}
-                      title="Add color slot"
-                    >+</button>
-                  )}
-                </div>
-              </div>
-
-              {/* Picker for the selected slot */}
-              {editingCustomIdx !== null && customColors[editingCustomIdx] && (
-                <div style={{ marginBottom: 12 }}>
-                  <div style={{ fontSize: 11, color: "#64748b", marginBottom: 4 }}>
-                    Editing slot {editingCustomIdx + 1}:
-                  </div>
-                  <ColorPicker
-                    size={120}
-                    currentColor={customColors[editingCustomIdx]}
-                    onColorSelect={(r, g, b) => {
-                      setCustomColors(prev => prev.map((c, i) => i === editingCustomIdx ? { r, g, b } : c));
+              {/* Exact vs Shades toggle */}
+              <div style={{
+                display: "flex", gap: 4, marginBottom: 12,
+                background: "#0f172a", borderRadius: 8, padding: 3,
+                border: "1px solid #1e293b",
+              }}>
+                {[
+                  { key: "shades", label: "Create shades" },
+                  { key: "exact", label: "Use exact seed colors" },
+                ].map(opt => (
+                  <button key={opt.key}
+                    onClick={() => setCustomShadeMode(opt.key)}
+                    style={{
+                      flex: 1, padding: "6px 10px", borderRadius: 6, border: "none",
+                      background: customShadeMode === opt.key ? "#6366f1" : "transparent",
+                      color: customShadeMode === opt.key ? "#fff" : "#94a3b8",
+                      fontSize: 11, fontWeight: 600, cursor: "pointer",
                     }}
-                    favorites={favorites}
-                    onFavoritesChange={onFavoritesChange}
-                    compact={true}
-                  />
-                </div>
-              )}
+                  >{opt.label}</button>
+                ))}
+              </div>
+
+              {/* Color slots — each row: swatch | hue bar | RGB triple | × */}
+              <div style={{ fontSize: 11, color: "#64748b", marginBottom: 6 }}>
+                Seed colors ({customColors.length} of 4):
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 12 }}>
+                {customColors.map((c, idx) => (
+                  <div key={idx} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <div style={{
+                      width: 26, height: 26, borderRadius: 6, flexShrink: 0,
+                      background: `rgb(${c.r},${c.g},${c.b})`,
+                      border: "1px solid rgba(255,255,255,0.2)",
+                    }} />
+                    <HueBar
+                      currentColor={c}
+                      onChange={(rgb) => {
+                        setCustomColors(prev => prev.map((cc, i) => i === idx ? rgb : cc));
+                      }}
+                    />
+                    <span style={{
+                      fontSize: 10, color: "#94a3b8", fontFamily: "monospace",
+                      minWidth: 92, textAlign: "right", flexShrink: 0,
+                    }}>R:{c.r} G:{c.g} B:{c.b}</span>
+                    {idx > 0 && (
+                      <button
+                        onClick={() => setCustomColors(prev => prev.filter((_, i) => i !== idx))}
+                        style={{
+                          width: 22, height: 22, borderRadius: 11,
+                          background: "transparent", color: "#f87171",
+                          border: "1px solid #7f1d1d", cursor: "pointer",
+                          fontSize: 12, fontWeight: 700, lineHeight: 1,
+                          padding: 0, flexShrink: 0,
+                        }}
+                        title="Remove slot"
+                      >×</button>
+                    )}
+                  </div>
+                ))}
+                {customColors.length < 4 && (
+                  <button
+                    onClick={() => {
+                      const last = customColors[customColors.length - 1];
+                      setCustomColors(prev => [...prev, { ...last }]);
+                    }}
+                    style={{
+                      alignSelf: "flex-start",
+                      padding: "5px 12px", borderRadius: 6,
+                      background: "transparent", color: "#a5b4fc",
+                      border: "1px dashed #475569", cursor: "pointer",
+                      fontSize: 11, fontWeight: 600,
+                    }}
+                  >+ Add color</button>
+                )}
+              </div>
             </div>
           )}
 
