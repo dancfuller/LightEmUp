@@ -54,6 +54,9 @@ function App() {
   // deviceModes: persisted LightCard preference per device_key.
   // "whole" or "segments". Loaded from config, updated on toggle.
   const [deviceModes, setDeviceModes] = useState({});
+  // pickerStyle: "huebar" (default) or "wheel". Provided via context to
+  // every ColorPicker so the user's choice applies everywhere.
+  const [pickerStyle, setPickerStyle] = useState("huebar");
 
   const updateFavorites = (newFavs) => {
     setFavoriteColors(newFavs);
@@ -81,6 +84,7 @@ function App() {
       setRoomLayouts(cfg.room_layouts || {});
       setFixtures(cfg.fixtures || {});
       setDeviceModes(cfg.device_modes || {});
+      setPickerStyle(cfg.ui_prefs?.color_picker_style === "wheel" ? "wheel" : "huebar");
 
       const promises = [
         api("/discover/govee").catch(() => ({ devices: [] })),
@@ -118,6 +122,18 @@ function App() {
   // Fetch version once on boot — cheap, doesn't change without a restart.
   useEffect(() => {
     api("/version").then(setVersionInfo).catch(() => {});
+  }, []);
+
+  const updatePickerStyle = useCallback(async (style) => {
+    setPickerStyle(style);
+    try {
+      await api("/ui-prefs", {
+        method: "POST",
+        body: JSON.stringify({ color_picker_style: style }),
+      });
+    } catch (e) {
+      console.warn("Failed to save picker style:", e);
+    }
   }, []);
 
   const updateDeviceMode = useCallback(async (deviceKey, mode) => {
@@ -366,6 +382,7 @@ function App() {
   const unassignedGovee = goveeDevices.filter(d => !Object.values(rooms).some(r => (r.govee_devices || []).includes(d.ip)));
 
   return (
+    <PickerStyleContext.Provider value={pickerStyle}>
     <div style={{
       minHeight: "100vh",
       background: "linear-gradient(180deg, #0a0f1e 0%, #0f172a 50%, #0a0f1e 100%)",
@@ -695,6 +712,33 @@ function App() {
                 <div style={{ fontSize: 12, color: "#64748b", fontStyle: "italic" }}>No devices found — enable LAN Control in Govee Home app and re-scan</div>
               )}
             </div>
+            {/* UI preferences */}
+            <div style={{ background: "#1e293b", borderRadius: 16, padding: 20, border: "1px solid #334155", marginBottom: 16 }}>
+              <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 12, color: "#e2e8f0" }}>Interface</h3>
+              <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 12, color: "#94a3b8", fontWeight: 600 }}>Color selection:</span>
+                <div style={{ display: "flex", gap: 4, background: "#0f172a", borderRadius: 8, padding: 3, border: "1px solid #1e293b" }}>
+                  {[
+                    { key: "huebar", label: "Hue Bar" },
+                    { key: "wheel", label: "Color Wheel" },
+                  ].map(opt => (
+                    <button key={opt.key}
+                      onClick={() => updatePickerStyle(opt.key)}
+                      style={{
+                        padding: "6px 12px", borderRadius: 6, border: "none",
+                        background: pickerStyle === opt.key ? "#6366f1" : "transparent",
+                        color: pickerStyle === opt.key ? "#fff" : "#94a3b8",
+                        fontSize: 12, fontWeight: 600, cursor: "pointer",
+                      }}
+                    >{opt.label}</button>
+                  ))}
+                </div>
+              </div>
+              <div style={{ fontSize: 11, color: "#64748b", marginTop: 8 }}>
+                Hue Bar is compact and skips low-saturation greys. Color Wheel covers the full HSL space if you need pastel/desaturated colors.
+              </div>
+            </div>
+
             <div style={{ background: "#1e293b", borderRadius: 16, padding: 20, border: "1px solid #334155", marginBottom: 16 }}>
               <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 12, color: "#e2e8f0" }}>About</h3>
               <div style={{ fontSize: 13, color: "#94a3b8" }}>
@@ -776,6 +820,7 @@ function App() {
       )}
       </main>
     </div>
+    </PickerStyleContext.Provider>
   );
 }
 

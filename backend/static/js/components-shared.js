@@ -106,6 +106,7 @@ function RgbSliderInput({ label, value, onChange, color }) {
 }
 
 function ColorPicker({ size = 140, currentColor, onColorSelect, favorites, onFavoritesChange, compact = false }) {
+  const pickerStyle = useContext(PickerStyleContext); // "huebar" | "wheel"
   const [mode, setMode] = useState("wheel"); // "wheel" | "rgb" | "favorites"
   const [localR, setLocalR] = useState(currentColor?.r ?? 255);
   const [localG, setLocalG] = useState(currentColor?.g ?? 180);
@@ -166,7 +167,9 @@ function ColorPicker({ size = 140, currentColor, onColorSelect, favorites, onFav
         display: "flex", gap: 2, marginBottom: 10, padding: 2,
         background: "#0f172a", borderRadius: 8,
       }}>
-        <button style={tabStyle(mode === "wheel")} onClick={() => setMode("wheel")}>Wheel</button>
+        <button style={tabStyle(mode === "wheel")} onClick={() => setMode("wheel")}>
+          {pickerStyle === "huebar" ? "Hue" : "Wheel"}
+        </button>
         <button style={tabStyle(mode === "rgb")} onClick={() => setMode("rgb")}>RGB</button>
         <button style={tabStyle(mode === "favorites")} onClick={() => setMode("favorites")}>
           Favorites{favorites.length > 0 ? ` (${favorites.length})` : ""}
@@ -198,8 +201,18 @@ function ColorPicker({ size = 140, currentColor, onColorSelect, favorites, onFav
         )}
       </div>
 
-      {/* Wheel mode */}
-      {mode === "wheel" && (
+      {/* Wheel mode — either the full wheel or the compact HueBar,
+          depending on the user's Settings preference. */}
+      {mode === "wheel" && pickerStyle === "huebar" && (
+        <div style={{ padding: "4px 2px 2px 2px" }}>
+          <HueBar
+            currentColor={{ r: localR, g: localG, b: localB }}
+            onChange={({ r, g, b }) => handleWheelPick(r, g, b)}
+            height={compact ? 22 : 28}
+          />
+        </div>
+      )}
+      {mode === "wheel" && pickerStyle !== "huebar" && (
         <div style={{ display: "flex", justifyContent: "center" }}>
           <ColorWheel size={size} onColorSelect={handleWheelPick} />
         </div>

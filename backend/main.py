@@ -59,6 +59,9 @@ DEFAULT_CONFIG = {
     "known_devices": {  # devices we've seen before; surface as "missing" when absent
         "govee": {},    # keyed by MAC: { mac: { ip, sku, name, last_seen } }
     },
+    "ui_prefs": {       # UI-only preferences shared across browsers
+        "color_picker_style": "huebar",  # "huebar" | "wheel"
+    },
 }
 
 
@@ -949,6 +952,22 @@ async def set_device_modes_bulk(req: DeviceModesBulkRequest):
             config["device_modes"][k] = v
     save_config(config)
     return {"success": True, "device_modes": config["device_modes"]}
+
+
+# ─── UI Preferences ─────────────────────────────────────────────────────────
+
+class UiPrefsRequest(BaseModel):
+    color_picker_style: Optional[str] = None  # "huebar" | "wheel"
+
+
+@app.post("/api/ui-prefs")
+async def set_ui_prefs(req: UiPrefsRequest):
+    if "ui_prefs" not in config:
+        config["ui_prefs"] = {}
+    if req.color_picker_style in ("huebar", "wheel"):
+        config["ui_prefs"]["color_picker_style"] = req.color_picker_style
+    save_config(config)
+    return {"success": True, "ui_prefs": config["ui_prefs"]}
 
 
 # ─── Room Layout Endpoints ──────────────────────────────────────────────────

@@ -1,7 +1,12 @@
 // ─── React Hooks & API ──────────────────────────────────────────────────────
-const { useState, useEffect, useCallback, useRef } = React;
+const { useState, useEffect, useCallback, useRef, useContext, createContext } = React;
 
 const API = "/api";
+
+// PickerStyleContext: controls whether ColorPicker's "Wheel" tab renders
+// the full ColorWheel or the compact HueBar. Provider lives at the App
+// root; the user toggles it in Settings. Default "huebar".
+const PickerStyleContext = createContext("huebar");
 
 // ─── Responsive Helper ──────────────────────────────────────────────────────
 // Matches portrait-mode phones (iPhone 17 ~402px, Galaxy S26 ~384px).
