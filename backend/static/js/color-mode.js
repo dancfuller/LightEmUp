@@ -264,7 +264,7 @@ function BeaconSourcePicker({ sourceKey, onSourceChange, placedLights, layout, p
 
 function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlGovee, favorites, onFavoritesChange, nicknames, segmentInfo, roomLayouts, fixtures, onApply }) {
   const isMobile = useIsMobile();
-  const [mode, setMode] = useState("gradient"); // "gradient" | "tonal" | "palette" | "beacon" | "custom"
+  const [mode, setMode] = useState("palette"); // "palette" | "gradient" | "tonal" | "custom" | "beacon"
   // customColors: 1-4 user-chosen seed colors. Custom mode randomly
   // assigns each light a (seed, shade) pair with adjacency preference,
   // or — when customShadeMode === "exact" — assigns each light exactly
@@ -1384,14 +1384,14 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
           Color Mode
         </div>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          <button onClick={() => setMode("palette")} style={btnStyle(mode === "palette")}>
+            Palette
+          </button>
           <button onClick={() => setMode("gradient")} style={btnStyle(mode === "gradient")}>
             Gradient
           </button>
           <button onClick={() => setMode("tonal")} style={btnStyle(mode === "tonal")}>
             Tonal
-          </button>
-          <button onClick={() => setMode("palette")} style={btnStyle(mode === "palette")}>
-            Palette
           </button>
           <button onClick={() => setMode("custom")} style={btnStyle(mode === "custom")}>
             Custom

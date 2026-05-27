@@ -5,9 +5,11 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
   const [collapsed, setCollapsed] = useState(true);
   const [showRoomControls, setShowRoomControls] = useState(false);
   const [showLightning, setShowLightning] = useState(false);
-  const [showMap, setShowMap] = useState(false);
   const [showColor, setShowColor] = useState(false);
   const [showDebug, setShowDebug] = useState(false);
+  // Map moved inside Room Controls as a collapsible subsection, default
+  // closed. The Map tab in the header was removed for de-cluttering.
+  const [mapExpanded, setMapExpanded] = useState(false);
   const [roomBrightness, setRoomBrightness] = useState(75);
   const [roomColor, setRoomColor] = useState(null);
   const [colorModeApplied, setColorModeApplied] = useState(null);
@@ -72,18 +74,6 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
             &#x26A1; {lightningActive ? "Storm" : (isMobile ? "" : "Lightning")}
           </button>
           <button
-            onClick={() => { const opening = !showMap; setShowMap(opening); if (opening) { setCollapsed(false); setShowLightning(false); setShowRoomControls(false); } }}
-            style={{
-              padding: isMobile ? "6px 10px" : "6px 14px", borderRadius: 8, border: "1px solid #334155",
-              background: showMap ? "rgba(52,211,153,0.15)" : "transparent",
-              color: showMap ? "#34d399" : "#94a3b8",
-              fontSize: isMobile ? 11 : 12, fontWeight: 600, cursor: "pointer", transition: "all 0.2s",
-              whiteSpace: "nowrap",
-            }}
-          >
-            Map
-          </button>
-          <button
             onClick={() => { const opening = !showColor; setShowColor(opening); if (opening) { setCollapsed(false); setShowLightning(false); setShowRoomControls(false); } }}
             style={{
               padding: isMobile ? "6px 10px" : "6px 14px", borderRadius: 8, border: "1px solid #334155",
@@ -109,7 +99,7 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
           </button>
           {anySegmented && (
             <button
-              onClick={() => { const opening = !showDebug; setShowDebug(opening); if (opening) { setCollapsed(false); setShowLightning(false); setShowRoomControls(false); setShowMap(false); setShowColor(false); } }}
+              onClick={() => { const opening = !showDebug; setShowDebug(opening); if (opening) { setCollapsed(false); setShowLightning(false); setShowRoomControls(false); setShowColor(false); } }}
               title="Segment reset debug — compare V1 LAN vs V2 reset strategies"
               style={{
                 padding: isMobile ? "6px 10px" : "6px 14px", borderRadius: 8, border: "1px dashed #475569",
@@ -157,11 +147,73 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
             borderRadius: 16, padding: 20, marginBottom: 16,
             border: "1px solid #334155",
           }}>
+            {/* Collapsible Map subsection — first item, collapsed by default. */}
             <div style={{
-              fontSize: 12, fontWeight: 600, color: "#a5b4fc", marginBottom: 14,
-              textTransform: "uppercase", letterSpacing: 0.8,
+              marginBottom: mapExpanded ? 16 : 12,
+              border: "1px solid #1e293b", borderRadius: 12, overflow: "hidden",
             }}>
-              Override all lights in {name}
+              <button
+                onClick={() => setMapExpanded(!mapExpanded)}
+                style={{
+                  width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
+                  padding: "10px 14px", background: mapExpanded ? "rgba(52,211,153,0.10)" : "transparent",
+                  border: "none", cursor: "pointer", color: mapExpanded ? "#34d399" : "#94a3b8",
+                  fontSize: 12, fontWeight: 700, letterSpacing: 0.6, textTransform: "uppercase",
+                }}
+              >
+                <span>Map</span>
+                <span style={{
+                  fontSize: 11, transform: mapExpanded ? "rotate(0deg)" : "rotate(-90deg)",
+                  transition: "transform 0.15s",
+                }}>&#x25BC;</span>
+              </button>
+              {mapExpanded && (
+                <div style={{ padding: 12, borderTop: "1px solid #1e293b" }}>
+                  <RoomMap
+                    roomName={name}
+                    segmentState={segmentState}
+                    hueLights={hueLights} goveeDevices={goveeDevices}
+                    onControlHue={onControlHue} onControlGovee={onControlGovee}
+                    favorites={favorites} onFavoritesChange={onFavoritesChange}
+                    nicknames={nicknames} onNicknameChange={onNicknameChange}
+                    segmentInfo={segmentInfo}
+                    roomLayouts={roomLayouts} onLayoutChange={onLayoutChange}
+                    appliedColors={colorModeApplied}
+                    fixtures={fixtures}
+                    onFixtureUpsert={onFixtureUpsert}
+                    onFixtureDelete={onFixtureDelete}
+                  />
+                </div>
+              )}
+            </div>
+
+            {/* Override header + on/off toggle */}
+            <div style={{
+              display: "flex", justifyContent: "space-between", alignItems: "center",
+              marginBottom: 14, gap: 8, flexWrap: "wrap",
+            }}>
+              <div style={{
+                fontSize: 12, fontWeight: 600, color: "#a5b4fc",
+                textTransform: "uppercase", letterSpacing: 0.8,
+              }}>
+                Override all lights in {name}
+              </div>
+              <button
+                onClick={() => onControlRoom(name, { on: !anyOn })}
+                style={{
+                  width: 48, height: 28, borderRadius: 14, border: "none",
+                  background: anyOn ? "#6366f1" : "#334155",
+                  cursor: "pointer", position: "relative", transition: "background 0.2s",
+                  flexShrink: 0,
+                }}
+                title={anyOn ? "Turn all off" : "Turn all on"}
+              >
+                <div style={{
+                  width: 22, height: 22, borderRadius: "50%", background: "#fff",
+                  position: "absolute", top: 3,
+                  left: anyOn ? 23 : 3, transition: "left 0.2s ease",
+                }} />
+              </button>
             </div>
 
             <Slider
@@ -231,29 +283,11 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
           />
         )}
 
-        {/* Room Map */}
-        {showMap && (
-          <RoomMap
-            roomName={name}
-            segmentState={segmentState}
-            hueLights={hueLights} goveeDevices={goveeDevices}
-            onControlHue={onControlHue} onControlGovee={onControlGovee}
-            favorites={favorites} onFavoritesChange={onFavoritesChange}
-            nicknames={nicknames} onNicknameChange={onNicknameChange}
-            segmentInfo={segmentInfo}
-            roomLayouts={roomLayouts} onLayoutChange={onLayoutChange}
-            appliedColors={colorModeApplied}
-            fixtures={fixtures}
-            onFixtureUpsert={onFixtureUpsert}
-            onFixtureDelete={onFixtureDelete}
-          />
-        )}
-
-        {/* Individual light cards */}
-        {!showMap && (
-          <div style={{
-            display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fill, minmax(260px, 1fr))", gap: 12,
-          }}>
+        {/* Individual light cards — always visible when the room is open;
+            Map now lives inside Room Controls. */}
+        <div style={{
+          display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fill, minmax(260px, 1fr))", gap: 12,
+        }}>
             {allLights.map((light, i) => {
               const devKey = light.type === "hue" ? `hue:${light.id}` : `govee:${light.ip}`;
               // Merge: this-session apply (colorModeApplied) takes precedence
@@ -298,8 +332,7 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
                 />
               );
             })}
-          </div>
-        )}
+        </div>
       </React.Fragment>)}
     </div>
   );
