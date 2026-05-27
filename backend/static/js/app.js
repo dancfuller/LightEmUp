@@ -824,7 +824,7 @@ function App() {
                   </div>
                 )}
                 <div style={{ fontSize: 11, color: "#64748b", marginTop: 8 }}>
-                  When enabled, every color produced by Palette, Gradient, Tonal, Beacon, and Custom modes is boosted to at least this HSL saturation. Keeps washed-out near-white shades out of generated scenes.
+                  When enabled, every color produced by Palette, Gradient, Tonal, Beacon, and Custom modes is pushed toward this minimum perceptual saturation (S × (1 − 2·|L − ½|), the HSV-style measure). Keeps washed-out near-white shades out of generated scenes.
                 </div>
               </div>
             </div>

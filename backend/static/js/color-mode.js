@@ -262,15 +262,24 @@ function BeaconSourcePicker({ sourceKey, onSourceChange, placedLights, layout, p
   );
 }
 
-// Boost an RGB color so its HSL saturation is at least minS (0..1). Used
-// to keep generated palette/gradient/etc colors from being so washed-out
-// they read as "white with a tint" on the lights.
+// Boost an RGB color so its *effective* saturation is at least minS (0..1).
+// HSL saturation alone is misleading: HSL(240, 100%, 90%) is technically
+// 100% saturated but reads as washed-out pale blue. We measure effective
+// saturation as S × (1 − 2·|L − ½|) — equivalent to HSV saturation when
+// the color is bright — so the floor filters out near-white shades the way
+// a user would expect. When the floor isn't met we set S=1 and pull L
+// toward 0.5 just far enough to satisfy it, preserving the original side
+// of 0.5 (so a "darker" shade stays darker, just less black).
 function clampSaturation(c, minS) {
   if (!c) return c;
   const { h, s, l } = rgbToHsl(c.r, c.g, c.b);
-  if (s >= minS) return c;
-  const boosted = hslToRgb(h, minS, l);
-  // Preserve any extra fields (e.g. beacon's per-entry brightness).
+  const eff = s * (1 - 2 * Math.abs(l - 0.5));
+  if (eff >= minS) return c;
+  const maxLDelta = (1 - minS) / 2; // distance from 0.5 that still passes at S=1
+  const newL = l >= 0.5
+    ? Math.min(l, 0.5 + maxLDelta)
+    : Math.max(l, 0.5 - maxLDelta);
+  const boosted = hslToRgb(h, 1.0, newL);
   return { ...c, r: boosted.r, g: boosted.g, b: boosted.b };
 }
 
