@@ -458,24 +458,51 @@ function App() {
             }} />
             Hue {config?.hue_paired ? "" : "(Setup)"}
           </button>
-          <button
-            onClick={() => setActiveTab("settings")}
-            style={{
-              display: "inline-flex", alignItems: "center", gap: 6,
-              padding: "4px 12px", borderRadius: 20, border: "none", cursor: "pointer",
-              background: goveeDevices.length > 0 ? "rgba(74,222,128,0.15)" : "rgba(248,113,113,0.15)",
-              color: goveeDevices.length > 0 ? "#4ade80" : "#f87171",
-              fontSize: 12, fontWeight: 600, letterSpacing: 0.5,
-            }}
-            title={goveeDevices.length > 0 ? `${goveeDevices.length} Govee devices found` : "Click to open Govee settings"}
-          >
-            <span style={{
-              width: 7, height: 7, borderRadius: "50%",
-              background: goveeDevices.length > 0 ? "#4ade80" : "#f87171",
-              boxShadow: goveeDevices.length > 0 ? "0 0 6px #4ade80" : "none",
-            }} />
-            Govee ({goveeDevices.length})
-          </button>
+          {(() => {
+            // Three states for the Govee badge:
+            //   missing > 0  → amber: some known devices didn't answer
+            //   found > 0    → green: all known devices online
+            //   none         → red:   nothing on the network
+            const found = goveeDevices.length;
+            const missing = missingGovee.length;
+            const known = found + missing;
+            const state = missing > 0 ? "missing" : (found > 0 ? "ok" : "none");
+            const palette = {
+              ok:      { bg: "rgba(74,222,128,0.15)",  fg: "#4ade80", dot: "#4ade80", glow: "0 0 6px #4ade80" },
+              missing: { bg: "rgba(251,191,36,0.18)",  fg: "#fbbf24", dot: "#fbbf24", glow: "0 0 6px #fbbf24" },
+              none:    { bg: "rgba(248,113,113,0.15)", fg: "#f87171", dot: "#f87171", glow: "none" },
+            }[state];
+            const label = state === "missing" ? `Govee (${found}/${known})` : `Govee (${found})`;
+            const titleText = state === "missing"
+              ? `${found} of ${known} known Govee devices online — ${missing} missing`
+              : (state === "ok" ? `${found} Govee devices found` : "Click to open Govee settings");
+            return (
+              <button
+                onClick={() => setActiveTab("settings")}
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: 6,
+                  padding: "4px 12px", borderRadius: 20, border: "none", cursor: "pointer",
+                  background: palette.bg, color: palette.fg,
+                  fontSize: 12, fontWeight: 600, letterSpacing: 0.5,
+                }}
+                title={titleText}
+              >
+                <span style={{
+                  width: 7, height: 7, borderRadius: "50%",
+                  background: palette.dot, boxShadow: palette.glow,
+                  animation: state === "missing" ? "pulse 1.8s ease-in-out infinite" : "none",
+                }} />
+                {label}
+                {state === "missing" && (
+                  <span style={{
+                    marginLeft: 2, padding: "0 6px", borderRadius: 8,
+                    background: "rgba(251,191,36,0.25)", color: "#fbbf24",
+                    fontSize: 10, fontWeight: 700,
+                  }}>!{missing}</span>
+                )}
+              </button>
+            );
+          })()}
         </div>
       </header>
 
