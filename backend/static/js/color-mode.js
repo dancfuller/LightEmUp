@@ -1041,7 +1041,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     }, phase2Start);
 
     // Notify map so it updates dot colors and clears Identify active state
-    if (onApply) onApply(preview);
+    if (onApply) onApply(preview, addressSegments);
   };
 
   // ─── Palette color management ───────────────────────────────────────

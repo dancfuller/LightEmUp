@@ -1,6 +1,6 @@
 // ─── Light Card Component ───────────────────────────────────────────────────
 
-function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, onNicknameChange, roomName, segmentColors, segmentInfo, segmentBrightness, onSegmentStateRefresh }) {
+function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, onNicknameChange, roomName, segmentColors, segmentInfo, segmentBrightness, onSegmentStateRefresh, controlMode, onControlModeChange }) {
   const isMobile = useIsMobile();
   const deviceBrightness = light.type === "hue"
     ? Math.round((light.state?.brightness || 0) / 254 * 100)
@@ -14,22 +14,16 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
   const [lightColor, setLightColor] = useState(() => getInitialColor(light));
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState("");
-  // controlMode = "whole" | "segments". Default depends on whether the
-  // server already has segment state for this device. The toggle is purely
-  // a UI switch — flipping it doesn't push anything to the device. The
-  // device only changes when the user actually adjusts a control.
+  // controlMode comes from the parent (persisted per device_key). Falls
+  // back to "segments" when the server already has segment state for this
+  // device, else "whole". The toggle is purely a UI switch — flipping it
+  // doesn't push anything to the device. The device only changes when
+  // the user actually adjusts a control.
   const supportsSegments = light.type !== "hue" && (segmentInfo?.sku_table?.[light.sku]?.count || 0) > 0;
-  const initialMode = (segmentColors && Object.keys(segmentColors).length > 0) ? "segments" : "whole";
-  const [controlMode, setControlMode] = useState(initialMode);
+  const hasInitialSegmentState = segmentColors && Object.keys(segmentColors).length > 0;
+  const effectiveMode = controlMode || (hasInitialSegmentState ? "segments" : "whole");
+  const setControlMode = (m) => onControlModeChange && onControlModeChange(m);
   const [selectedSegment, setSelectedSegment] = useState(0);
-
-  // Promote to segments mode when segments first appear from the server
-  // (e.g. a ColorMode apply lands while the card is open).
-  useEffect(() => {
-    if (segmentColors && Object.keys(segmentColors).length > 0 && controlMode === "whole" && supportsSegments) {
-      setControlMode("segments");
-    }
-  }, [segmentColors, supportsSegments]);
 
   // Sync state when light prop or segment brightness changes
   useEffect(() => {
@@ -172,37 +166,40 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
           }} />
         </button>
       </div>
+
+      {/* Whole / Segments mode toggle — outside the isOn gate so the user
+          can switch modes while the light is off (e.g. set up segments
+          before turning the device on). */}
+      {supportsSegments && hasColor && (
+        <div style={{
+          display: "flex", gap: 4, marginBottom: 12,
+          background: "#0f172a", borderRadius: 8, padding: 3,
+          border: "1px solid #1e293b",
+        }}>
+          {["whole", "segments"].map(m => (
+            <button
+              key={m}
+              onClick={() => setControlMode(m)}
+              style={{
+                flex: 1, padding: "6px 10px", borderRadius: 6, border: "none",
+                background: effectiveMode === m ? "#6366f1" : "transparent",
+                color: effectiveMode === m ? "#fff" : "#94a3b8",
+                fontSize: 11, fontWeight: 600, cursor: "pointer",
+              }}
+            >{m === "whole" ? "Whole light" : "Segments"}</button>
+          ))}
+        </div>
+      )}
+
       {isOn && (
         <>
-          {/* Whole / Segments mode toggle (only for segment-capable devices) */}
-          {supportsSegments && hasColor && (
-            <div style={{
-              display: "flex", gap: 4, marginBottom: 12,
-              background: "#0f172a", borderRadius: 8, padding: 3,
-              border: "1px solid #1e293b",
-            }}>
-              {["whole", "segments"].map(m => (
-                <button
-                  key={m}
-                  onClick={() => setControlMode(m)}
-                  style={{
-                    flex: 1, padding: "6px 10px", borderRadius: 6, border: "none",
-                    background: controlMode === m ? "#6366f1" : "transparent",
-                    color: controlMode === m ? "#fff" : "#94a3b8",
-                    fontSize: 11, fontWeight: 600, cursor: "pointer",
-                  }}
-                >{m === "whole" ? "Whole light" : "Segments"}</button>
-              ))}
-            </div>
-          )}
-
           <Slider
             label="Brightness" value={brightness} min={0} max={100}
             onChange={(v) => {
               setBrightness(v);
               if (light.type === "hue") {
                 onControl(light, { brightness: Math.round(v * 254 / 100) });
-              } else if (controlMode === "segments" && supportsSegments) {
+              } else if (effectiveMode === "segments" && supportsSegments) {
                 // Segment mode: scale segment colors via the segments
                 // brightness endpoint so per-segment colors are preserved.
                 api("/govee/segments-brightness", {
@@ -222,7 +219,7 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
             color="#fbbf24" unit="%"
           />
 
-          {hasColor && controlMode === "whole" && (
+          {hasColor && effectiveMode === "whole" && (
             <ColorPicker
               size={130}
               compact={true}
@@ -236,7 +233,7 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
             />
           )}
 
-          {hasColor && controlMode === "segments" && supportsSegments && (
+          {hasColor && effectiveMode === "segments" && supportsSegments && (
             <div>
               <div style={{ fontSize: 10, color: "#64748b", marginBottom: 6 }}>
                 Tap a segment to edit, then pick a color below

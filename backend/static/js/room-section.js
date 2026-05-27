@@ -1,6 +1,6 @@
 // ─── Room Section ──────────────────────────────────────────────────────────
 
-function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGovee, onControlRoom, favorites, onFavoritesChange, nicknames, onNicknameChange, lightningActive, onLightningStart, onLightningStop, segmentInfo, segmentState, onSegmentStateRefresh, roomLayouts, onLayoutChange, fixtures, onFixtureUpsert, onFixtureDelete }) {
+function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGovee, onControlRoom, favorites, onFavoritesChange, nicknames, onNicknameChange, lightningActive, onLightningStart, onLightningStop, segmentInfo, segmentState, onSegmentStateRefresh, deviceModes, onDeviceModeChange, onDeviceModesBulkChange, roomLayouts, onLayoutChange, fixtures, onFixtureUpsert, onFixtureDelete }) {
   const isMobile = useIsMobile();
   const [collapsed, setCollapsed] = useState(true);
   const [showRoomControls, setShowRoomControls] = useState(false);
@@ -204,13 +204,28 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
             segmentInfo={segmentInfo}
             roomLayouts={roomLayouts}
             fixtures={fixtures}
-            onApply={(applied) => {
+            onApply={(applied, addressMode) => {
               setColorModeApplied(applied);
               // After the apply pipeline finishes (~4-15s depending on
               // device mix), pull fresh segment state so other views
               // (room map, page reload) reflect what the server stored.
               if (onSegmentStateRefresh) {
                 setTimeout(onSegmentStateRefresh, 5000);
+              }
+              // Sync each segmented device's per-light mode to match the
+              // scene's addressSegments choice. Without this, the user
+              // would have to manually flip every LightCard toggle to
+              // match what they just applied at the room level.
+              if (addressMode && onDeviceModesBulkChange) {
+                const targetMode = addressMode === "individual" ? "segments" : "whole";
+                const updates = {};
+                goveeDevices.forEach(d => {
+                  const segCount = segmentInfo?.sku_table?.[d.sku]?.count || 0;
+                  if (segCount > 1) updates[`govee:${d.ip}`] = targetMode;
+                });
+                if (Object.keys(updates).length > 0) {
+                  onDeviceModesBulkChange(updates);
+                }
               }
             }}
           />
@@ -278,6 +293,8 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
                   segmentColors={Object.keys(segColors).length > 0 ? segColors : null}
                   segmentBrightness={persistedEntry?.brightness}
                   onSegmentStateRefresh={onSegmentStateRefresh}
+                  controlMode={deviceModes?.[devKey]}
+                  onControlModeChange={(m) => onDeviceModeChange && onDeviceModeChange(devKey, m)}
                 />
               );
             })}

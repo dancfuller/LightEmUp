@@ -45,6 +45,9 @@ function App() {
   const [segmentState, setSegmentState] = useState({});
   const [roomLayouts, setRoomLayouts] = useState({});
   const [fixtures, setFixtures] = useState({});
+  // deviceModes: persisted LightCard preference per device_key.
+  // "whole" or "segments". Loaded from config, updated on toggle.
+  const [deviceModes, setDeviceModes] = useState({});
 
   const updateFavorites = (newFavs) => {
     setFavoriteColors(newFavs);
@@ -71,6 +74,7 @@ function App() {
       setNicknames(cfg.nicknames || {});
       setRoomLayouts(cfg.room_layouts || {});
       setFixtures(cfg.fixtures || {});
+      setDeviceModes(cfg.device_modes || {});
 
       const promises = [
         api("/discover/govee").catch(() => ({ devices: [] })),
@@ -103,6 +107,31 @@ function App() {
   }, []);
 
   useEffect(() => { loadAll(); }, [loadAll]);
+
+  const updateDeviceMode = useCallback(async (deviceKey, mode) => {
+    setDeviceModes(prev => ({ ...prev, [deviceKey]: mode }));
+    try {
+      await api("/device-modes", {
+        method: "POST",
+        body: JSON.stringify({ device_key: deviceKey, mode }),
+      });
+    } catch (e) {
+      console.warn("Failed to save device mode:", e);
+    }
+  }, []);
+
+  const updateDeviceModesBulk = useCallback(async (modes) => {
+    if (!modes || Object.keys(modes).length === 0) return;
+    setDeviceModes(prev => ({ ...prev, ...modes }));
+    try {
+      await api("/device-modes/bulk", {
+        method: "POST",
+        body: JSON.stringify({ modes }),
+      });
+    } catch (e) {
+      console.warn("Failed to save device modes bulk:", e);
+    }
+  }, []);
 
   const refreshSegmentState = useCallback(async () => {
     try {
@@ -417,6 +446,9 @@ function App() {
                   segmentInfo={segmentInfo}
                   segmentState={segmentState}
                   onSegmentStateRefresh={refreshSegmentState}
+                  deviceModes={deviceModes}
+                  onDeviceModeChange={updateDeviceMode}
+                  onDeviceModesBulkChange={updateDeviceModesBulk}
                   roomLayouts={roomLayouts}
                   onLayoutChange={handleLayoutChange}
                   fixtures={fixtures}

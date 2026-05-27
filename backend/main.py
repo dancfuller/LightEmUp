@@ -54,6 +54,7 @@ DEFAULT_CONFIG = {
     "nicknames": {},
     "room_layouts": {},
     "fixtures": {},  # fixture_id → { name, members: [device_key, ...] }
+    "device_modes": {},  # device_key → "whole" | "segments" (LightCard preference)
 }
 
 
@@ -860,6 +861,42 @@ async def set_nickname(req: NicknameRequest):
 @app.get("/api/nicknames")
 async def get_nicknames():
     return {"nicknames": config.get("nicknames", {})}
+
+
+# ─── Device Mode Endpoints ─────────────────────────────────────────────────
+# Per-device LightCard preference: "whole" (single color) or "segments"
+# (per-panel control). Persisted in config.json so the toggle remembers
+# what the user picked.
+
+class DeviceModeRequest(BaseModel):
+    device_key: str
+    mode: str  # "whole" | "segments"
+
+
+class DeviceModesBulkRequest(BaseModel):
+    modes: dict  # { device_key: mode, ... }
+
+
+@app.post("/api/device-modes")
+async def set_device_mode(req: DeviceModeRequest):
+    if req.mode not in ("whole", "segments"):
+        raise HTTPException(400, "mode must be 'whole' or 'segments'")
+    if "device_modes" not in config:
+        config["device_modes"] = {}
+    config["device_modes"][req.device_key] = req.mode
+    save_config(config)
+    return {"success": True}
+
+
+@app.post("/api/device-modes/bulk")
+async def set_device_modes_bulk(req: DeviceModesBulkRequest):
+    if "device_modes" not in config:
+        config["device_modes"] = {}
+    for k, v in req.modes.items():
+        if v in ("whole", "segments"):
+            config["device_modes"][k] = v
+    save_config(config)
+    return {"success": True, "device_modes": config["device_modes"]}
 
 
 # ─── Room Layout Endpoints ──────────────────────────────────────────────────
