@@ -13,14 +13,14 @@ deployed Pi's actual build is easy to confirm from the browser.
 import subprocess
 from pathlib import Path
 
-__version__ = "0.3.0"
+__version__ = "1.0.0"
 
 
-def _git_hash() -> str:
-    """Short HEAD hash of the repo this file lives in. Empty on failure."""
+def _git(args: list[str]) -> str:
+    """Run a git command in the repo root, return stripped stdout or empty."""
     try:
         result = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
+            ["git", *args],
             cwd=Path(__file__).parent.parent,
             capture_output=True, text=True, timeout=2,
         )
@@ -32,10 +32,18 @@ def _git_hash() -> str:
 
 
 # Cache at import time — we don't want a subprocess on every request.
-GIT_HASH = _git_hash()
+GIT_HASH = _git(["rev-parse", "--short", "HEAD"])
+# %cs = committer date in ISO short form (YYYY-MM-DD).
+GIT_DATE = _git(["log", "-1", "--format=%cs", "HEAD"])
 
 
 def version_string() -> str:
+    parts = [f"v{__version__}"]
+    extras = []
     if GIT_HASH:
-        return f"v{__version__} ({GIT_HASH})"
-    return f"v{__version__}"
+        extras.append(GIT_HASH)
+    if GIT_DATE:
+        extras.append(GIT_DATE)
+    if extras:
+        parts.append(f"({' · '.join(extras)})")
+    return " ".join(parts)

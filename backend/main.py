@@ -41,7 +41,7 @@ from discovery import (
 )
 from scenes import scene_manager, LightningSettings
 from razer_keeper import razer_keeper
-from version import __version__ as APP_VERSION, GIT_HASH, version_string
+from version import __version__ as APP_VERSION, GIT_HASH, GIT_DATE, version_string
 import segment_state
 
 # ─── Config ──────────────────────────────────────────────────────────────────
@@ -1009,8 +1009,13 @@ async def server_restart():
 
 @app.get("/api/version")
 async def get_version():
-    """Return the running build's version + short git hash."""
-    return {"version": APP_VERSION, "git_hash": GIT_HASH, "display": version_string()}
+    """Return the running build's version + short git hash + commit date."""
+    return {
+        "version": APP_VERSION,
+        "git_hash": GIT_HASH,
+        "git_date": GIT_DATE,
+        "display": version_string(),
+    }
 
 
 @app.get("/api/logs")
