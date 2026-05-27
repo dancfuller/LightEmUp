@@ -33,6 +33,7 @@ function App() {
   const [activeTab, setActiveTab] = useState("rooms");
   const [showHueSetup, setShowHueSetup] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
+  const [versionInfo, setVersionInfo] = useState(null);
   const [favoriteColors, setFavoriteColors] = useState(() => loadFavoriteColors());
   const [nicknames, setNicknames] = useState({});
   const [refreshing, setRefreshing] = useState(false);
@@ -107,6 +108,11 @@ function App() {
   }, []);
 
   useEffect(() => { loadAll(); }, [loadAll]);
+
+  // Fetch version once on boot — cheap, doesn't change without a restart.
+  useEffect(() => {
+    api("/version").then(setVersionInfo).catch(() => {});
+  }, []);
 
   const updateDeviceMode = useCallback(async (deviceKey, mode) => {
     setDeviceModes(prev => ({ ...prev, [deviceKey]: mode }));
@@ -610,7 +616,9 @@ function App() {
             </div>
             <div style={{ background: "#1e293b", borderRadius: 16, padding: 20, border: "1px solid #334155", marginBottom: 16 }}>
               <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 12, color: "#e2e8f0" }}>About</h3>
-              <div style={{ fontSize: 13, color: "#94a3b8" }}>LightEmUp v0.1.0</div>
+              <div style={{ fontSize: 13, color: "#94a3b8" }}>
+                LightEmUp {versionInfo?.display || "(loading...)"}
+              </div>
               <div style={{ fontSize: 13, color: "#64748b", marginTop: 4 }}>Hue (Zigbee) + Govee (LAN) unified controller</div>
             </div>
             <div style={{ background: "#1e293b", borderRadius: 16, padding: 20, border: "1px solid #334155" }}>
