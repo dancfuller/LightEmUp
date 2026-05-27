@@ -43,11 +43,14 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
 
   return (
     <div style={{ marginBottom: 32 }}>
-      {/* Room header */}
+      {/* Room header — name on top, action buttons always on a row below.
+          Previously a single space-between flex row, which left button
+          placement at the mercy of viewport width + label length and
+          looked inconsistent across rooms. */}
       <div style={{
-        display: "flex", justifyContent: "space-between", alignItems: "center",
+        display: "flex", flexDirection: "column",
         marginBottom: 4, paddingBottom: 12, borderBottom: "1px solid #1e293b",
-        flexWrap: "wrap", gap: 8,
+        gap: 10,
       }}>
         <div
           onClick={() => setCollapsed(!collapsed)}
