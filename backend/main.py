@@ -56,6 +56,9 @@ DEFAULT_CONFIG = {
     "room_layouts": {},
     "fixtures": {},  # fixture_id → { name, members: [device_key, ...] }
     "device_modes": {},  # device_key → "whole" | "segments" (LightCard preference)
+    "known_devices": {  # devices we've seen before; surface as "missing" when absent
+        "govee": {},    # keyed by MAC: { mac: { ip, sku, name, last_seen } }
+    },
 }
 
 
@@ -235,7 +238,14 @@ async def pair_hue(req: HuePairRequest):
 
 @app.get("/api/discover/govee")
 async def discover_govee():
-    """Discover Govee devices via LAN and fetch their current state."""
+    """Discover Govee devices via LAN and fetch their current state.
+
+    Also tracks every device we've ever seen in config.known_devices.govee
+    (keyed by MAC) and reports any known devices that are currently absent
+    so the UI can flag them. Removing a device from the known list is via
+    DELETE /api/govee/known/{mac}.
+    """
+    from datetime import date
     devices = await discover_govee_lan()
 
     # Fetch state for each device sequentially (they all share port 4002)
@@ -255,7 +265,48 @@ async def discover_govee():
         except Exception:
             dev["state"] = {"on": False, "brightness": 0, "reachable": False}
 
-    return {"devices": devices}
+    # Upsert seen devices into the known set and compute the missing list.
+    if "known_devices" not in config:
+        config["known_devices"] = {"govee": {}}
+    if "govee" not in config["known_devices"]:
+        config["known_devices"]["govee"] = {}
+    known = config["known_devices"]["govee"]
+    today = date.today().isoformat()
+    seen_macs = set()
+    config_changed = False
+    for dev in devices:
+        mac = dev.get("mac") or dev.get("ip")
+        if not mac:
+            continue
+        seen_macs.add(mac)
+        prior = known.get(mac, {})
+        new_entry = {
+            "mac": mac,
+            "ip": dev.get("ip"),
+            "sku": dev.get("sku"),
+            "name": dev.get("name"),
+            "last_seen": today,
+        }
+        if prior != new_entry:
+            known[mac] = new_entry
+            config_changed = True
+
+    missing = [entry for mac, entry in known.items() if mac not in seen_macs]
+    if config_changed:
+        save_config(config)
+
+    return {"devices": devices, "missing": missing}
+
+
+@app.delete("/api/govee/known/{mac:path}")
+async def remove_known_govee(mac: str):
+    """Forget a known Govee device so it no longer surfaces as missing."""
+    known = config.get("known_devices", {}).get("govee", {})
+    if mac in known:
+        del known[mac]
+        save_config(config)
+        return {"success": True, "removed": mac}
+    return {"success": False, "reason": "not found"}
 
 
 @app.get("/api/discover/govee/cloud")

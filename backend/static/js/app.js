@@ -27,6 +27,11 @@ function App() {
   const [hueLights, setHueLights] = useState([]);
   const [hueGroups, setHueGroups] = useState([]);
   const [goveeDevices, setGoveeDevices] = useState([]);
+  // missingGovee: devices we've seen before that are not in the latest scan.
+  // Surfaced in Settings → Govee Devices as greyed-out rows with an X
+  // (forget) button. Re-scan is the section's main Re-scan button.
+  const [missingGovee, setMissingGovee] = useState([]);
+  const [rescanning, setRescanning] = useState(false);
   const [rooms, setRooms] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -93,6 +98,7 @@ function App() {
 
       const results = await Promise.all(promises);
       setGoveeDevices(results[0].devices || []);
+      setMissingGovee(results[0].missing || []);
       setLightningActiveRooms(results[1].active || []);
       setSegmentInfo(results[2]);
       setSegmentState(normalizeSegmentState(results[3]?.state || {}));
@@ -136,6 +142,28 @@ function App() {
       });
     } catch (e) {
       console.warn("Failed to save device modes bulk:", e);
+    }
+  }, []);
+
+  const rescanGovee = useCallback(async () => {
+    setRescanning(true);
+    try {
+      const data = await api("/discover/govee");
+      setGoveeDevices(data.devices || []);
+      setMissingGovee(data.missing || []);
+    } catch (e) {
+      console.warn("Govee rescan failed:", e);
+    } finally {
+      setRescanning(false);
+    }
+  }, []);
+
+  const forgetGoveeDevice = useCallback(async (mac) => {
+    try {
+      await api(`/govee/known/${encodeURIComponent(mac)}`, { method: "DELETE" });
+      setMissingGovee(prev => prev.filter(d => d.mac !== mac));
+    } catch (e) {
+      console.warn("Failed to forget device:", e);
     }
   }, []);
 
@@ -577,14 +605,17 @@ function App() {
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
                 <h3 style={{ fontSize: 15, fontWeight: 600, color: "#e2e8f0", margin: 0 }}>Govee Devices</h3>
                 <button
-                  onClick={async () => { const data = await api("/discover/govee"); setGoveeDevices(data.devices || []); }}
-                  style={{ padding: "4px 12px", borderRadius: 6, border: "1px solid #334155", background: "transparent", color: "#a5b4fc", fontSize: 11, fontWeight: 600, cursor: "pointer" }}
-                >Re-scan</button>
+                  onClick={rescanGovee} disabled={rescanning}
+                  style={{ padding: "4px 12px", borderRadius: 6, border: "1px solid #334155", background: "transparent", color: rescanning ? "#475569" : "#a5b4fc", fontSize: 11, fontWeight: 600, cursor: rescanning ? "wait" : "pointer" }}
+                >{rescanning ? "Scanning…" : "Re-scan"}</button>
               </div>
-              {goveeDevices.length > 0 ? (
+              {(goveeDevices.length > 0 || missingGovee.length > 0) ? (
                 <div>
                   <div style={{ fontSize: 11, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>
                     {goveeDevices.length} devices via LAN
+                    {missingGovee.length > 0 && (
+                      <span style={{ color: "#f87171", marginLeft: 8 }}>· {missingGovee.length} missing</span>
+                    )}
                   </div>
                   {goveeDevices.map(device => {
                     const dk = `govee:${device.ip}`;
@@ -606,6 +637,56 @@ function App() {
                         {device.mac && (
                           <span style={{ color: "#475569", fontSize: 10, fontFamily: "monospace", order: isMobile ? 11 : 0 }}>{device.mac}</span>
                         )}
+                      </div>
+                    );
+                  })}
+                  {/* Missing devices — greyed out, red status dot, with
+                      "X" (forget) and a re-scan affordance. */}
+                  {missingGovee.map(device => {
+                    const dk = `govee:${device.ip}`;
+                    const nick = nicknames?.[dk];
+                    const name = nick || GOVEE_SKU_NAMES[device.sku] || device.name || device.sku || "Unknown";
+                    return (
+                      <div key={device.mac} style={{
+                        display: "flex", alignItems: "center", gap: 8, padding: "5px 0",
+                        borderBottom: "1px solid rgba(51,65,85,0.4)", fontSize: 12,
+                        flexWrap: "wrap", opacity: 0.7,
+                      }}>
+                        <span style={{
+                          width: 6, height: 6, borderRadius: "50%", flexShrink: 0,
+                          background: "#f87171", boxShadow: "0 0 4px rgba(248,113,113,0.5)",
+                        }} />
+                        <span style={{ color: "#94a3b8", fontWeight: 600, fontStyle: "italic", minWidth: isMobile ? 0 : 140, flex: isMobile ? "1 1 auto" : "0 0 auto" }}>{name}</span>
+                        <span style={{ color: "#64748b" }}>{device.sku}</span>
+                        <span style={{ color: "#475569", fontSize: 11, fontFamily: "monospace", flex: isMobile ? "1 1 100%" : 1, order: isMobile ? 10 : 0 }}>{device.ip}</span>
+                        {device.mac && device.mac !== device.ip && (
+                          <span style={{ color: "#475569", fontSize: 10, fontFamily: "monospace", order: isMobile ? 11 : 0 }}>{device.mac}</span>
+                        )}
+                        <span style={{ fontSize: 10, color: "#f87171", fontWeight: 600, order: isMobile ? 12 : 0 }}>missing</span>
+                        <button
+                          onClick={rescanGovee} disabled={rescanning}
+                          style={{
+                            padding: "2px 8px", borderRadius: 5, border: "1px solid #334155",
+                            background: "transparent", color: rescanning ? "#475569" : "#a5b4fc",
+                            fontSize: 10, fontWeight: 600, cursor: rescanning ? "wait" : "pointer",
+                            order: isMobile ? 13 : 0,
+                          }}
+                          title="Re-scan for this device"
+                        >Re-scan</button>
+                        <button
+                          onClick={() => {
+                            if (confirm(`Remove "${name}" from known devices? Re-scanning will bring it back if it comes online.`)) {
+                              forgetGoveeDevice(device.mac);
+                            }
+                          }}
+                          style={{
+                            padding: "2px 7px", borderRadius: 5, border: "1px solid #7f1d1d",
+                            background: "transparent", color: "#f87171",
+                            fontSize: 11, fontWeight: 700, cursor: "pointer", lineHeight: 1,
+                            order: isMobile ? 14 : 0,
+                          }}
+                          title="Forget this device"
+                        >×</button>
                       </div>
                     );
                   })}
