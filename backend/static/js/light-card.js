@@ -71,8 +71,12 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
 
   return (
     <div style={{
-      background: "linear-gradient(135deg, #1e293b 0%, #0f172a 100%)",
-      borderRadius: 16, padding: isMobile ? 14 : 20, border: "1px solid #334155",
+      background: isOn
+        ? "linear-gradient(135deg, #2c3a55 0%, #1a2438 100%)"
+        : "linear-gradient(135deg, #0c1322 0%, #060a14 100%)",
+      borderRadius: 16, padding: isMobile ? 14 : 20,
+      border: isOn ? "1px solid #4f5d7a" : "1px solid #1e293b",
+      boxShadow: isOn ? "0 0 0 1px rgba(99,102,241,0.18), 0 6px 18px rgba(99,102,241,0.10)" : "none",
       opacity: isReachable ? 1 : 0.5, transition: "all 0.2s ease",
     }}>
       {/* Header: name + toggle */}
@@ -223,9 +227,7 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
         </div>
       )}
 
-      {isOn && (
-        <>
-          <Slider
+      <Slider
             label="Brightness" value={brightness} min={0} max={100}
             onChange={(v) => {
               setBrightness(v);
@@ -320,8 +322,6 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
               />
             </div>
           )}
-        </>
-      )}
     </div>
   );
 }
