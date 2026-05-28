@@ -1,6 +1,6 @@
 // ─── Room Section ──────────────────────────────────────────────────────────
 
-function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGovee, onControlRoom, favorites, onFavoritesChange, nicknames, onNicknameChange, lightningActive, onLightningStart, onLightningStop, segmentInfo, segmentState, onSegmentStateRefresh, deviceModes, onDeviceModeChange, onDeviceModesBulkChange, roomLayouts, onLayoutChange, fixtures, onFixtureUpsert, onFixtureDelete, minSatEnabled, minSatPct }) {
+function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGovee, onControlRoom, favorites, onFavoritesChange, nicknames, onNicknameChange, lightningActive, onLightningStart, onLightningStop, segmentInfo, segmentState, onSegmentStateRefresh, deviceModes, onDeviceModeChange, onDeviceModesBulkChange, segmentFillModes, onSegmentFillModeChange, roomLayouts, onLayoutChange, fixtures, onFixtureUpsert, onFixtureDelete, minSatEnabled, minSatPct }) {
   const isMobile = useIsMobile();
   const [collapsed, setCollapsed] = useState(true);
   const [showRoomControls, setShowRoomControls] = useState(false);
@@ -261,6 +261,7 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
             fixtures={fixtures}
             minSatEnabled={minSatEnabled}
             minSatPct={minSatPct}
+            segmentFillModes={segmentFillModes}
             onApply={(applied, addressMode) => {
               setColorModeApplied(applied);
               // After the apply pipeline finishes (~4-15s depending on
@@ -334,6 +335,8 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
                   onSegmentStateRefresh={onSegmentStateRefresh}
                   controlMode={deviceModes?.[devKey]}
                   onControlModeChange={(m) => onDeviceModeChange && onDeviceModeChange(devKey, m)}
+                  segmentFillMode={segmentFillModes?.[devKey]}
+                  onSegmentFillModeChange={(m) => onSegmentFillModeChange && onSegmentFillModeChange(devKey, m)}
                 />
               );
             })}

@@ -1,6 +1,6 @@
 // ─── Light Card Component ───────────────────────────────────────────────────
 
-function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, onNicknameChange, roomName, segmentColors, segmentInfo, segmentBrightness, onSegmentStateRefresh, controlMode, onControlModeChange }) {
+function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, onNicknameChange, roomName, segmentColors, segmentInfo, segmentBrightness, onSegmentStateRefresh, controlMode, onControlModeChange, segmentFillMode, onSegmentFillModeChange }) {
   const isMobile = useIsMobile();
   const deviceBrightness = light.type === "hue"
     ? Math.round((light.state?.brightness || 0) / 254 * 100)
@@ -172,7 +172,7 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
           before turning the device on). */}
       {supportsSegments && hasColor && (
         <div style={{
-          display: "flex", gap: 4, marginBottom: 12,
+          display: "flex", gap: 4, marginBottom: 8,
           background: "#0f172a", borderRadius: 8, padding: 3,
           border: "1px solid #1e293b",
         }}>
@@ -188,6 +188,38 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
               }}
             >{m === "whole" ? "Whole light" : "Segments"}</button>
           ))}
+        </div>
+      )}
+
+      {/* Scene fill — controls how room scenes paint this device's
+          segments. Only meaningful when in Segments mode. */}
+      {supportsSegments && hasColor && effectiveMode === "segments" && (
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 10, color: "#64748b", marginBottom: 4 }}>Scene fill:</div>
+          <div style={{
+            display: "flex", gap: 3, background: "#0f172a", borderRadius: 8,
+            padding: 3, border: "1px solid #1e293b",
+          }}>
+            {[
+              { key: "follow", label: "Follow", title: "Each segment follows the scene's per-segment color" },
+              { key: "solid", label: "Solid", title: "All segments are the same color from the scene" },
+              { key: "shades", label: "Shades", title: "All segments are shades of one scene color" },
+            ].map(opt => {
+              const active = (segmentFillMode || "follow") === opt.key;
+              return (
+                <button key={opt.key}
+                  onClick={() => onSegmentFillModeChange && onSegmentFillModeChange(opt.key)}
+                  title={opt.title}
+                  style={{
+                    flex: 1, padding: "5px 8px", borderRadius: 5, border: "none",
+                    background: active ? "#6366f1" : "transparent",
+                    color: active ? "#fff" : "#94a3b8",
+                    fontSize: 10, fontWeight: 600, cursor: "pointer",
+                  }}
+                >{opt.label}</button>
+              );
+            })}
+          </div>
         </div>
       )}
 

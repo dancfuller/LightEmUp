@@ -291,7 +291,37 @@ function applyMinSat(preview, enabled, pct) {
   return out;
 }
 
-function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlGovee, favorites, onFavoritesChange, nicknames, segmentInfo, roomLayouts, fixtures, onApply, minSatEnabled, minSatPct }) {
+// Apply per-device segment fill overrides: "follow" (default — no change),
+// "solid" (all segments of this device get the first segment's color), or
+// "shades" (tonal shades of one base color). Operates on the preview so
+// the previewed map matches what gets sent on Apply.
+function applySegmentFillModes(preview, fillModes) {
+  if (!preview || !fillModes) return preview;
+  const out = { ...preview };
+  const byParent = {};
+  Object.entries(preview).forEach(([key, color]) => {
+    const m = key.match(/^(.+):seg(\d+)$/);
+    if (!m) return;
+    (byParent[m[1]] ||= []).push({ key, idx: parseInt(m[2]), color });
+  });
+  Object.entries(byParent).forEach(([parent, segs]) => {
+    const mode = fillModes[parent] || "follow";
+    if (mode === "follow") return;
+    segs.sort((a, b) => a.idx - b.idx);
+    const base = segs[0].color;
+    if (mode === "solid") {
+      segs.forEach(s => { out[s.key] = { ...s.color, r: base.r, g: base.g, b: base.b }; });
+    } else if (mode === "shades") {
+      const shades = generateTonalShades(base.r, base.g, base.b, segs.length);
+      segs.forEach((s, i) => {
+        out[s.key] = { ...s.color, r: shades[i].r, g: shades[i].g, b: shades[i].b };
+      });
+    }
+  });
+  return out;
+}
+
+function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlGovee, favorites, onFavoritesChange, nicknames, segmentInfo, roomLayouts, fixtures, onApply, minSatEnabled, minSatPct, segmentFillModes }) {
   const isMobile = useIsMobile();
   const [mode, setMode] = useState("palette"); // "palette" | "gradient" | "tonal" | "custom" | "beacon"
   // customColors: 1-4 user-chosen seed colors. Custom mode randomly
@@ -944,15 +974,21 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     if (mode === "custom") return computeCustom();
     return computePalette();
   };
+  const pipeline = (raw) => {
+    // Order matters: clamp saturation first (so per-device overrides
+    // start from clean colors), then apply per-device fill mode.
+    const sat = applyMinSat(raw, minSatEnabled, minSatPct);
+    return applySegmentFillModes(sat, segmentFillModes);
+  };
   const generatePreview = () => {
-    setPreview(applyMinSat(computeForMode(), minSatEnabled, minSatPct));
+    setPreview(pipeline(computeForMode()));
   };
 
   // Auto-generate preview when inputs change
   useEffect(() => {
     if (!hasLayout) return;
-    setPreview(applyMinSat(computeForMode(), minSatEnabled, minSatPct));
-  }, [mode, baseColor, direction, paletteColors, customColors, customShadeMode, hasLayout, layout, fixtures, beaconSourceKey, brightness, addressSegments, minSatEnabled, minSatPct]);
+    setPreview(pipeline(computeForMode()));
+  }, [mode, baseColor, direction, paletteColors, customColors, customShadeMode, hasLayout, layout, fixtures, beaconSourceKey, brightness, addressSegments, minSatEnabled, minSatPct, segmentFillModes]);
 
   // ─── Apply colors to lights ─────────────────────────────────────────
   const applyColors = () => {

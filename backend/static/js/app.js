@@ -54,6 +54,10 @@ function App() {
   // deviceModes: persisted LightCard preference per device_key.
   // "whole" or "segments". Loaded from config, updated on toggle.
   const [deviceModes, setDeviceModes] = useState({});
+  // segmentFillModes: how each segment-mode device is filled by room
+  // scenes — "follow" (default), "solid" (all segments one color), or
+  // "shades" (tonal shades of one color). Persisted per device_key.
+  const [segmentFillModes, setSegmentFillModes] = useState({});
   // pickerStyle: "huebar" (default) or "wheel". Provided via context to
   // every ColorPicker so the user's choice applies everywhere.
   const [pickerStyle, setPickerStyle] = useState("huebar");
@@ -89,6 +93,7 @@ function App() {
       setRoomLayouts(cfg.room_layouts || {});
       setFixtures(cfg.fixtures || {});
       setDeviceModes(cfg.device_modes || {});
+      setSegmentFillModes(cfg.segment_fill_modes || {});
       setPickerStyle(cfg.ui_prefs?.color_picker_style === "wheel" ? "wheel" : "huebar");
       if (cfg.ui_prefs?.min_saturation_enabled !== undefined) {
         setMinSatEnabled(!!cfg.ui_prefs.min_saturation_enabled);
@@ -157,6 +162,18 @@ function App() {
       });
     } catch (e) {
       console.warn("Failed to save min saturation:", e);
+    }
+  }, []);
+
+  const updateSegmentFillMode = useCallback(async (deviceKey, mode) => {
+    setSegmentFillModes(prev => ({ ...prev, [deviceKey]: mode }));
+    try {
+      await api("/segment-fill-modes", {
+        method: "POST",
+        body: JSON.stringify({ device_key: deviceKey, mode }),
+      });
+    } catch (e) {
+      console.warn("Failed to save segment fill mode:", e);
     }
   }, []);
 
@@ -551,6 +568,8 @@ function App() {
                   deviceModes={deviceModes}
                   onDeviceModeChange={updateDeviceMode}
                   onDeviceModesBulkChange={updateDeviceModesBulk}
+                  segmentFillModes={segmentFillModes}
+                  onSegmentFillModeChange={updateSegmentFillMode}
                   roomLayouts={roomLayouts}
                   onLayoutChange={handleLayoutChange}
                   fixtures={fixtures}

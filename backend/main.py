@@ -56,6 +56,8 @@ DEFAULT_CONFIG = {
     "room_layouts": {},
     "fixtures": {},  # fixture_id → { name, members: [device_key, ...] }
     "device_modes": {},  # device_key → "whole" | "segments" (LightCard preference)
+    "segment_fill_modes": {},  # device_key → "follow" | "solid" | "shades"
+                                # how the device's segments are filled by room scenes
     "known_devices": {  # devices we've seen before; surface as "missing" when absent
         "govee": {},    # keyed by MAC: { mac: { ip, sku, name, last_seen } }
     },
@@ -954,6 +956,22 @@ async def set_device_modes_bulk(req: DeviceModesBulkRequest):
             config["device_modes"][k] = v
     save_config(config)
     return {"success": True, "device_modes": config["device_modes"]}
+
+
+class SegmentFillModeRequest(BaseModel):
+    device_key: str
+    mode: str  # "follow" | "solid" | "shades"
+
+
+@app.post("/api/segment-fill-modes")
+async def set_segment_fill_mode(req: SegmentFillModeRequest):
+    if req.mode not in ("follow", "solid", "shades"):
+        raise HTTPException(400, "mode must be follow, solid, or shades")
+    if "segment_fill_modes" not in config:
+        config["segment_fill_modes"] = {}
+    config["segment_fill_modes"][req.device_key] = req.mode
+    save_config(config)
+    return {"success": True}
 
 
 # ─── UI Preferences ─────────────────────────────────────────────────────────
