@@ -300,9 +300,6 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
 
         {/* Surface openers */}
         <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 6 : 8, flexWrap: "wrap" }}>
-          {!isMobile && (
-            <span style={{ fontSize: 10, color: "#475569", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.6 }}>Open</span>
-          )}
           {openerBtn("lightning", lightningActive ? "⚡ Storm" : "⚡ Lightning", lightningActive ? "#fbbf24" : "#94a3b8")}
           {openerBtn("scenes", "Scenes", "#34d399")}
           {openerBtn("controls", "Controls", "#a5b4fc")}
