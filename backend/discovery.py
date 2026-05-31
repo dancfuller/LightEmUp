@@ -745,8 +745,8 @@ GOVEE_SEGMENT_INFO = {
     "H6061": {"count": 7, "protocol": "razer", "name": "Glide Hexa Light Panels"},
     "H7065": {"count": 2, "protocol": "cloud_v2", "name": "Outdoor Spotlights 2-Pack"},
     "H7066": {"count": 4, "protocol": "cloud_v2", "name": "Outdoor Spotlights 4-Pack"},
-    "H70C1": {"count": None, "protocol": "unknown", "name": "Christmas String Lights 2"},
-    "H61D3": {"count": None, "protocol": "unknown", "name": "Neon Rope Light 2"},
+    "H70C1": {"count": 15, "protocol": "cloud_v2", "name": "Christmas String Lights 2"},
+    "H61D3": {"count": 15, "protocol": "cloud_v2", "name": "Neon Rope Light 2"},
 }
 
 

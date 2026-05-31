@@ -13,7 +13,7 @@ deployed Pi's actual build is easy to confirm from the browser.
 import subprocess
 from pathlib import Path
 
-__version__ = "2.1.2"
+__version__ = "2.2.0"
 
 
 def _git(args: list[str]) -> str:
