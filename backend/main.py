@@ -754,9 +754,16 @@ class GoveeSegmentsBulkRequest(BaseModel):
     brightness: Optional[int] = 100  # device-level multiplier 0..100
 
 
-def _scale_colors(colors: list[tuple[int, int, int]], brightness: int) -> list[tuple[int, int, int]]:
-    f = max(0, min(100, brightness)) / 100.0
-    return [(int(c[0] * f), int(c[1] * f), int(c[2] * f)) for c in colors]
+def _scale_colors(colors: list[tuple[int, int, int]], brightness: int,
+                  gamma: float = 2.2) -> list[tuple[int, int, int]]:
+    # Razer carries no brightness channel, so we fold brightness into RGB.
+    # A linear multiply crushes low percentages to near-black (the hexa would
+    # vanish at ~7%), unlike Hue/Govee firmware dimming which is perceptual.
+    # Lift via gamma so the slider tracks perceived brightness: a 7% setting
+    # maps to ~29% luminance at gamma 2.2.
+    pct = max(0, min(100, brightness)) / 100.0
+    f = pct ** (1.0 / gamma)
+    return [(round(c[0] * f), round(c[1] * f), round(c[2] * f)) for c in colors]
 
 
 @app.post("/api/govee/segments-bulk")
