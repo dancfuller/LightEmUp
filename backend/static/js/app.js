@@ -608,12 +608,39 @@ function App() {
                   nicknames={nicknames} onNicknameChange={updateNickname}
                   roomName={deviceRoomMap[`hue:${light.id}`]} />
               ))}
-              {goveeDevices.map(device => (
-                <LightCard key={`govee-${device.ip}`} light={device} onControl={controlGoveeDevice}
-                  favorites={favoriteColors} onFavoritesChange={updateFavorites}
-                  nicknames={nicknames} onNicknameChange={updateNickname}
-                  roomName={deviceRoomMap[`govee:${device.ip}`]} />
-              ))}
+              {goveeDevices.map(device => {
+                // Pass the same segment context the room view uses, so segmented
+                // (hexa) lights stay in segment mode here. Without it the card
+                // falls back to whole-light brightness, which can't take on a
+                // device showing segments (needs a power-cycle) and wipes the
+                // applied palette. With it, brightness scales segments in place.
+                const devKey = `govee:${device.ip}`;
+                const persistedEntry = device.ip && segmentState ? segmentState[device.ip] : null;
+                const segColors = {};
+                if (persistedEntry?.colors) {
+                  Object.entries(persistedEntry.colors).forEach(([k, v]) => { segColors[parseInt(k)] = v; });
+                }
+                return (
+                  <LightCard key={`govee-${device.ip}`} light={device}
+                    onControl={(l, cmd) => {
+                      controlGoveeDevice(l, cmd);
+                      if (refreshSegmentState && (cmd.r !== undefined || cmd.on === false)) {
+                        setTimeout(refreshSegmentState, 200);
+                      }
+                    }}
+                    favorites={favoriteColors} onFavoritesChange={updateFavorites}
+                    nicknames={nicknames} onNicknameChange={updateNickname}
+                    roomName={deviceRoomMap[devKey]}
+                    segmentInfo={segmentInfo}
+                    segmentColors={Object.keys(segColors).length > 0 ? segColors : null}
+                    segmentBrightness={persistedEntry?.brightness}
+                    onSegmentStateRefresh={refreshSegmentState}
+                    controlMode={deviceModes?.[devKey]}
+                    onControlModeChange={(m) => updateDeviceMode && updateDeviceMode(devKey, m)}
+                    segmentFillMode={segmentFillModes?.[devKey]}
+                    onSegmentFillModeChange={(m) => updateSegmentFillMode && updateSegmentFillMode(devKey, m)} />
+                );
+              })}
             </div>
           );
         })()}
