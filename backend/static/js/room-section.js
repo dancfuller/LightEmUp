@@ -1,14 +1,86 @@
 // ─── Room Section ──────────────────────────────────────────────────────────
 
+// Overlay control surface: a right-side drawer on desktop, a bottom sheet on
+// mobile. Holds the per-room Lightning / Scenes / Controls / Debug panels so
+// opening one no longer reflows the light-card grid below.
+function ControlSurface({ view, views, onView, onClose, roomName, isMobile, children }) {
+  if (!view) return null;
+
+  const tabs = (
+    <div style={{
+      display: "flex", gap: 4, background: "#0a0f1e", borderRadius: 10,
+      padding: 4, border: "1px solid #1e293b", marginBottom: 18, flexWrap: "wrap",
+    }}>
+      {views.map(t => (
+        <button key={t.key} onClick={() => onView(t.key)} style={{
+          flex: "1 1 auto", padding: "8px 6px", borderRadius: 7, border: "none", cursor: "pointer",
+          background: view === t.key ? "rgba(99,102,241,0.18)" : "transparent",
+          color: view === t.key ? t.accent : "#94a3b8", fontSize: 12, fontWeight: 700,
+          whiteSpace: "nowrap",
+        }}>{t.label}</button>
+      ))}
+    </div>
+  );
+
+  const header = (
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+      <div style={{ fontSize: 12, color: "#64748b", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.6 }}>{roomName}</div>
+      <button onClick={onClose} style={{
+        background: "none", border: "none", color: "#64748b",
+        fontSize: 24, cursor: "pointer", lineHeight: 1, padding: "0 4px",
+      }} title="Close">&#x00D7;</button>
+    </div>
+  );
+
+  // MOBILE: bottom sheet sliding up.
+  if (isMobile) {
+    return (
+      <div onClick={onClose} style={{
+        position: "fixed", inset: 0, zIndex: 200, background: "rgba(2,6,15,0.6)",
+        display: "flex", alignItems: "flex-end",
+      }}>
+        <div onClick={(e) => e.stopPropagation()} style={{
+          width: "100%", maxHeight: "88%", overflowY: "auto",
+          background: "linear-gradient(180deg, #0f172a 0%, #0a0f1e 100%)",
+          borderTop: "1px solid #334155", borderRadius: "20px 20px 0 0", padding: 18,
+          boxShadow: "0 -20px 60px rgba(0,0,0,0.6)", animation: "sheetUp 0.25s ease",
+        }}>
+          <div style={{ width: 40, height: 4, borderRadius: 2, background: "#334155", margin: "0 auto 14px" }} />
+          {header}
+          {tabs}
+          {children}
+        </div>
+      </div>
+    );
+  }
+
+  // DESKTOP: right drawer.
+  return (
+    <div onClick={onClose} style={{
+      position: "fixed", inset: 0, zIndex: 200, background: "rgba(2,6,15,0.55)",
+      display: "flex", justifyContent: "flex-end",
+    }}>
+      <div onClick={(e) => e.stopPropagation()} style={{
+        width: 460, maxWidth: "100%", height: "100%", overflowY: "auto",
+        background: "linear-gradient(180deg, #0f172a 0%, #0a0f1e 100%)",
+        borderLeft: "1px solid #334155", padding: 22,
+        boxShadow: "-20px 0 60px rgba(0,0,0,0.5)", animation: "drawerIn 0.25s ease",
+      }}>
+        {header}
+        {tabs}
+        {children}
+      </div>
+    </div>
+  );
+}
+
 function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGovee, onControlRoom, favorites, onFavoritesChange, nicknames, onNicknameChange, lightningActive, onLightningStart, onLightningStop, segmentInfo, segmentState, onSegmentStateRefresh, deviceModes, onDeviceModeChange, onDeviceModesBulkChange, segmentFillModes, onSegmentFillModeChange, roomLayouts, onLayoutChange, fixtures, onFixtureUpsert, onFixtureDelete, minSatEnabled, minSatPct }) {
   const isMobile = useIsMobile();
   const [collapsed, setCollapsed] = useState(true);
-  const [showRoomControls, setShowRoomControls] = useState(false);
-  const [showLightning, setShowLightning] = useState(false);
-  const [showColor, setShowColor] = useState(false);
-  const [showDebug, setShowDebug] = useState(false);
-  // Map moved inside Room Controls as a collapsible subsection, default
-  // closed. The Map tab in the header was removed for de-cluttering.
+  // Single overlay surface state — replaces the old per-panel show* booleans.
+  // null | "lightning" | "scenes" | "controls" | "debug"
+  const [surfaceView, setSurfaceView] = useState(null);
+  // Map lives inside the Controls panel as a collapsible subsection.
   const [mapExpanded, setMapExpanded] = useState(false);
   const [roomBrightness, setRoomBrightness] = useState(75);
   const [roomColor, setRoomColor] = useState(null);
@@ -31,6 +103,15 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
     return c > 1 ? s + c : s;
   }, 0);
 
+  // Tabs available in the control surface. Debug only appears when there is a
+  // segment-capable device to debug.
+  const views = [
+    { key: "lightning", label: lightningActive ? "⚡ Storm" : "⚡ Lightning", accent: "#fbbf24" },
+    { key: "scenes", label: "Scenes", accent: "#34d399" },
+    { key: "controls", label: "Controls", accent: "#a5b4fc" },
+  ];
+  if (anySegmented) views.push({ key: "debug", label: "Debug", accent: "#fbbf24" });
+
   const applyRoomBrightness = (val) => {
     setRoomBrightness(val);
     onControlRoom(name, { on: true, brightness: val });
@@ -41,307 +122,248 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
     onControlRoom(name, { on: true, r, g, b });
   };
 
+  // Opener button in the room header (sets the surface view).
+  const openerBtn = (key, label, accent, dashed) => (
+    <button
+      onClick={() => setSurfaceView(key)}
+      style={{
+        padding: isMobile ? "6px 12px" : "6px 16px", borderRadius: 8,
+        border: dashed ? "1px dashed #475569" : "1px solid #334155",
+        background: "transparent", color: accent,
+        fontSize: isMobile ? 11 : 12, fontWeight: 700, cursor: "pointer",
+        whiteSpace: "nowrap", transition: "all 0.2s",
+      }}
+    >{label}</button>
+  );
+
+  // Room-level controls panel (override + brightness + color + map).
+  const controlsPanel = (
+    <div>
+      {/* Collapsible Map subsection */}
+      <div style={{ marginBottom: 16, border: "1px solid #1e293b", borderRadius: 12, overflow: "hidden" }}>
+        <button
+          onClick={() => setMapExpanded(!mapExpanded)}
+          style={{
+            width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
+            padding: "10px 14px", background: mapExpanded ? "rgba(52,211,153,0.10)" : "transparent",
+            border: "none", cursor: "pointer", color: mapExpanded ? "#34d399" : "#94a3b8",
+            fontSize: 12, fontWeight: 700, letterSpacing: 0.6, textTransform: "uppercase",
+          }}
+        >
+          <span>Map</span>
+          <span style={{ fontSize: 11, transform: mapExpanded ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.15s" }}>&#x25BC;</span>
+        </button>
+        {mapExpanded && (
+          <div style={{ padding: 12, borderTop: "1px solid #1e293b" }}>
+            <RoomMap
+              roomName={name}
+              segmentState={segmentState}
+              hueLights={hueLights} goveeDevices={goveeDevices}
+              onControlHue={onControlHue} onControlGovee={onControlGovee}
+              favorites={favorites} onFavoritesChange={onFavoritesChange}
+              nicknames={nicknames} onNicknameChange={onNicknameChange}
+              segmentInfo={segmentInfo}
+              roomLayouts={roomLayouts} onLayoutChange={onLayoutChange}
+              appliedColors={colorModeApplied}
+              fixtures={fixtures}
+              onFixtureUpsert={onFixtureUpsert}
+              onFixtureDelete={onFixtureDelete}
+            />
+          </div>
+        )}
+      </div>
+
+      {/* Override header + on/off toggle */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, gap: 8, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: "#a5b4fc", textTransform: "uppercase", letterSpacing: 0.8 }}>
+          Override all lights in {name}
+        </div>
+        <button
+          onClick={() => onControlRoom(name, { on: !anyOn })}
+          style={{
+            width: 48, height: 28, borderRadius: 14, border: "none",
+            background: anyOn ? "#6366f1" : "#334155",
+            cursor: "pointer", position: "relative", transition: "background 0.2s", flexShrink: 0,
+          }}
+          title={anyOn ? "Turn all off" : "Turn all on"}
+        >
+          <div style={{ width: 22, height: 22, borderRadius: "50%", background: "#fff", position: "absolute", top: 3, left: anyOn ? 23 : 3, transition: "left 0.2s ease" }} />
+        </button>
+      </div>
+
+      <Slider
+        label="Room Brightness" value={roomBrightness} min={0} max={100}
+        onChange={applyRoomBrightness} color="#fbbf24" unit="%"
+      />
+
+      {anyColor && (
+        <div style={{ marginTop: 4 }}>
+          <ColorPicker
+            size={160}
+            currentColor={roomColor}
+            onColorSelect={applyRoomColor}
+            favorites={favorites}
+            onFavoritesChange={onFavoritesChange}
+          />
+        </div>
+      )}
+    </div>
+  );
+
+  // Resolve the active panel for the surface.
+  let panel = null;
+  if (surfaceView === "lightning") {
+    panel = (
+      <LightningPanel
+        roomName={name}
+        isActive={lightningActive}
+        onStart={onLightningStart}
+        onStop={onLightningStop}
+        goveeDevices={goveeDevices}
+        segmentInfo={segmentInfo}
+      />
+    );
+  } else if (surfaceView === "scenes") {
+    panel = (
+      <ColorMode
+        roomName={name}
+        hueLights={hueLights} goveeDevices={goveeDevices}
+        onControlHue={onControlHue} onControlGovee={onControlGovee}
+        favorites={favorites} onFavoritesChange={onFavoritesChange}
+        nicknames={nicknames}
+        segmentInfo={segmentInfo}
+        roomLayouts={roomLayouts}
+        fixtures={fixtures}
+        minSatEnabled={minSatEnabled}
+        minSatPct={minSatPct}
+        segmentFillModes={segmentFillModes}
+        onApply={(applied, addressMode) => {
+          setColorModeApplied(applied);
+          if (onSegmentStateRefresh) {
+            setTimeout(onSegmentStateRefresh, 5000);
+          }
+          if (addressMode && onDeviceModesBulkChange) {
+            const targetMode = addressMode === "individual" ? "segments" : "whole";
+            const updates = {};
+            goveeDevices.forEach(d => {
+              const segCount = segmentInfo?.sku_table?.[d.sku]?.count || 0;
+              if (segCount > 1) updates[`govee:${d.ip}`] = targetMode;
+            });
+            if (Object.keys(updates).length > 0) {
+              onDeviceModesBulkChange(updates);
+            }
+          }
+        }}
+      />
+    );
+  } else if (surfaceView === "controls") {
+    panel = controlsPanel;
+  } else if (surfaceView === "debug") {
+    panel = (
+      <SegmentResetDebug
+        roomName={name}
+        goveeDevices={goveeDevices}
+        segmentInfo={segmentInfo}
+      />
+    );
+  }
+
   return (
     <div style={{ marginBottom: 32 }}>
-      {/* Room header — name on top, action buttons always on a row below.
-          Previously a single space-between flex row, which left button
-          placement at the mercy of viewport width + label length and
-          looked inconsistent across rooms. */}
-      <div style={{
-        display: "flex", flexDirection: "column",
-        marginBottom: 4, paddingBottom: 12, borderBottom: "1px solid #1e293b",
-        gap: 10,
-      }}>
-        <div
-          onClick={() => setCollapsed(!collapsed)}
-          style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", userSelect: "none" }}
-        >
-          <span style={{ fontSize: 14, color: "#64748b", transition: "transform 0.2s", transform: collapsed ? "rotate(-90deg)" : "rotate(0deg)", display: "inline-block" }}>&#x25BC;</span>
-          <h2 style={{ fontSize: isMobile ? 17 : 20, fontWeight: 700, color: "#f8fafc", margin: 0 }}>{name}</h2>
-          <span style={{ fontSize: 12, color: "#64748b" }}>
-            {allLights.length} {allLights.length === 1 ? "light" : "lights"}
-            {totalSegments > 0 && <> &middot; {totalSegments} segments</>}
-          </span>
-        </div>
-        <div style={{ display: "flex", gap: isMobile ? 6 : 8, alignItems: "center", flexWrap: "wrap" }}>
-          <button
-            onClick={() => { const opening = !showLightning; setShowLightning(opening); if (opening) { setCollapsed(false); setShowRoomControls(false); } }}
-            style={{
-              padding: isMobile ? "6px 10px" : "6px 14px", borderRadius: 8, border: "1px solid #334155",
-              background: showLightning || lightningActive ? "rgba(251,191,36,0.15)" : "transparent",
-              color: showLightning || lightningActive ? "#fbbf24" : "#94a3b8",
-              fontSize: isMobile ? 11 : 12, fontWeight: 600, cursor: "pointer", transition: "all 0.2s",
-              whiteSpace: "nowrap",
-            }}
+      {/* Room header — name row, then a row of surface-opener buttons. */}
+      <div style={{ display: "flex", flexDirection: "column", marginBottom: 4, paddingBottom: 12, borderBottom: "1px solid #1e293b", gap: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <div
+            onClick={() => setCollapsed(!collapsed)}
+            style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", userSelect: "none", flex: 1, minWidth: 0 }}
           >
-            &#x26A1; {lightningActive ? "Storm" : (isMobile ? "" : "Lightning")}
-          </button>
-          <button
-            onClick={() => { const opening = !showColor; setShowColor(opening); if (opening) { setCollapsed(false); setShowLightning(false); setShowRoomControls(false); } }}
-            style={{
-              padding: isMobile ? "6px 10px" : "6px 14px", borderRadius: 8, border: "1px solid #334155",
-              background: showColor ? "rgba(52,211,153,0.15)" : "transparent",
-              color: showColor ? "#34d399" : "#94a3b8",
-              fontSize: isMobile ? 11 : 12, fontWeight: 600, cursor: "pointer", transition: "all 0.2s",
-              whiteSpace: "nowrap",
-            }}
-          >
-            Color
-          </button>
-          <button
-            onClick={() => { const opening = !showRoomControls; setShowRoomControls(opening); if (opening) { setCollapsed(false); setShowLightning(false); } }}
-            style={{
-              padding: isMobile ? "6px 10px" : "6px 14px", borderRadius: 8, border: "1px solid #334155",
-              background: showRoomControls ? "rgba(99,102,241,0.15)" : "transparent",
-              color: showRoomControls ? "#a5b4fc" : "#94a3b8",
-              fontSize: isMobile ? 11 : 12, fontWeight: 600, cursor: "pointer", transition: "all 0.2s",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {isMobile ? "Controls" : "Room Controls"}
-          </button>
-          {anySegmented && (
-            <button
-              onClick={() => { const opening = !showDebug; setShowDebug(opening); if (opening) { setCollapsed(false); setShowLightning(false); setShowRoomControls(false); setShowColor(false); } }}
-              title="Segment reset debug — compare V1 LAN vs V2 reset strategies"
-              style={{
-                padding: isMobile ? "6px 10px" : "6px 14px", borderRadius: 8, border: "1px dashed #475569",
-                background: showDebug ? "rgba(251,191,36,0.15)" : "transparent",
-                color: showDebug ? "#fbbf24" : "#64748b",
-                fontSize: isMobile ? 11 : 12, fontWeight: 600, cursor: "pointer", transition: "all 0.2s",
-                whiteSpace: "nowrap",
-              }}
-            >
-              Debug
-            </button>
-          )}
+            <span style={{ fontSize: 14, color: "#64748b", transition: "transform 0.2s", transform: collapsed ? "rotate(-90deg)" : "rotate(0deg)", display: "inline-block" }}>&#x25BC;</span>
+            <h2 style={{ fontSize: isMobile ? 17 : 20, fontWeight: 700, color: "#f8fafc", margin: 0 }}>{name}</h2>
+            <span style={{ fontSize: 12, color: "#64748b" }}>
+              {allLights.length} {allLights.length === 1 ? "light" : "lights"}
+              {totalSegments > 0 && <> &middot; {totalSegments} segments</>}
+            </span>
+          </div>
           <button
             onClick={() => onControlRoom(name, { on: !anyOn })}
             style={{
-              padding: isMobile ? "6px 12px" : "6px 16px", borderRadius: 8, border: "none",
+              padding: isMobile ? "8px 16px" : "9px 20px", borderRadius: 10, border: "none",
               background: anyOn ? "#334155" : "#6366f1",
-              color: "#f1f5f9", fontSize: isMobile ? 11 : 12, fontWeight: 600,
-              cursor: "pointer", transition: "all 0.2s",
-              whiteSpace: "nowrap",
+              color: anyOn ? "#94a3b8" : "#fff", fontSize: 13, fontWeight: 700,
+              boxShadow: anyOn ? "none" : "0 2px 10px rgba(99,102,241,0.35)",
+              cursor: "pointer", transition: "all 0.2s", whiteSpace: "nowrap",
             }}
           >
-            {anyOn ? "All Off" : "All On"}
+            {anyOn ? "Turn Off" : "Turn On"}
           </button>
+        </div>
+
+        {/* Surface openers */}
+        <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 6 : 8, flexWrap: "wrap" }}>
+          {!isMobile && (
+            <span style={{ fontSize: 10, color: "#475569", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.6 }}>Open</span>
+          )}
+          {openerBtn("lightning", lightningActive ? "⚡ Storm" : "⚡ Lightning", lightningActive ? "#fbbf24" : "#94a3b8")}
+          {openerBtn("scenes", "Scenes", "#34d399")}
+          {openerBtn("controls", "Controls", "#a5b4fc")}
+          {anySegmented && openerBtn("debug", "Debug", "#64748b", true)}
         </div>
       </div>
 
-      {!collapsed && (<React.Fragment>
-        {/* Lightning panel */}
-        {showLightning && (
-          <LightningPanel
-            roomName={name}
-            isActive={lightningActive}
-            onStart={onLightningStart}
-            onStop={onLightningStop}
-            goveeDevices={goveeDevices}
-            segmentInfo={segmentInfo}
-          />
-        )}
-
-        {/* Room-level controls panel */}
-        {showRoomControls && (
-          <div style={{
-            background: "linear-gradient(135deg, #1e293b 0%, #172033 100%)",
-            borderRadius: 16, padding: 20, marginBottom: 16,
-            border: "1px solid #334155",
-          }}>
-            {/* Collapsible Map subsection — first item, collapsed by default. */}
-            <div style={{
-              marginBottom: mapExpanded ? 16 : 12,
-              border: "1px solid #1e293b", borderRadius: 12, overflow: "hidden",
-            }}>
-              <button
-                onClick={() => setMapExpanded(!mapExpanded)}
-                style={{
-                  width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
-                  padding: "10px 14px", background: mapExpanded ? "rgba(52,211,153,0.10)" : "transparent",
-                  border: "none", cursor: "pointer", color: mapExpanded ? "#34d399" : "#94a3b8",
-                  fontSize: 12, fontWeight: 700, letterSpacing: 0.6, textTransform: "uppercase",
+      {/* Light-card grid — renders independently of the control surface. */}
+      {!collapsed && (
+        <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fill, minmax(260px, 1fr))", gap: 12, marginTop: 18 }}>
+          {allLights.map((light, i) => {
+            const devKey = light.type === "hue" ? `hue:${light.id}` : `govee:${light.ip}`;
+            const segColors = {};
+            const persistedEntry = light.ip && segmentState ? segmentState[light.ip] : null;
+            if (persistedEntry?.colors) {
+              Object.entries(persistedEntry.colors).forEach(([k, v]) => {
+                segColors[parseInt(k)] = v;
+              });
+            }
+            if (colorModeApplied) {
+              Object.entries(colorModeApplied).forEach(([k, v]) => {
+                const m = k.match(/^(.+):seg(\d+)$/);
+                if (m && m[1] === devKey) segColors[parseInt(m[2])] = v;
+              });
+            }
+            return (
+              <LightCard
+                key={`${light.type}-${light.id || light.ip}-${i}`}
+                light={light}
+                onControl={(l, cmd) => {
+                  l._controlFn(l, cmd);
+                  if (l.type === "govee" && onSegmentStateRefresh &&
+                      (cmd.r !== undefined || cmd.on === false)) {
+                    setTimeout(onSegmentStateRefresh, 200);
+                  }
                 }}
-              >
-                <span>Map</span>
-                <span style={{
-                  fontSize: 11, transform: mapExpanded ? "rotate(0deg)" : "rotate(-90deg)",
-                  transition: "transform 0.15s",
-                }}>&#x25BC;</span>
-              </button>
-              {mapExpanded && (
-                <div style={{ padding: 12, borderTop: "1px solid #1e293b" }}>
-                  <RoomMap
-                    roomName={name}
-                    segmentState={segmentState}
-                    hueLights={hueLights} goveeDevices={goveeDevices}
-                    onControlHue={onControlHue} onControlGovee={onControlGovee}
-                    favorites={favorites} onFavoritesChange={onFavoritesChange}
-                    nicknames={nicknames} onNicknameChange={onNicknameChange}
-                    segmentInfo={segmentInfo}
-                    roomLayouts={roomLayouts} onLayoutChange={onLayoutChange}
-                    appliedColors={colorModeApplied}
-                    fixtures={fixtures}
-                    onFixtureUpsert={onFixtureUpsert}
-                    onFixtureDelete={onFixtureDelete}
-                  />
-                </div>
-              )}
-            </div>
-
-            {/* Override header + on/off toggle */}
-            <div style={{
-              display: "flex", justifyContent: "space-between", alignItems: "center",
-              marginBottom: 14, gap: 8, flexWrap: "wrap",
-            }}>
-              <div style={{
-                fontSize: 12, fontWeight: 600, color: "#a5b4fc",
-                textTransform: "uppercase", letterSpacing: 0.8,
-              }}>
-                Override all lights in {name}
-              </div>
-              <button
-                onClick={() => onControlRoom(name, { on: !anyOn })}
-                style={{
-                  width: 48, height: 28, borderRadius: 14, border: "none",
-                  background: anyOn ? "#6366f1" : "#334155",
-                  cursor: "pointer", position: "relative", transition: "background 0.2s",
-                  flexShrink: 0,
-                }}
-                title={anyOn ? "Turn all off" : "Turn all on"}
-              >
-                <div style={{
-                  width: 22, height: 22, borderRadius: "50%", background: "#fff",
-                  position: "absolute", top: 3,
-                  left: anyOn ? 23 : 3, transition: "left 0.2s ease",
-                }} />
-              </button>
-            </div>
-
-            <Slider
-              label="Room Brightness" value={roomBrightness} min={0} max={100}
-              onChange={applyRoomBrightness}
-              color="#fbbf24" unit="%"
-            />
-
-            {anyColor && (
-              <div style={{ marginTop: 4 }}>
-                <ColorPicker
-                  size={160}
-                  currentColor={roomColor}
-                  onColorSelect={applyRoomColor}
-                  favorites={favorites}
-                  onFavoritesChange={onFavoritesChange}
-                />
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Segment reset debug */}
-        {showDebug && (
-          <SegmentResetDebug
-            roomName={name}
-            goveeDevices={goveeDevices}
-            segmentInfo={segmentInfo}
-          />
-        )}
-
-        {/* Color Mode */}
-        {showColor && (
-          <ColorMode
-            roomName={name}
-            hueLights={hueLights} goveeDevices={goveeDevices}
-            onControlHue={onControlHue} onControlGovee={onControlGovee}
-            favorites={favorites} onFavoritesChange={onFavoritesChange}
-            nicknames={nicknames}
-            segmentInfo={segmentInfo}
-            roomLayouts={roomLayouts}
-            fixtures={fixtures}
-            minSatEnabled={minSatEnabled}
-            minSatPct={minSatPct}
-            segmentFillModes={segmentFillModes}
-            onApply={(applied, addressMode) => {
-              setColorModeApplied(applied);
-              // After the apply pipeline finishes (~4-15s depending on
-              // device mix), pull fresh segment state so other views
-              // (room map, page reload) reflect what the server stored.
-              if (onSegmentStateRefresh) {
-                setTimeout(onSegmentStateRefresh, 5000);
-              }
-              // Sync each segmented device's per-light mode to match the
-              // scene's addressSegments choice. Without this, the user
-              // would have to manually flip every LightCard toggle to
-              // match what they just applied at the room level.
-              if (addressMode && onDeviceModesBulkChange) {
-                const targetMode = addressMode === "individual" ? "segments" : "whole";
-                const updates = {};
-                goveeDevices.forEach(d => {
-                  const segCount = segmentInfo?.sku_table?.[d.sku]?.count || 0;
-                  if (segCount > 1) updates[`govee:${d.ip}`] = targetMode;
-                });
-                if (Object.keys(updates).length > 0) {
-                  onDeviceModesBulkChange(updates);
-                }
-              }
-            }}
-          />
-        )}
-
-        {/* Individual light cards — always visible when the room is open;
-            Map now lives inside Room Controls. */}
-        <div style={{
-          display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fill, minmax(260px, 1fr))", gap: 12,
-        }}>
-            {allLights.map((light, i) => {
-              const devKey = light.type === "hue" ? `hue:${light.id}` : `govee:${light.ip}`;
-              // Merge: this-session apply (colorModeApplied) takes precedence
-              // over the server's persistent state, since the user just
-              // pressed Apply and may not have re-fetched state yet.
-              const segColors = {};
-              const persistedEntry = light.ip && segmentState ? segmentState[light.ip] : null;
-              if (persistedEntry?.colors) {
-                Object.entries(persistedEntry.colors).forEach(([k, v]) => {
-                  segColors[parseInt(k)] = v;
-                });
-              }
-              if (colorModeApplied) {
-                Object.entries(colorModeApplied).forEach(([k, v]) => {
-                  const m = k.match(/^(.+):seg(\d+)$/);
-                  if (m && m[1] === devKey) segColors[parseInt(m[2])] = v;
-                });
-              }
-              return (
-                <LightCard
-                  key={`${light.type}-${light.id || light.ip}-${i}`}
-                  light={light}
-                  onControl={(l, cmd) => {
-                    l._controlFn(l, cmd);
-                    // A whole-device color/on-off command clears server
-                    // segment state; refresh so the strip disappears.
-                    if (l.type === "govee" && onSegmentStateRefresh &&
-                        (cmd.r !== undefined || cmd.on === false)) {
-                      setTimeout(onSegmentStateRefresh, 200);
-                    }
-                  }}
-                  favorites={favorites}
-                  onFavoritesChange={onFavoritesChange}
-                  nicknames={nicknames}
-                  onNicknameChange={onNicknameChange}
-                  segmentInfo={segmentInfo}
-                  segmentColors={Object.keys(segColors).length > 0 ? segColors : null}
-                  segmentBrightness={persistedEntry?.brightness}
-                  onSegmentStateRefresh={onSegmentStateRefresh}
-                  controlMode={deviceModes?.[devKey]}
-                  onControlModeChange={(m) => onDeviceModeChange && onDeviceModeChange(devKey, m)}
-                  segmentFillMode={segmentFillModes?.[devKey]}
-                  onSegmentFillModeChange={(m) => onSegmentFillModeChange && onSegmentFillModeChange(devKey, m)}
-                />
-              );
-            })}
+                favorites={favorites}
+                onFavoritesChange={onFavoritesChange}
+                nicknames={nicknames}
+                onNicknameChange={onNicknameChange}
+                segmentInfo={segmentInfo}
+                segmentColors={Object.keys(segColors).length > 0 ? segColors : null}
+                segmentBrightness={persistedEntry?.brightness}
+                onSegmentStateRefresh={onSegmentStateRefresh}
+                controlMode={deviceModes?.[devKey]}
+                onControlModeChange={(m) => onDeviceModeChange && onDeviceModeChange(devKey, m)}
+                segmentFillMode={segmentFillModes?.[devKey]}
+                onSegmentFillModeChange={(m) => onSegmentFillModeChange && onSegmentFillModeChange(devKey, m)}
+              />
+            );
+          })}
         </div>
-      </React.Fragment>)}
+      )}
+
+      <ControlSurface
+        view={surfaceView} views={views}
+        onView={setSurfaceView} onClose={() => setSurfaceView(null)}
+        roomName={name} isMobile={isMobile}
+      >
+        {panel}
+      </ControlSurface>
     </div>
   );
 }

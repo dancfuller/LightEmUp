@@ -44,6 +44,26 @@ function playThunder() {
   source.start();
 }
 
+// ─── Background Rain (looping, thunder-free) ─────────────────────────────────
+
+// A royalty-free recorded rain bed (CC BY-SA, Beeld en Geluid via Wikimedia
+// Commons) served from /sounds/rain/. Looped continuously — the recording is
+// steady street rain with no thunder, so the loop seam is inaudible. Mirrors
+// the fart-MP3 pattern: a single preloaded Audio element, no WebAudio synth.
+const _rainAudio = new Audio("/sounds/rain/rain-loop.mp3");
+_rainAudio.preload = "auto";
+_rainAudio.loop = true;
+_rainAudio.volume = 0.5;
+
+function startRain() {
+  _rainAudio.currentTime = 0;
+  _rainAudio.play().catch(() => {});
+}
+
+function stopRain() {
+  _rainAudio.pause();
+}
+
 // ─── Fart Sounds ─────────────────────────────────────────────────────────────
 
 // 20 real fart sound MP3s served from /sounds/farts/, preloaded on page load.

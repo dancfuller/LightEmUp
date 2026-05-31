@@ -1,0 +1,11 @@
+rain-loop.mp3
+
+Source: "Het kletteren van regen op straat" (rain falling on a street)
+Author: Beeld en Geluid (Netherlands Institute for Sound & Vision)
+Via:    Wikimedia Commons
+        https://commons.wikimedia.org/wiki/File:Het_kletteren_van_regen_op_straat_-_SoundCloud_-_Beeld_en_Geluid.ogg
+License: CC BY-SA 3.0 (https://creativecommons.org/licenses/by-sa/3.0/)
+
+Trimmed to a 120s mono segment and transcoded to MP3 for use as a looping
+ambient rain bed in LightEmUp's lightning storm scene. No modifications to the
+recorded content beyond trimming, downmix to mono, and MP3 encoding.

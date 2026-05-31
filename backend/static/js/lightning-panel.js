@@ -35,6 +35,7 @@ function LightningPanel({ roomName, isActive, onStart, onStop, goveeDevices, seg
           background_brightness: 10, background_color_temp_k: 2700,
           govee_flash: false, storm_start_delay_s: 7,
           thunder_enabled: false, thunder_immediate: false, thunder_funny: false,
+          background_rain: true,
           min_gap_ms: 15000, max_gap_ms: 60000,
           flash_duration_min_ms: 50, flash_duration_max_ms: 200,
           burst_count_min: 1, burst_count_max: 2, inter_burst_gap_ms: 80,
@@ -63,6 +64,17 @@ function LightningPanel({ roomName, isActive, onStart, onStop, goveeDevices, seg
     };
     return () => es.close();
   }, [isActive, settings?.thunder_enabled, settings?.thunder_immediate, settings?.thunder_funny, roomName]);
+
+  // Background rain bed — starts the moment the storm goes active, independent
+  // of the storm_start_delay that gates the flashes/thunder. Loops until stop.
+  useEffect(() => {
+    if (isActive && settings?.background_rain) {
+      startRain();
+    } else {
+      stopRain();
+    }
+    return () => stopRain();
+  }, [isActive, settings?.background_rain]);
 
   const updateSetting = (key, value) => {
     setSettings(prev => ({ ...prev, [key]: value }));
@@ -344,6 +356,36 @@ function LightningPanel({ roomName, isActive, onStart, onStop, goveeDevices, seg
                 </span>
               </div>
             </React.Fragment>)}
+          </div>
+
+          {/* Background Rain */}
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 600, color: "#a5b4fc", textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 8 }}>
+              Background Rain Sounds
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <button
+                onClick={() => updateSetting("background_rain", !settings.background_rain)}
+                style={{
+                  width: 40, height: 22, borderRadius: 11, border: "none", cursor: "pointer",
+                  background: settings.background_rain ? "#6366f1" : "#334155",
+                  position: "relative", transition: "background 0.2s",
+                }}
+              >
+                <div style={{
+                  width: 16, height: 16, borderRadius: 8,
+                  background: "#fff", position: "absolute", top: 3,
+                  left: settings.background_rain ? 21 : 3,
+                  transition: "left 0.2s",
+                }} />
+              </button>
+              <span style={{ fontSize: 12, color: "#94a3b8" }}>
+                {settings.background_rain ? "Looping rain bed (on)" : "Off"}
+              </span>
+            </div>
+            <div style={{ fontSize: 10, color: "#475569", marginTop: 4 }}>
+              Ambient rain (no thunder) starts immediately with the storm, ignoring the start delay.
+            </div>
           </div>
 
           {/* Govee Segment Mode */}

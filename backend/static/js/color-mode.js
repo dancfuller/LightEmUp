@@ -324,6 +324,11 @@ function applySegmentFillModes(preview, fillModes) {
 function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlGovee, favorites, onFavoritesChange, nicknames, segmentInfo, roomLayouts, fixtures, onApply, minSatEnabled, minSatPct, segmentFillModes }) {
   const isMobile = useIsMobile();
   const [mode, setMode] = useState("palette"); // "palette" | "gradient" | "tonal" | "custom" | "beacon"
+  // Color space: "color" (RGB, the default) or "white" (tunable color temperature).
+  // In white mode every spatial mode operates in Kelvin and sends true white CT.
+  const [colorSpace, setColorSpace] = useState("color");
+  const [ctPreset, setCtPreset] = useState(0); // index into CT_PALETTES (palette mode)
+  const [maxKelvin, setMaxKelvin] = useState(3000); // upper bound for gradient/beacon/custom
   // customColors: 1-4 user-chosen seed colors. Custom mode randomly
   // assigns each light a (seed, shade) pair with adjacency preference,
   // or — when customShadeMode === "exact" — assigns each light exactly
@@ -956,6 +961,111 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     return result;
   }, [placedColorLights, customColors, customShadeMode, buildAdjacency]);
 
+  // ─── White (color-temperature) compute variants ─────────────────────
+  // Entries carry { r, g, b, kelvin } — r/g/b is the display approximation
+  // (kelvinToRGB), kelvin drives the real CT command on Apply.
+  const ctEntry = (k) => ({ ...kelvinToRGB(k), kelvin: k });
+
+  // Assign a pool of CT entries across devices, tonal-style: most-constrained
+  // first, preferring a ≥gap index distance from already-assigned neighbors.
+  const assignCTPool = useCallback((entries) => {
+    if (placedColorLights.length === 0 || entries.length === 0) return null;
+    const n = entries.length;
+    const adj = buildAdjacency(placedColorLights);
+    const sorted = [...placedColorLights].sort((a, b) =>
+      (adj[b.key]?.size || 0) - (adj[a.key]?.size || 0));
+    const gap = n >= 4 ? 2 : 1;
+    const assignment = {};
+    sorted.forEach(device => {
+      const neighborIdx = new Set();
+      adj[device.key]?.forEach(nk => {
+        if (assignment[nk] !== undefined) neighborIdx.add(assignment[nk]);
+      });
+      const indices = Array.from({ length: n }, (_, i) => i);
+      for (let i = n - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [indices[i], indices[j]] = [indices[j], indices[i]];
+      }
+      let chosen = indices.find(idx => ![...neighborIdx].some(nn => Math.abs(idx - nn) < gap));
+      if (chosen === undefined) chosen = indices[0];
+      assignment[device.key] = chosen;
+    });
+    const result = {};
+    Object.entries(assignment).forEach(([key, idx]) => { result[key] = { ...entries[idx] }; });
+    return result;
+  }, [placedColorLights, buildAdjacency]);
+
+  // ─── Color-temperature (White) compute ──────────────────────────────────────
+  // "Your scientists were so preoccupied with whether or not they could, they
+  //  didn't stop to think if they should." — Dr. Ian Malcolm, Jurassic Park.
+  // After all the hue/palette/adjacency machinery, it turns out a lot of people
+  // just want plain tunable white. These mirror the RGB compute fns above but
+  // emit Kelvin entries (kelvinToRGB approximation for display, real CT on apply).
+  const computePaletteCT = useCallback(() => {
+    const p = CT_PALETTES[ctPreset] || CT_PALETTES[0];
+    const poolSize = Math.max(2, Math.min(6, placedColorLights.length));
+    return assignCTPool(spreadKelvin(p.min, p.max, poolSize).map(ctEntry));
+  }, [ctPreset, placedColorLights, assignCTPool]);
+
+  const computeTonalCT = useCallback(() => {
+    return assignCTPool(spreadKelvin(CT_MIN_K, CT_MAX_K, 8).map(ctEntry));
+  }, [placedColorLights, assignCTPool]);
+
+  const computeCustomCT = useCallback(() => {
+    const poolSize = Math.max(2, Math.min(8, placedColorLights.length));
+    return assignCTPool(spreadKelvin(CT_MIN_K, maxKelvin, poolSize).map(ctEntry));
+  }, [maxKelvin, placedColorLights, assignCTPool]);
+
+  const computeGradientCT = useCallback(() => {
+    if (placedColorLights.length === 0) return null;
+    const dirVectors = {
+      "left-right": { dx: 1, dy: 0 }, "right-left": { dx: -1, dy: 0 },
+      "top-bottom": { dx: 0, dy: 1 }, "bottom-top": { dx: 0, dy: -1 },
+      "center-out": null,
+    };
+    const count = placedColorLights.length;
+    const temps = spreadKelvin(CT_MIN_K, maxKelvin, count); // warm → maxKelvin across span
+    let sorted;
+    if (direction === "center-out") {
+      const cx = placedColorLights.reduce((s, d) => s + d.x, 0) / count;
+      const cy = placedColorLights.reduce((s, d) => s + d.y, 0) / count;
+      sorted = placedColorLights.map(d => ({ key: d.key, proj: Math.sqrt((d.x - cx) ** 2 + (d.y - cy) ** 2) }))
+        .sort((a, b) => a.proj - b.proj);
+    } else {
+      const vec = dirVectors[direction] || dirVectors["left-right"];
+      sorted = placedColorLights.map(d => ({ key: d.key, proj: d.x * vec.dx + d.y * vec.dy }))
+        .sort((a, b) => a.proj - b.proj);
+    }
+    const result = {};
+    sorted.forEach((item, i) => { result[item.key] = ctEntry(temps[i]); });
+    return result;
+  }, [placedColorLights, maxKelvin, direction]);
+
+  const computeBeaconCT = useCallback(() => {
+    if (placedColorLights.length === 0) return null;
+    const source = placedColorLights.find(d => d.key === beaconSourceKey) || placedColorLights[0];
+    const dists = placedColorLights.map(d => {
+      if (isLinear) return Math.abs(d.x - source.x);
+      return Math.sqrt((d.x - source.x) ** 2 + (d.y - source.y) ** 2);
+    });
+    const maxDist = Math.max(...dists, 0.0001);
+    const result = {};
+    placedColorLights.forEach((d, i) => {
+      const t = dists[i] / maxDist;
+      const bri = Math.max(5, Math.min(100, Math.round(brightness * (1 - t) + 5 * t)));
+      result[d.key] = { ...ctEntry(maxKelvin), brightness: bri };
+    });
+    return result;
+  }, [placedColorLights, beaconSourceKey, brightness, maxKelvin, isLinear]);
+
+  const computeForModeCT = () => {
+    if (mode === "gradient") return computeGradientCT();
+    if (mode === "tonal") return computeTonalCT();
+    if (mode === "beacon") return computeBeaconCT();
+    if (mode === "custom") return computeCustomCT();
+    return computePaletteCT();
+  };
+
   // Auto-pick a beacon source when entering Beacon mode or when the layout changes
   // and the current source is no longer placed.
   useEffect(() => {
@@ -968,6 +1078,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
 
   // ─── Generate preview ───────────────────────────────────────────────
   const computeForMode = () => {
+    if (colorSpace === "white") return computeForModeCT();
     if (mode === "gradient") return computeGradient();
     if (mode === "tonal") return computeTonal();
     if (mode === "beacon") return computeBeacon();
@@ -977,7 +1088,9 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
   const pipeline = (raw) => {
     // Order matters: clamp saturation first (so per-device overrides
     // start from clean colors), then apply per-device fill mode.
-    const sat = applyMinSat(raw, minSatEnabled, minSatPct);
+    // White mode skips min-saturation — whites are intentionally low-sat and
+    // clamping would push them back toward vivid color.
+    const sat = colorSpace === "white" ? raw : applyMinSat(raw, minSatEnabled, minSatPct);
     return applySegmentFillModes(sat, segmentFillModes);
   };
   const generatePreview = () => {
@@ -988,7 +1101,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
   useEffect(() => {
     if (!hasLayout) return;
     setPreview(pipeline(computeForMode()));
-  }, [mode, baseColor, direction, paletteColors, customColors, customShadeMode, hasLayout, layout, fixtures, beaconSourceKey, brightness, addressSegments, minSatEnabled, minSatPct, segmentFillModes]);
+  }, [mode, colorSpace, ctPreset, maxKelvin, baseColor, direction, paletteColors, customColors, customShadeMode, hasLayout, layout, fixtures, beaconSourceKey, brightness, addressSegments, minSatEnabled, minSatPct, segmentFillModes]);
 
   // ─── Apply colors to lights ─────────────────────────────────────────
   const applyColors = () => {
@@ -1098,7 +1211,14 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
         if (!light || !light._controlFn) { applyTick(); return; }
         const briPct = color.brightness ?? brightness;
         const bri = Math.round(briPct * 254 / 100);
-        light._controlFn(light, { on: true, r: color.r, g: color.g, b: color.b, brightness: bri });
+        if (color.kelvin != null && light.capabilities?.has_color_temp) {
+          // Native tunable white → true CT command.
+          light._controlFn(light, { on: true, color_temp: kelvinToMired(color.kelvin), brightness: bri });
+        } else {
+          // Color-only lamp (or color mode) → RGB. In white mode color.r/g/b is
+          // already the kelvinToRGB approximation, so this falls back gracefully.
+          light._controlFn(light, { on: true, r: color.r, g: color.g, b: color.b, brightness: bri });
+        }
         applyTick();
       });
 
@@ -1107,7 +1227,9 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
       goveeEntries.forEach(([key, color]) => {
         const light = lightMap[key];
         if (!light || !light._controlFn) { applyTick(); return; }
-        const cmd = { on: true, r: color.r, g: color.g, b: color.b, brightness: color.brightness ?? brightness };
+        const cmd = color.kelvin != null
+          ? { on: true, color_temp_kelvin: color.kelvin, brightness: color.brightness ?? brightness }
+          : { on: true, r: color.r, g: color.g, b: color.b, brightness: color.brightness ?? brightness };
         setTimeout(() => {
           light._controlFn(light, cmd);
           applyTick();
@@ -1466,6 +1588,28 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
         </div>
       </div>
 
+      {/* Color vs White (color temperature) toggle */}
+      <div style={{
+        display: "flex", gap: 4, marginBottom: 14,
+        background: "#0f172a", borderRadius: 8, padding: 3,
+        border: "1px solid #1e293b", maxWidth: 260,
+      }}>
+        {[
+          { key: "color", label: "Color" },
+          { key: "white", label: "White" },
+        ].map(opt => (
+          <button key={opt.key}
+            onClick={() => setColorSpace(opt.key)}
+            style={{
+              flex: 1, padding: "6px 10px", borderRadius: 6, border: "none",
+              background: colorSpace === opt.key ? "#6366f1" : "transparent",
+              color: colorSpace === opt.key ? "#fff" : "#94a3b8",
+              fontSize: 12, fontWeight: 600, cursor: "pointer",
+            }}
+          >{opt.label}</button>
+        ))}
+      </div>
+
       {/* Address-segments toggle. Only shown when this room actually has a
           segmented device — otherwise it has no effect and is just noise. */}
       {allLights.some(l => l?.sku && (segmentInfo?.sku_table?.[l.sku]?.count || 0) > 1) && (
@@ -1524,18 +1668,27 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
                 isLinear={isLinear}
               />
 
-              {/* Base color */}
-              <div style={{ marginBottom: 12 }}>
-                <div style={{ fontSize: 11, color: "#64748b", marginBottom: 4 }}>Base color:</div>
-                <ColorPicker
-                  size={120}
-                  currentColor={baseColor}
-                  onColorSelect={(r, g, b) => setBaseColor({ r, g, b })}
-                  favorites={favorites}
-                  onFavoritesChange={onFavoritesChange}
-                  compact={true}
-                />
-              </div>
+              {/* Base color (Color mode) / max temperature (White mode) */}
+              {colorSpace === "color" ? (
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ fontSize: 11, color: "#64748b", marginBottom: 4 }}>Base color:</div>
+                  <ColorPicker
+                    size={120}
+                    currentColor={baseColor}
+                    onColorSelect={(r, g, b) => setBaseColor({ r, g, b })}
+                    favorites={favorites}
+                    onFavoritesChange={onFavoritesChange}
+                    compact={true}
+                  />
+                </div>
+              ) : (
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ fontSize: 11, color: "#64748b", marginBottom: 6 }}>
+                    Coolest temperature — the gradient runs from {CT_MIN_K}K up to this across the layout.
+                  </div>
+                  <ColorTempSlider kelvin={maxKelvin} onChange={setMaxKelvin} />
+                </div>
+              )}
             </div>
           )}
 
@@ -1543,14 +1696,19 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
           {mode === "tonal" && (
             <div>
               <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 10 }}>
-                8 shades of one color, randomly assigned so no adjacent lights share a similar tone.
+                {colorSpace === "color"
+                  ? "8 shades of one color, randomly assigned so no adjacent lights share a similar tone."
+                  : `8 white temperatures across the full ${CT_MIN_K}K–${CT_MAX_K}K range, randomly assigned so no adjacent lights share a similar tone.`}
               </div>
 
               {/* Live swatch row showing the 8 generated shades */}
               <div style={{ marginBottom: 12 }}>
                 <div style={{ fontSize: 11, color: "#64748b", marginBottom: 4 }}>Generated shades:</div>
                 <div style={{ display: "flex", gap: 4 }}>
-                  {generateTonalShades(baseColor.r, baseColor.g, baseColor.b, 8).map((c, i) => (
+                  {(colorSpace === "color"
+                    ? generateTonalShades(baseColor.r, baseColor.g, baseColor.b, 8)
+                    : spreadKelvin(CT_MIN_K, CT_MAX_K, 8).map(kelvinToRGB)
+                  ).map((c, i) => (
                     <div key={i} style={{
                       width: 24, height: 24, borderRadius: 5,
                       background: `rgb(${c.r},${c.g},${c.b})`,
@@ -1560,18 +1718,20 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
                 </div>
               </div>
 
-              {/* Base color picker */}
-              <div style={{ marginBottom: 12 }}>
-                <div style={{ fontSize: 11, color: "#64748b", marginBottom: 4 }}>Base color:</div>
-                <ColorPicker
-                  size={120}
-                  currentColor={baseColor}
-                  onColorSelect={(r, g, b) => setBaseColor({ r, g, b })}
-                  favorites={favorites}
-                  onFavoritesChange={onFavoritesChange}
-                  compact={true}
-                />
-              </div>
+              {/* Base color picker (Color mode only — White uses the full range) */}
+              {colorSpace === "color" && (
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ fontSize: 11, color: "#64748b", marginBottom: 4 }}>Base color:</div>
+                  <ColorPicker
+                    size={120}
+                    currentColor={baseColor}
+                    onColorSelect={(r, g, b) => setBaseColor({ r, g, b })}
+                    favorites={favorites}
+                    onFavoritesChange={onFavoritesChange}
+                    compact={true}
+                  />
+                </div>
+              )}
             </div>
           )}
 
@@ -1579,10 +1739,49 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
           {mode === "palette" && (
             <div>
               <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 8 }}>
-                Distinct colors assigned to devices. Adjacent lights on the map won't share a color.
+                {colorSpace === "color"
+                  ? "Distinct colors assigned to devices. Adjacent lights on the map won't share a color."
+                  : "A band of white temperatures assigned across devices. Adjacent lights won't share a temperature."}
               </div>
 
+              {/* White-mode: 4 temperature-band presets */}
+              {colorSpace === "white" && (
+                <div style={{
+                  display: "grid",
+                  gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(4, 1fr)",
+                  gap: 6, marginBottom: 12,
+                }}>
+                  {CT_PALETTES.map((p, i) => {
+                    const active = ctPreset === i;
+                    const lo = kelvinToRGB(p.min), hi = kelvinToRGB(p.max);
+                    return (
+                      <button key={p.name}
+                        onClick={() => setCtPreset(i)}
+                        style={{
+                          padding: "8px 8px", borderRadius: 8,
+                          border: `1px solid ${active ? "#34d399" : "#334155"}`,
+                          background: active ? "rgba(52,211,153,0.12)" : "rgba(15,23,42,0.4)",
+                          cursor: "pointer", display: "flex", flexDirection: "column", gap: 6,
+                        }}
+                      >
+                        <span style={{
+                          height: 14, borderRadius: 3,
+                          background: `linear-gradient(90deg, rgb(${lo.r},${lo.g},${lo.b}), rgb(${hi.r},${hi.g},${hi.b}))`,
+                        }} />
+                        <span style={{
+                          fontSize: 10, fontWeight: 600,
+                          color: active ? "#34d399" : "#cbd5e1",
+                          whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                        }}>{p.name}</span>
+                        <span style={{ fontSize: 9, color: "#64748b" }}>{p.min}–{p.max}K</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
               {/* Search + category filter + filtered grid */}
+              {colorSpace === "color" && (<>
               <div style={{ marginBottom: 12 }}>
                 <input
                   type="text"
@@ -1755,6 +1954,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
                   />
                 </div>
               )}
+              </>)}
             </div>
           )}
 
@@ -1762,10 +1962,22 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
           {mode === "custom" && (
             <div>
               <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 10 }}>
-                1-4 of your own colors. Lights are randomly assigned a seed so neighbors prefer different families. Shuffle to re-roll.
+                {colorSpace === "color"
+                  ? "1-4 of your own colors. Lights are randomly assigned a seed so neighbors prefer different families. Shuffle to re-roll."
+                  : `Temperatures at or below your chosen maximum, spread from ${CT_MIN_K}K and assigned so neighbors differ.`}
               </div>
 
+              {colorSpace === "white" && (
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ fontSize: 11, color: "#64748b", marginBottom: 6 }}>
+                    Maximum temperature:
+                  </div>
+                  <ColorTempSlider kelvin={maxKelvin} onChange={setMaxKelvin} />
+                </div>
+              )}
+
               {/* Exact vs Shades toggle */}
+              {colorSpace === "color" && (<>
               <div style={{
                 display: "flex", gap: 4, marginBottom: 12,
                 background: "#0f172a", borderRadius: 8, padding: 3,
@@ -1840,6 +2052,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
                   >+ Add color</button>
                 )}
               </div>
+              </>)}
             </div>
           )}
 
@@ -1847,7 +2060,9 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
           {mode === "beacon" && (
             <div>
               <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 10 }}>
-                One color radiating from a single source. Brightness falls off with distance, down to 5% at the far extent.
+                {colorSpace === "color"
+                  ? "One color radiating from a single source. Brightness falls off with distance, down to 5% at the far extent."
+                  : "One white temperature radiating from a single source. Brightness falls off with distance, down to 5% at the far extent."}
               </div>
 
               <BeaconSourcePicker
@@ -1861,17 +2076,24 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
                 isLinear={isLinear}
               />
 
-              <div style={{ marginBottom: 12 }}>
-                <div style={{ fontSize: 11, color: "#64748b", marginBottom: 4 }}>Color:</div>
-                <ColorPicker
-                  size={120}
-                  currentColor={baseColor}
-                  onColorSelect={(r, g, b) => setBaseColor({ r, g, b })}
-                  favorites={favorites}
-                  onFavoritesChange={onFavoritesChange}
-                  compact={true}
-                />
-              </div>
+              {colorSpace === "color" ? (
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ fontSize: 11, color: "#64748b", marginBottom: 4 }}>Color:</div>
+                  <ColorPicker
+                    size={120}
+                    currentColor={baseColor}
+                    onColorSelect={(r, g, b) => setBaseColor({ r, g, b })}
+                    favorites={favorites}
+                    onFavoritesChange={onFavoritesChange}
+                    compact={true}
+                  />
+                </div>
+              ) : (
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ fontSize: 11, color: "#64748b", marginBottom: 6 }}>Temperature:</div>
+                  <ColorTempSlider kelvin={maxKelvin} onChange={setMaxKelvin} />
+                </div>
+              )}
             </div>
           )}
 

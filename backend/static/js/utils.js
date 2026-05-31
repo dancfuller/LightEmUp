@@ -212,6 +212,60 @@ function generateTonalShades(baseR, baseG, baseB, count) {
   return shades;
 }
 
+// ─── Color Temperature (white) Utilities ────────────────────────────────────
+
+// User-facing tunable-white range. 2000K = candle warm, 6500K = cool daylight.
+const CT_MIN_K = 2000;
+const CT_MAX_K = 6500;
+
+// 4 named white palettes — each a [min,max] Kelvin band.
+const CT_PALETTES = [
+  { name: "Warm White",    min: 2000, max: 3000 },
+  { name: "Neutral White", min: 3000, max: 4500 },
+  { name: "Cool White",    min: 4500, max: 6500 },
+  { name: "All Whites",    min: 2000, max: 6500 },
+];
+
+// Tanner Helland blackbody approximation → display RGB for a Kelvin value.
+// Used for swatches, map dots, and Govee segment packets (segments are RGB-only).
+function kelvinToRGB(kelvin) {
+  const t = Math.max(1000, Math.min(40000, kelvin)) / 100;
+  let r, g, b;
+  if (t <= 66) {
+    r = 255;
+    g = 99.4708025861 * Math.log(t) - 161.1195681661;
+    b = t <= 19 ? 0 : 138.5177312231 * Math.log(t - 10) - 305.0447927307;
+  } else {
+    r = 329.698727446 * Math.pow(t - 60, -0.1332047592);
+    g = 288.1221695283 * Math.pow(t - 60, -0.0755148492);
+    b = 255;
+  }
+  const clamp = (v) => Math.max(0, Math.min(255, Math.round(v)));
+  return { r: clamp(r), g: clamp(g), b: clamp(b) };
+}
+
+// Kelvin → Hue mireds (m3k). Hue accepts ct in [153, 500] (≈6500K..2000K).
+function kelvinToMired(kelvin) {
+  return Math.max(153, Math.min(500, Math.round(1000000 / kelvin)));
+}
+
+// Spread n Kelvin values across [min,max], evenly in mired space (perceptually
+// more uniform than linear Kelvin). Returns an array of Kelvin ints.
+function spreadKelvin(minK, maxK, n) {
+  if (n <= 0) return [];
+  const m0 = 1000000 / maxK; // mired of the warmest visual = largest mired
+  const m1 = 1000000 / minK;
+  // Map index 0 → warmest (minK), index n-1 → coolest (maxK) for intuitive order.
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const f = n === 1 ? 0 : i / (n - 1);
+    // f=0 → minK (largest mired m1), f=1 → maxK (smallest mired m0)
+    const mired = m1 + (m0 - m1) * f;
+    out.push(Math.round(1000000 / mired));
+  }
+  return out;
+}
+
 // ─── Favorite Colors ────────────────────────────────────────────────────────
 
 const STORAGE_KEY = "lightemup_fav_colors";

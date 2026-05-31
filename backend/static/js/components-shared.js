@@ -430,3 +430,27 @@ function Slider({ label, value, min, max, onChange, color, unit = "" }) {
     </div>
   );
 }
+
+// Tunable-white slider: a warm→cool gradient track, value shown in Kelvin.
+// The thumb is the standard one (styled globally in index.html).
+function ColorTempSlider({ label = "Color Temperature", kelvin, onChange, min = CT_MIN_K, max = CT_MAX_K }) {
+  const warm = kelvinToRGB(min), cool = kelvinToRGB(max);
+  const mid = kelvinToRGB(Math.round((min + max) / 2));
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+        <span style={{ fontSize: 12, color: "#94a3b8", fontWeight: 500 }}>{label}</span>
+        <span style={{ fontSize: 12, color: "#e2e8f0", fontWeight: 600 }}>{kelvin}K</span>
+      </div>
+      <input
+        type="range" min={min} max={max} step={50} value={kelvin}
+        onChange={(e) => onChange(Number(e.target.value))}
+        style={{
+          width: "100%", height: 10, appearance: "none", borderRadius: 5,
+          background: `linear-gradient(to right, rgb(${warm.r},${warm.g},${warm.b}), rgb(${mid.r},${mid.g},${mid.b}), rgb(${cool.r},${cool.g},${cool.b}))`,
+          cursor: "pointer", outline: "none",
+        }}
+      />
+    </div>
+  );
+}

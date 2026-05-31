@@ -60,6 +60,7 @@ class LightningSettings(BaseModel):
     thunder_enabled: bool = False
     thunder_immediate: bool = False
     thunder_funny: bool = False
+    background_rain: bool = True  # looping ambient rain bed (client-side audio)
 
 
 # ─── Pattern Generation ───────────────────────────────────────────────────

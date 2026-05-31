@@ -288,6 +288,7 @@ function App() {
         if (cmd.on !== undefined) stateUpdate.on = cmd.on;
         if (cmd.brightness !== undefined) stateUpdate.brightness = cmd.brightness;
         if (cmd.r !== undefined) stateUpdate.color = { r: cmd.r, g: cmd.g, b: cmd.b };
+        if (cmd.color_temp !== undefined) { stateUpdate.color_temp = cmd.color_temp; stateUpdate.color = null; }
         return { ...l, state: { ...l.state, ...stateUpdate } };
       }
       return l;
@@ -305,6 +306,7 @@ function App() {
         if (cmd.on !== undefined) stateUpdate.on = cmd.on;
         if (cmd.brightness !== undefined) stateUpdate.brightness = cmd.brightness;
         if (cmd.r !== undefined) stateUpdate.color = { r: cmd.r, g: cmd.g, b: cmd.b };
+        if (cmd.color_temp_kelvin !== undefined) { stateUpdate.color_temp = cmd.color_temp_kelvin; stateUpdate.color = null; }
         return { ...d, state: { ...d.state, ...stateUpdate } };
       }
       return d;
