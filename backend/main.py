@@ -61,6 +61,16 @@ DEFAULT_CONFIG = {
     "known_devices": {  # devices we've seen before; surface as "missing" when absent
         "govee": {},    # keyed by MAC: { mac: { ip, sku, name, last_seen } }
     },
+    "device_state": {},  # "govee:<ip>" → last state set via LightEmUp:
+                          # { on, brightness, r, g, b, color_temp_kelvin, updated_at }
+                          # Display-only: lets a second browser show accurate Govee
+                          # status (Govee LAN devStatus reports color unreliably).
+    "room_color_state": {},  # room name → last color-tool selection applied:
+                              # { mode, colorSpace, paletteColors, baseColor,
+                              #   brightness, direction, addressSegments, updated_at }
+    "segment_state": {},  # "govee:<ip>" → { colors: {idx:[r,g,b]}, brightness }
+                           # config-backed mirror of segment_state.py for restart
+                           # durability (in-memory module is the live source).
     "ui_prefs": {       # UI-only preferences shared across browsers
         "color_picker_style": "huebar",  # "huebar" | "wheel"
         "min_saturation_enabled": True,  # clamp generated colors to a floor
@@ -82,6 +92,84 @@ def save_config(config: dict):
 
 
 config = load_config()
+
+
+# ─── Debounced config persistence ─────────────────────────────────────────────
+# Device/room state can be written on every brightness drag or palette apply.
+# Writing config.json synchronously on each would hammer the Pi's SD card, so
+# coalesce rapid mutations into one disk write ~2s after the last change.
+
+_SAVE_DEBOUNCE_S = 2.0
+_save_handle: "asyncio.TimerHandle | None" = None
+_save_pending = False
+
+
+def _flush_save():
+    global _save_handle, _save_pending
+    _save_handle = None
+    _save_pending = False
+    try:
+        save_config(config)
+    except Exception:
+        log.exception("Debounced config save failed")
+
+
+def schedule_save():
+    """Persist config soon, coalescing bursts. Falls back to an immediate
+    synchronous save when no event loop is running (e.g. at import time)."""
+    global _save_handle, _save_pending
+    _save_pending = True
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        _flush_save()
+        return
+    if _save_handle is not None:
+        _save_handle.cancel()
+    _save_handle = loop.call_later(_SAVE_DEBOUNCE_S, _flush_save)
+
+
+def flush_save_now():
+    """Force any pending debounced save to disk immediately (shutdown hook)."""
+    global _save_handle
+    if _save_handle is not None:
+        _save_handle.cancel()
+        _save_handle = None
+    if _save_pending:
+        _flush_save()
+
+
+def record_govee_state(ip: str, **fields):
+    """Record the last state set on a Govee device via LightEmUp so a second
+    browser can render accurate status. Display-only — never issues commands.
+    A whole-device color clears any prior color_temp_kelvin and vice-versa."""
+    store = config.setdefault("device_state", {})
+    key = f"govee:{ip}"
+    entry = store.get(key, {})
+    if fields.get("r") is not None:
+        entry.pop("color_temp_kelvin", None)
+    if fields.get("color_temp_kelvin") is not None:
+        for k in ("r", "g", "b"):
+            entry.pop(k, None)
+    for k, v in fields.items():
+        if v is not None:
+            entry[k] = v
+    entry["updated_at"] = _now_iso()
+    store[key] = entry
+    schedule_save()
+
+
+def persist_segments():
+    """Mirror the in-memory segment_state into config for restart durability.
+    snapshot() is keyed by bare IP; config uses the "govee:<ip>" key form."""
+    snap = segment_state.snapshot()
+    config["segment_state"] = {f"govee:{ip}": e for ip, e in snap.items()}
+    schedule_save()
+
+
+def _now_iso() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 # ─── Logging ────────────────────────────────────────────────────────────────
@@ -117,7 +205,9 @@ log = logging.getLogger("lightemup.main")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("🔆 LightEmUp starting up...")
+    segment_state.load(config.get("segment_state", {}))
     yield
+    flush_save_now()
     print("🔆 LightEmUp shutting down...")
 
 
@@ -430,6 +520,7 @@ async def control_govee(req: GoveeCommandRequest):
     razer_keeper.cancel(req.ip)
     if req.r is not None or req.color_temp_kelvin is not None or req.on is False:
         segment_state.clear(req.ip)
+        persist_segments()
     results = {}
 
     if req.on is not None:
@@ -445,6 +536,10 @@ async def control_govee(req: GoveeCommandRequest):
     if req.brightness is not None:
         results["brightness"] = await govee_lan_brightness(req.ip, req.brightness)
 
+    record_govee_state(
+        req.ip, on=req.on, brightness=req.brightness,
+        r=req.r, g=req.g, b=req.b, color_temp_kelvin=req.color_temp_kelvin,
+    )
     return {"results": results}
 
 
@@ -500,12 +595,17 @@ async def control_room(req: RoomStateRequest):
         razer_keeper.cancel(device_ip)
         if req.r is not None or req.on is False:
             segment_state.clear(device_ip)
+            persist_segments()
         if req.on is not None:
             await govee_lan_turn(device_ip, req.on)
         if req.brightness is not None:
             await govee_lan_brightness(device_ip, req.brightness)
         if req.r is not None and req.g is not None and req.b is not None:
             await govee_lan_color(device_ip, req.r, req.g, req.b)
+        record_govee_state(
+            device_ip, on=req.on, brightness=req.brightness,
+            r=req.r, g=req.g, b=req.b,
+        )
         results["govee"].append({"ip": device_ip, "success": True})
 
     return {"results": results}
@@ -715,6 +815,7 @@ async def control_govee_segment(req: GoveeSegmentControlRequest):
         await govee_razer_set_segments(req.ip, scaled)
         await razer_keeper.apply(req.ip, req.sku, scaled)
         segment_state.set_bulk(req.ip, ordered, brightness)
+        persist_segments()
         return {"results": {"color": True}, "protocol": "razer"}
 
     if proto != "cloud_v2":
@@ -730,6 +831,7 @@ async def control_govee_segment(req: GoveeSegmentControlRequest):
             api_key, req.sku, req.device_mac, req.segment_idx, req.r, req.g, req.b
         )
         segment_state.set_one(req.ip, req.segment_idx, req.r, req.g, req.b)
+        persist_segments()
     if req.brightness is not None:
         # Rate limit: wait before second call
         if results:
@@ -787,6 +889,7 @@ async def control_govee_segments_bulk(req: GoveeSegmentsBulkRequest):
     # Store unscaled colors + brightness separately so a later brightness
     # change can re-scale without losing the per-segment palette.
     segment_state.set_bulk(req.ip, colors_tuples, brightness)
+    persist_segments()
     return {"success": True}
 
 
@@ -838,6 +941,7 @@ async def control_govee_segments_brightness(req: GoveeSegmentsBrightnessRequest)
         raise HTTPException(400, f"SKU {req.sku} does not support segmented control")
 
     segment_state.set_brightness(req.ip, brightness)
+    persist_segments()
     return {"success": True, "brightness": brightness}
 
 
@@ -846,6 +950,34 @@ async def get_segment_state():
     """Return the last-known per-segment colors + brightness for every
     Govee device the server has set segments on."""
     return {"state": segment_state.snapshot()}
+
+
+# ─── Room color-tool state (display-only) ──────────────────────────────────────
+# The room color tool's selection (mode, palette, brightness, etc.) lives only
+# in the browser. Persisting the last-applied selection per room lets a second
+# device pre-select the same palette/mode on open — display-only, never replays
+# any light command.
+
+class RoomColorStateRequest(BaseModel):
+    room_name: str
+    mode: Optional[str] = None
+    color_space: Optional[str] = None
+    palette_colors: Optional[list] = None
+    base_color: Optional[dict] = None
+    brightness: Optional[int] = None
+    direction: Optional[str] = None
+    address_segments: Optional[str] = None
+
+
+@app.post("/api/room-color-state")
+async def set_room_color_state(req: RoomColorStateRequest):
+    store = config.setdefault("room_color_state", {})
+    entry = {k: v for k, v in req.model_dump().items()
+             if k != "room_name" and v is not None}
+    entry["updated_at"] = _now_iso()
+    store[req.room_name] = entry
+    schedule_save()
+    return {"success": True}
 
 
 # ─── Config Endpoint ────────────────────────────────────────────────────────
@@ -860,6 +992,8 @@ async def get_config():
         "nicknames": config.get("nicknames", {}),
         "room_layouts": config.get("room_layouts", {}),
         "fixtures": config.get("fixtures", {}),
+        "device_state": config.get("device_state", {}),
+        "room_color_state": config.get("room_color_state", {}),
     }
 
 

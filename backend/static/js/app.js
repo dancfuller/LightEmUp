@@ -51,6 +51,7 @@ function App() {
   const [segmentState, setSegmentState] = useState({});
   const [roomLayouts, setRoomLayouts] = useState({});
   const [fixtures, setFixtures] = useState({});
+  const [roomColorState, setRoomColorState] = useState({});
   // deviceModes: persisted LightCard preference per device_key.
   // "whole" or "segments". Loaded from config, updated on toggle.
   const [deviceModes, setDeviceModes] = useState({});
@@ -92,6 +93,7 @@ function App() {
       setNicknames(cfg.nicknames || {});
       setRoomLayouts(cfg.room_layouts || {});
       setFixtures(cfg.fixtures || {});
+      setRoomColorState(cfg.room_color_state || {});
       setDeviceModes(cfg.device_modes || {});
       setSegmentFillModes(cfg.segment_fill_modes || {});
       setPickerStyle(cfg.ui_prefs?.color_picker_style === "wheel" ? "wheel" : "huebar");
@@ -117,7 +119,26 @@ function App() {
       }
 
       const results = await Promise.all(promises);
-      setGoveeDevices(results[0].devices || []);
+      // Govee LAN devStatus reports on/brightness but not color reliably, so
+      // overlay the last color/temp we set via LightEmUp (stored server-side)
+      // onto each device. Display-only — opening the app issues no commands.
+      const deviceState = cfg.device_state || {};
+      const mergedGovee = (results[0].devices || []).map(d => {
+        const stored = deviceState[`govee:${d.ip}`];
+        if (!stored) return d;
+        const state = { ...d.state };
+        if (stored.r != null && stored.g != null && stored.b != null) {
+          state.color = { r: stored.r, g: stored.g, b: stored.b };
+          state.color_temp = null;
+        } else if (stored.color_temp_kelvin != null) {
+          state.color_temp = stored.color_temp_kelvin;
+          state.color = null;
+        }
+        if (state.on == null && stored.on != null) state.on = stored.on;
+        if (state.brightness == null && stored.brightness != null) state.brightness = stored.brightness;
+        return { ...d, state };
+      });
+      setGoveeDevices(mergedGovee);
       setMissingGovee(results[0].missing || []);
       setLightningActiveRooms(results[1].active || []);
       setSegmentInfo(results[2]);
@@ -579,6 +600,7 @@ function App() {
                   onFixtureDelete={deleteFixture}
                   minSatEnabled={minSatEnabled}
                   minSatPct={minSatPct}
+                  savedColorState={roomColorState[roomName]}
                 />
               );
             })}

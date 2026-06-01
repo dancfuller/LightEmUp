@@ -74,7 +74,7 @@ function ControlSurface({ view, views, onView, onClose, roomName, isMobile, chil
   );
 }
 
-function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGovee, onControlRoom, favorites, onFavoritesChange, nicknames, onNicknameChange, lightningActive, onLightningStart, onLightningStop, segmentInfo, segmentState, onSegmentStateRefresh, deviceModes, onDeviceModeChange, onDeviceModesBulkChange, segmentFillModes, onSegmentFillModeChange, roomLayouts, onLayoutChange, fixtures, onFixtureUpsert, onFixtureDelete, minSatEnabled, minSatPct }) {
+function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGovee, onControlRoom, favorites, onFavoritesChange, nicknames, onNicknameChange, lightningActive, onLightningStart, onLightningStop, segmentInfo, segmentState, onSegmentStateRefresh, deviceModes, onDeviceModeChange, onDeviceModesBulkChange, segmentFillModes, onSegmentFillModeChange, roomLayouts, onLayoutChange, fixtures, onFixtureUpsert, onFixtureDelete, minSatEnabled, minSatPct, savedColorState }) {
   const isMobile = useIsMobile();
   const [collapsed, setCollapsed] = useState(true);
   // Single overlay surface state — replaces the old per-panel show* booleans.
@@ -237,8 +237,15 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
         minSatEnabled={minSatEnabled}
         minSatPct={minSatPct}
         segmentFillModes={segmentFillModes}
-        onApply={(applied, addressMode) => {
+        savedColorState={savedColorState}
+        onApply={(applied, addressMode, colorStateSnapshot) => {
           setColorModeApplied(applied);
+          if (colorStateSnapshot) {
+            api("/room-color-state", {
+              method: "POST",
+              body: JSON.stringify({ room_name: name, ...colorStateSnapshot }),
+            }).catch(e => console.warn("[RoomSection] color-state save failed:", e));
+          }
           if (onSegmentStateRefresh) {
             setTimeout(onSegmentStateRefresh, 5000);
           }

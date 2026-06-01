@@ -321,7 +321,7 @@ function applySegmentFillModes(preview, fillModes) {
   return out;
 }
 
-function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlGovee, favorites, onFavoritesChange, nicknames, segmentInfo, roomLayouts, fixtures, onApply, minSatEnabled, minSatPct, segmentFillModes }) {
+function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlGovee, favorites, onFavoritesChange, nicknames, segmentInfo, roomLayouts, fixtures, onApply, minSatEnabled, minSatPct, segmentFillModes, savedColorState }) {
   const isMobile = useIsMobile();
   const [mode, setMode] = useState("palette"); // "palette" | "gradient" | "tonal" | "custom" | "beacon"
   // Color space: "color" (RGB, the default) or "white" (tunable color temperature).
@@ -367,6 +367,27 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
   // segments around the device position so gradient/beacon have spatial
   // variation.
   const [addressSegments, setAddressSegments] = useState("individual");
+
+  // Restore the last-applied selection for this room (display-only — pre-selects
+  // the same mode/palette/brightness a previous LightEmUp session set, so a
+  // second device opens onto accurate state). Seeds once per room; never
+  // issues a control command.
+  const seededRoom = useRef(null);
+  useEffect(() => {
+    const s = savedColorState;
+    if (!s || seededRoom.current === roomName) return;
+    seededRoom.current = roomName;
+    if (s.mode) setMode(s.mode);
+    if (s.color_space) setColorSpace(s.color_space);
+    if (Array.isArray(s.palette_colors) && s.palette_colors.length) {
+      setPaletteColors(s.palette_colors);
+      setPaletteSource(s.palette_colors);
+    }
+    if (s.base_color) setBaseColor(s.base_color);
+    if (typeof s.brightness === "number") setBrightness(s.brightness);
+    if (s.direction) setDirection(s.direction);
+    if (s.address_segments) setAddressSegments(s.address_segments);
+  }, [roomName, savedColorState]);
 
   // Apply progress state
   const [applying, setApplying] = useState(false);
@@ -1284,8 +1305,19 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
       });
     }, phase2Start);
 
-    // Notify map so it updates dot colors and clears Identify active state
-    if (onApply) onApply(preview, addressSegments);
+    // Notify map so it updates dot colors and clears Identify active state.
+    // The third arg is a display-only snapshot of the current selection so the
+    // backend can pre-select the same palette/mode on another device.
+    const colorStateSnapshot = {
+      mode,
+      color_space: colorSpace,
+      palette_colors: paletteColors,
+      base_color: baseColor,
+      brightness,
+      direction,
+      address_segments: addressSegments,
+    };
+    if (onApply) onApply(preview, addressSegments, colorStateSnapshot);
   };
 
   // ─── Palette color management ───────────────────────────────────────

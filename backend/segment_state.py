@@ -63,3 +63,21 @@ def snapshot() -> dict:
             "brightness": e["brightness"],
         }
     return out
+
+
+def load(stored: dict) -> None:
+    """Rehydrate from a config-backed snapshot at startup.
+
+    `stored` is keyed by "govee:<ip>" (the config form) with the same shape
+    `snapshot()` produces. Restores last-known segment colors so the UI shows
+    accurate status after a server restart."""
+    _state.clear()
+    for key, e in (stored or {}).items():
+        ip = key.split("govee:", 1)[-1]
+        colors = {}
+        for i, c in (e.get("colors") or {}).items():
+            try:
+                colors[int(i)] = tuple(c)
+            except (ValueError, TypeError):
+                continue
+        _state[ip] = {"colors": colors, "brightness": e.get("brightness", 100)}
