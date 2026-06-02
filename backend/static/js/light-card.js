@@ -52,10 +52,13 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
     ? !!light.capabilities?.has_color_temp
     : hasColor; // most Govee LAN color devices accept colorTemInKelvin
 
-  // Segment display: show a per-segment color strip when segment colors have been applied
+  // Segment display: show a per-segment color strip when segment colors have been applied.
+  // The SKU table is authoritative when the device is known; the per-device
+  // configured count is only a fallback for devices not in the table (and
+  // avoids a stale override pinning a known device to the wrong count).
   const configuredSegCount = light.ip && segmentInfo?.configured_counts?.[light.ip];
   const skuSegCount = light.sku && segmentInfo?.sku_table?.[light.sku]?.count;
-  const segCount = configuredSegCount || skuSegCount || 0;
+  const segCount = skuSegCount || configuredSegCount || 0;
   const hasSegmentColors = segCount > 0 && segmentColors && Object.keys(segmentColors).length > 0;
 
   const deviceKey = light.type === "hue" ? `hue:${light.id}` : `govee:${light.ip}`;

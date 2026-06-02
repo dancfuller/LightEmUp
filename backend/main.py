@@ -926,17 +926,13 @@ async def control_govee_segments_brightness(req: GoveeSegmentsBrightnessRequest)
         await govee_razer_set_segments(req.ip, scaled)
         await razer_keeper.apply(req.ip, req.sku, scaled)
     elif proto == "cloud_v2":
-        api_key = config.get("govee_api_key")
-        if not api_key:
-            raise HTTPException(400, "No Govee API key configured")
-        if not req.device_mac:
-            raise HTTPException(400, "device_mac required for cloud_v2 devices")
-        # Cloud V2 brightness is per-segment. Send each (staggered slightly
-        # — burst-bucket limited).
-        for i in range(count):
-            if i in entry["colors"]:
-                await govee_v2_segment_brightness(api_key, req.sku, req.device_mac, i, brightness)
-                await asyncio.sleep(1.5)
+        # Dimming the whole device via per-segment v2 brightness means one
+        # rate-limited cloud call per segment (~1.5s each) — a 15-segment
+        # slider drag takes ~22s and gets throttled, so the light appears not
+        # to respond. A single whole-device LAN brightness command dims the
+        # entire device instantly over UDP; the persistent segmentedColorRgb
+        # segment colors are device state and survive the brightness change.
+        await govee_lan_brightness(req.ip, brightness)
     else:
         raise HTTPException(400, f"SKU {req.sku} does not support segmented control")
 
