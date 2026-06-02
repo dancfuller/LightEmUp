@@ -71,6 +71,10 @@ DEFAULT_CONFIG = {
     "segment_state": {},  # "govee:<ip>" → { colors: {idx:[r,g,b]}, brightness }
                            # config-backed mirror of segment_state.py for restart
                            # durability (in-memory module is the live source).
+    "ct_correction": {},  # "govee:<ip>" → [{ in: requestedK, out: correctedK }, ...]
+                           # Per-device white-balance calibration: Govee CT renders
+                           # bluer than Hue, so we send a warmer corrected Kelvin to
+                           # match a Hue reference. Interpolated in mired space.
     "ui_prefs": {       # UI-only preferences shared across browsers
         "color_picker_style": "huebar",  # "huebar" | "wheel"
         "min_saturation_enabled": True,  # clamp generated colors to a floor
@@ -172,6 +176,37 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def correct_kelvin(ip: str, kelvin: int) -> int:
+    """Map a requested Kelvin to this device's calibrated output Kelvin.
+
+    Govee LAN devices render the same Kelvin bluer than Hue; the calibration
+    panel records {in, out} sample points (out is warmer/lower). We interpolate
+    piecewise-linearly in mired space (1e6/K) — the same perceptual spacing the
+    palette generator uses — and clamp outside the sampled range. Identity when
+    the device has no calibration."""
+    pts = config.get("ct_correction", {}).get(f"govee:{ip}")
+    if not pts or kelvin is None:
+        return kelvin
+    samples = sorted(
+        ({"m_in": 1e6 / p["in"], "m_out": 1e6 / p["out"]} for p in pts if p.get("in") and p.get("out")),
+        key=lambda s: s["m_in"],
+    )
+    if not samples:
+        return kelvin
+    m = 1e6 / kelvin
+    if m <= samples[0]["m_in"]:
+        return int(round(1e6 / samples[0]["m_out"]))
+    if m >= samples[-1]["m_in"]:
+        return int(round(1e6 / samples[-1]["m_out"]))
+    for a, b in zip(samples, samples[1:]):
+        if a["m_in"] <= m <= b["m_in"]:
+            span = b["m_in"] - a["m_in"]
+            f = 0 if span == 0 else (m - a["m_in"]) / span
+            m_out = a["m_out"] + (b["m_out"] - a["m_out"]) * f
+            return int(round(1e6 / m_out))
+    return kelvin
+
+
 # ─── Logging ────────────────────────────────────────────────────────────────
 # Hourly rotating log file kept for 48 hours. Console output is preserved so
 # `journalctl -u lightemup` still works under systemd. /api/logs serves the
@@ -246,6 +281,8 @@ class GoveeCommandRequest(BaseModel):
     g: Optional[int] = None
     b: Optional[int] = None
     color_temp_kelvin: Optional[int] = None
+    raw_ct: Optional[bool] = None  # skip per-device CT calibration (used by the
+                                   # calibration panel so it previews native output)
 
 class RoomConfig(BaseModel):
     name: str
@@ -530,7 +567,8 @@ async def control_govee(req: GoveeCommandRequest):
         results["color"] = await govee_lan_color(req.ip, req.r, req.g, req.b)
 
     if req.color_temp_kelvin is not None:
-        results["color_temp"] = await govee_lan_color_temp(req.ip, req.color_temp_kelvin)
+        out_k = req.color_temp_kelvin if req.raw_ct else correct_kelvin(req.ip, req.color_temp_kelvin)
+        results["color_temp"] = await govee_lan_color_temp(req.ip, out_k)
 
     # Send brightness after color — some Govee devices reset brightness on color change
     if req.brightness is not None:
@@ -976,6 +1014,23 @@ async def set_room_color_state(req: RoomColorStateRequest):
     return {"success": True}
 
 
+class CTCalibrationRequest(BaseModel):
+    device_key: str  # "govee:<ip>"
+    points: list  # [{ in: requestedK, out: correctedK }, ...]; [] clears calibration
+
+
+@app.post("/api/calibration/ct")
+async def set_ct_calibration(req: CTCalibrationRequest):
+    store = config.setdefault("ct_correction", {})
+    pts = [p for p in (req.points or []) if p.get("in") and p.get("out")]
+    if pts:
+        store[req.device_key] = sorted(pts, key=lambda p: p["in"])
+    else:
+        store.pop(req.device_key, None)
+    schedule_save()
+    return {"success": True, "ct_correction": store}
+
+
 # ─── Config Endpoint ────────────────────────────────────────────────────────
 
 @app.get("/api/config")
@@ -990,6 +1045,7 @@ async def get_config():
         "fixtures": config.get("fixtures", {}),
         "device_state": config.get("device_state", {}),
         "room_color_state": config.get("room_color_state", {}),
+        "ct_correction": config.get("ct_correction", {}),
     }
 
 

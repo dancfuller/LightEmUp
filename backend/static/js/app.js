@@ -52,6 +52,7 @@ function App() {
   const [roomLayouts, setRoomLayouts] = useState({});
   const [fixtures, setFixtures] = useState({});
   const [roomColorState, setRoomColorState] = useState({});
+  const [ctCorrection, setCtCorrection] = useState({});
   // deviceModes: persisted LightCard preference per device_key.
   // "whole" or "segments". Loaded from config, updated on toggle.
   const [deviceModes, setDeviceModes] = useState({});
@@ -94,6 +95,7 @@ function App() {
       setRoomLayouts(cfg.room_layouts || {});
       setFixtures(cfg.fixtures || {});
       setRoomColorState(cfg.room_color_state || {});
+      setCtCorrection(cfg.ct_correction || {});
       setDeviceModes(cfg.device_modes || {});
       setSegmentFillModes(cfg.segment_fill_modes || {});
       setPickerStyle(cfg.ui_prefs?.color_picker_style === "wheel" ? "wheel" : "huebar");
@@ -835,6 +837,14 @@ function App() {
                 <div style={{ fontSize: 12, color: "#64748b", fontStyle: "italic" }}>No devices found — enable LAN Control in Govee Home app and re-scan</div>
               )}
             </div>
+
+            <CTCalibrationPanel
+              hueLights={hueLights} goveeDevices={goveeDevices}
+              nicknames={nicknames} ctCorrection={ctCorrection}
+              onControlHue={controlHueLight} onControlGovee={controlGoveeDevice}
+              onSaved={setCtCorrection}
+            />
+
             {/* UI preferences */}
             <div style={{ background: "#1e293b", borderRadius: 16, padding: 20, border: "1px solid #334155", marginBottom: 16 }}>
               <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 12, color: "#e2e8f0" }}>Interface</h3>

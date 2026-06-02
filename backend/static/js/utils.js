@@ -226,6 +226,11 @@ const CT_PALETTES = [
   { name: "All Whites",    min: 2000, max: 6500 },
 ];
 
+// Fixed white-point sweep used by the CT calibration panel (Settings). Govee
+// LAN devices render these bluer than Hue, so we sample a Hue reference vs each
+// Govee device at each target and record a warmer corrected Kelvin.
+const CT_CALIBRATION_TARGETS = [2000, 2700, 3500, 4500, 5500, 6500];
+
 // Tanner Helland blackbody approximation → display RGB for a Kelvin value.
 // Used for swatches, map dots, and Govee segment packets (segments are RGB-only).
 function kelvinToRGB(kelvin) {
