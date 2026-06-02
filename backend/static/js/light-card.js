@@ -1,6 +1,6 @@
 // ─── Light Card Component ───────────────────────────────────────────────────
 
-function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, onNicknameChange, roomName, segmentColors, segmentInfo, segmentBrightness, onSegmentStateRefresh, controlMode, onControlModeChange, segmentFillMode, onSegmentFillModeChange }) {
+function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, onNicknameChange, roomName, segmentColors, segmentInfo, segmentBrightness, onSegmentStateRefresh, controlMode, onControlModeChange, segmentFillMode, onSegmentFillModeChange, ctCorrection }) {
   const isMobile = useIsMobile();
   const deviceBrightness = light.type === "hue"
     ? Math.round((light.state?.brightness || 0) / 254 * 100)
@@ -70,6 +70,7 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
     ? `Hue · ${light.product_name || light.model}`
     : `Govee · ${light.sku}`;
   const displayName = nickname || friendlyName;
+  const isCalibrated = light.type !== "hue" && !!ctCorrection?.[deviceKey];
   const dotColor = (hasColor && lightColor)
     ? `rgb(${lightColor.r},${lightColor.g},${lightColor.b})`
     : "#fbbf24";
@@ -116,6 +117,11 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
           color: isOn ? "#f8fafc" : "#94a3b8",
           whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
         }}>{displayName}</div>
+        {isCalibrated && (
+          <span title="White-balance calibrated" style={{
+            flexShrink: 0, fontSize: 13, color: "#fbbf24", lineHeight: 1, cursor: "default",
+          }}>&#x25D0;</span>
+        )}
         {!isReachable && (
           <span style={{ fontSize: 9, color: "#f87171", fontWeight: 700, textTransform: "uppercase", flexShrink: 0 }}>offline</span>
         )}

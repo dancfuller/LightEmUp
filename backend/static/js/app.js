@@ -603,6 +603,7 @@ function App() {
                   minSatEnabled={minSatEnabled}
                   minSatPct={minSatPct}
                   savedColorState={roomColorState[roomName]}
+                  ctCorrection={ctCorrection}
                 />
               );
             })}
@@ -613,6 +614,7 @@ function App() {
                 onControlRoom={() => {}}
                 favorites={favoriteColors} onFavoritesChange={updateFavorites}
                 nicknames={nicknames} onNicknameChange={updateNickname}
+                ctCorrection={ctCorrection}
               />
             )}
           </>
@@ -662,7 +664,8 @@ function App() {
                     controlMode={deviceModes?.[devKey]}
                     onControlModeChange={(m) => updateDeviceMode && updateDeviceMode(devKey, m)}
                     segmentFillMode={segmentFillModes?.[devKey]}
-                    onSegmentFillModeChange={(m) => updateSegmentFillMode && updateSegmentFillMode(devKey, m)} />
+                    onSegmentFillModeChange={(m) => updateSegmentFillMode && updateSegmentFillMode(devKey, m)}
+                    ctCorrection={ctCorrection} />
                 );
               })}
             </div>
@@ -774,6 +777,9 @@ function App() {
                           background: "#4ade80", opacity: 0.8,
                         }} />
                         <span style={{ color: "#e2e8f0", fontWeight: 600, minWidth: isMobile ? 0 : 140, flex: isMobile ? "1 1 auto" : "0 0 auto" }}>{name}</span>
+                        {ctCorrection?.[dk] && (
+                          <span title="White-balance calibrated" style={{ color: "#fbbf24", fontSize: 13, lineHeight: 1, cursor: "default" }}>&#x25D0;</span>
+                        )}
                         <span style={{ color: "#64748b" }}>{device.sku}</span>
                         <span style={{ color: "#475569", fontSize: 11, fontFamily: "monospace", flex: isMobile ? "1 1 100%" : 1, order: isMobile ? 10 : 0 }}>{device.ip}</span>
                         {device.mac && (
