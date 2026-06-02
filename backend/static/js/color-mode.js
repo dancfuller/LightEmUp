@@ -1258,9 +1258,10 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
         goveeDelay += 150;
       });
 
-      // Razer-protocol segments (H6061 hexa): one bulk LAN packet per device.
-      // We must send all N segments at once. Any segments without a preview
-      // entry fall back to black so the packet is well-formed.
+      // Razer-protocol segments: one bulk LAN packet per device. We must send
+      // all N segments at once. Any segments without a preview entry fall back
+      // to black so the packet is well-formed. (Reserved for the lightning
+      // engine's dynamic use; set-and-leave SKUs like the hexa are cloud_v2.)
       // Colors are sent at full brightness (with per-entry beacon dimming
       // folded in); the device-level `brightness` is sent separately so the
       // server can store unscaled colors and re-scale later when the
