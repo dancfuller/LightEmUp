@@ -158,6 +158,35 @@ function App() {
 
   useEffect(() => { loadAll(); }, [loadAll]);
 
+  // Live sync across open sessions. The server broadcasts lightweight
+  // "what changed" signals over SSE; we don't trust the payload to carry
+  // full state, we just refetch. Events tagged with our own CLIENT_ID are
+  // ignored (we already applied them optimistically). A burst of events is
+  // coalesced into one debounced loadAll() so rapid room/segment edits
+  // elsewhere don't trigger a refetch storm here.
+  const syncTimer = useRef(null);
+  useEffect(() => {
+    let es;
+    try {
+      es = new EventSource(`${API}/events`);
+    } catch (e) {
+      console.warn("SSE unavailable:", e);
+      return;
+    }
+    es.onmessage = (e) => {
+      let evt;
+      try { evt = JSON.parse(e.data); } catch { return; }
+      if (!evt || evt.source === CLIENT_ID) return;
+      if (syncTimer.current) clearTimeout(syncTimer.current);
+      syncTimer.current = setTimeout(() => { loadAll(); }, 400);
+    };
+    es.onerror = () => { /* EventSource auto-reconnects */ };
+    return () => {
+      if (syncTimer.current) clearTimeout(syncTimer.current);
+      es.close();
+    };
+  }, [loadAll]);
+
   // Fetch version once on boot — cheap, doesn't change without a restart.
   useEffect(() => {
     api("/version").then(setVersionInfo).catch(() => {});

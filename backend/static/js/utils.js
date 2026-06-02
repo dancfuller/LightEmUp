@@ -3,6 +3,14 @@ const { useState, useEffect, useCallback, useRef, useContext, createContext } = 
 
 const API = "/api";
 
+// Per-tab identifier sent as X-Client-Id on every mutating request so the
+// SSE event stream can tag each broadcast with its origin. A client ignores
+// events whose source matches its own id, avoiding self-triggered refetches.
+const CLIENT_ID =
+  (typeof crypto !== "undefined" && crypto.randomUUID)
+    ? crypto.randomUUID()
+    : `c-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
 // PickerStyleContext: controls whether ColorPicker's "Wheel" tab renders
 // the full ColorWheel or the compact HueBar. Provider lives at the App
 // root; the user toggles it in Settings. Default "huebar".
@@ -48,9 +56,14 @@ function hsvToRgb(h, s, v) {
 
 async function api(path, options = {}) {
   try {
+    const { headers: optHeaders, ...rest } = options;
     const res = await fetch(`${API}${path}`, {
-      headers: { "Content-Type": "application/json" },
-      ...options,
+      ...rest,
+      headers: {
+        "Content-Type": "application/json",
+        "X-Client-Id": CLIENT_ID,
+        ...(optHeaders || {}),
+      },
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));

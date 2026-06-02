@@ -12,7 +12,7 @@ from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
@@ -161,6 +161,7 @@ def record_govee_state(ip: str, **fields):
     entry["updated_at"] = _now_iso()
     store[key] = entry
     schedule_save()
+    publish_event("govee", key=key)
 
 
 def persist_segments():
@@ -169,6 +170,7 @@ def persist_segments():
     snap = segment_state.snapshot()
     config["segment_state"] = {f"govee:{ip}": e for ip, e in snap.items()}
     schedule_save()
+    publish_event("segments")
 
 
 def _now_iso() -> str:
@@ -205,6 +207,31 @@ def correct_kelvin(ip: str, kelvin: int) -> int:
             m_out = a["m_out"] + (b["m_out"] - a["m_out"]) * f
             return int(round(1e6 / m_out))
     return kelvin
+
+
+# ─── Live-sync event bus ──────────────────────────────────────────────────────
+# A global pub/sub so every open session stays in sync. Mutating endpoints
+# publish a lightweight "what changed" signal; each client's EventSource (see
+# /api/events) reacts by re-fetching the affected slice. We send the change
+# kind plus the originating client id so a client can ignore its own echoes.
+
+from contextvars import ContextVar
+
+_event_subscribers: "list[asyncio.Queue]" = []
+# Per-request client id (from the X-Client-Id header), so an event carries the
+# id of the session that caused it and that session can ignore its own echo.
+_current_client_id: ContextVar[str] = ContextVar("client_id", default="")
+
+
+def publish_event(event_type: str, **fields):
+    """Broadcast a change signal to all connected sessions. Best-effort:
+    a full subscriber queue is skipped rather than blocking the request."""
+    evt = {"type": event_type, "source": _current_client_id.get(), **fields}
+    for q in list(_event_subscribers):
+        try:
+            q.put_nowait(evt)
+        except asyncio.QueueFull:
+            pass
 
 
 # ─── Logging ────────────────────────────────────────────────────────────────
@@ -255,6 +282,17 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def capture_client_id(request: Request, call_next):
+    """Stash the caller's X-Client-Id so publish_event can stamp the source
+    of a change, letting the originating session ignore its own echo."""
+    token = _current_client_id.set(request.headers.get("X-Client-Id", ""))
+    try:
+        return await call_next(request)
+    finally:
+        _current_client_id.reset(token)
 
 
 # ─── Pydantic Models ────────────────────────────────────────────────────────
@@ -543,6 +581,7 @@ async def control_hue_light(req: HueLightStateRequest):
             state["bri"] = max(1, min(254, int(Y * 254)))
 
     success = await set_hue_light_state(ip, username, req.light_id, state)
+    publish_event("hue", key=f"hue:{req.light_id}")
     return {"success": success}
 
 
@@ -646,6 +685,7 @@ async def control_room(req: RoomStateRequest):
         )
         results["govee"].append({"ip": device_ip, "success": True})
 
+    publish_event("room", room=req.room_name)
     return {"results": results}
 
 
@@ -758,6 +798,34 @@ async def lightning_events(room_name: str):
             pass
         finally:
             scene_manager.unsubscribe_flashes(room_name, queue)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.get("/api/events")
+async def state_events():
+    """SSE stream of state-change signals so every open session stays in sync.
+    Quiet bus, so we emit a heartbeat comment every 20s to keep idle phone
+    connections alive through proxies; EventSource auto-reconnects on drop."""
+    async def event_stream():
+        queue: asyncio.Queue = asyncio.Queue(maxsize=128)
+        _event_subscribers.append(queue)
+        try:
+            while True:
+                try:
+                    evt = await asyncio.wait_for(queue.get(), timeout=20)
+                    yield f"data: {json.dumps(evt)}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": ping\n\n"
+        except asyncio.CancelledError:
+            pass
+        finally:
+            if queue in _event_subscribers:
+                _event_subscribers.remove(queue)
 
     return StreamingResponse(
         event_stream(),
@@ -1011,6 +1079,7 @@ async def set_room_color_state(req: RoomColorStateRequest):
     entry["updated_at"] = _now_iso()
     store[req.room_name] = entry
     schedule_save()
+    publish_event("room-color", room=req.room_name)
     return {"success": True}
 
 
@@ -1028,6 +1097,7 @@ async def set_ct_calibration(req: CTCalibrationRequest):
     else:
         store.pop(req.device_key, None)
     schedule_save()
+    publish_event("config")
     return {"success": True, "ct_correction": store}
 
 
@@ -1085,6 +1155,7 @@ async def upsert_fixture(req: FixtureUpsertRequest):
             fixtures[fid]["members"] = kept
     fixtures[req.fixture_id] = {"name": req.name, "members": req.members}
     save_config(config)
+    publish_event("config")
     return {"success": True, "fixtures": fixtures}
 
 
@@ -1094,6 +1165,7 @@ async def delete_fixture(fixture_id: str):
     if fixture_id in fixtures:
         del fixtures[fixture_id]
         save_config(config)
+        publish_event("config")
     return {"success": True}
 
 
@@ -1109,6 +1181,7 @@ async def set_nickname(req: NicknameRequest):
         config["nicknames"] = {}
     config["nicknames"][req.device_key] = req.nickname
     save_config(config)
+    publish_event("config")
     return {"success": True}
 
 @app.get("/api/nicknames")
@@ -1138,6 +1211,7 @@ async def set_device_mode(req: DeviceModeRequest):
         config["device_modes"] = {}
     config["device_modes"][req.device_key] = req.mode
     save_config(config)
+    publish_event("config")
     return {"success": True}
 
 
@@ -1149,6 +1223,7 @@ async def set_device_modes_bulk(req: DeviceModesBulkRequest):
         if v in ("whole", "segments"):
             config["device_modes"][k] = v
     save_config(config)
+    publish_event("config")
     return {"success": True, "device_modes": config["device_modes"]}
 
 
@@ -1165,6 +1240,7 @@ async def set_segment_fill_mode(req: SegmentFillModeRequest):
         config["segment_fill_modes"] = {}
     config["segment_fill_modes"][req.device_key] = req.mode
     save_config(config)
+    publish_event("config")
     return {"success": True}
 
 
