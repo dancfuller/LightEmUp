@@ -655,7 +655,11 @@ async def discover_govee_lan(timeout: float = 5.0) -> list[dict]:
 
 
 async def govee_lan_command(ip: str, cmd: str, data: dict) -> Optional[dict]:
-    """Send a command to a Govee device over LAN."""
+    """Send a command to a Govee device over LAN and wait for a reply.
+
+    NOTE: only query commands (devStatus) actually reply. Control commands
+    (turn/brightness/colorwc) are silent, so waiting for a reply just blocks
+    for the full socket timeout — use govee_lan_send() for those instead."""
     loop = asyncio.get_event_loop()
 
     def _send():
@@ -679,27 +683,47 @@ async def govee_lan_command(ip: str, cmd: str, data: dict) -> Optional[dict]:
     return await loop.run_in_executor(None, _send)
 
 
+async def govee_lan_send(ip: str, cmd: str, data: dict) -> Optional[dict]:
+    """Fire-and-forget LAN control command. Govee control commands don't send a
+    reply, so we don't wait for one — waiting blocked up to 3s per command,
+    making sliders/calibration brutally slow. Just send and return."""
+    loop = asyncio.get_event_loop()
+
+    def _send():
+        message = json.dumps({"msg": {"cmd": cmd, "data": data}})
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sock.sendto(message.encode(), (ip, GOVEE_COMMAND_PORT))
+            return {"sent": True}
+        except OSError as e:
+            return {"error": str(e)}
+        finally:
+            sock.close()
+
+    return await loop.run_in_executor(None, _send)
+
+
 async def govee_lan_turn(ip: str, on: bool) -> Optional[dict]:
-    """Turn a Govee device on or off."""
-    return await govee_lan_command(ip, "turn", {"value": 1 if on else 0})
+    """Turn a Govee device on or off (fire-and-forget)."""
+    return await govee_lan_send(ip, "turn", {"value": 1 if on else 0})
 
 
 async def govee_lan_brightness(ip: str, brightness: int) -> Optional[dict]:
-    """Set brightness (0-100) of a Govee device."""
-    return await govee_lan_command(ip, "brightness", {"value": max(0, min(100, brightness))})
+    """Set brightness (0-100) of a Govee device (fire-and-forget)."""
+    return await govee_lan_send(ip, "brightness", {"value": max(0, min(100, brightness))})
 
 
 async def govee_lan_color(ip: str, r: int, g: int, b: int) -> Optional[dict]:
-    """Set RGB color of a Govee device."""
-    return await govee_lan_command(ip, "colorwc", {
+    """Set RGB color of a Govee device (fire-and-forget)."""
+    return await govee_lan_send(ip, "colorwc", {
         "color": {"r": r, "g": g, "b": b},
         "colorTemInKelvin": 0
     })
 
 
 async def govee_lan_color_temp(ip: str, kelvin: int) -> Optional[dict]:
-    """Set color temperature of a Govee device."""
-    return await govee_lan_command(ip, "colorwc", {
+    """Set color temperature of a Govee device (fire-and-forget)."""
+    return await govee_lan_send(ip, "colorwc", {
         "color": {"r": 0, "g": 0, "b": 0},
         "colorTemInKelvin": kelvin
     })
