@@ -59,6 +59,40 @@ function seededRng(seed) {
   };
 }
 
+// ─── Throttled slider control ────────────────────────────────────────────────
+// Sliders that drive lights flood slow Govee LAN devices: each onChange tick
+// fires a command, and the device applies/animates them slowly, so a drag lags
+// seconds behind. This hook keeps the thumb/label instant via local state while
+// committing onChange at most every `ms` (trailing — the final value always
+// lands). External value changes are honored except mid-drag, so the thumb
+// never jumps backward while the user is dragging.
+function useThrottledControl(value, onCommit, ms = 180) {
+  const [local, setLocal] = useState(value);
+  const dragging = useRef(false);
+  const slot = useRef({ timer: null, pending: null });
+  const commitRef = useRef(onCommit);
+  commitRef.current = onCommit;
+
+  useEffect(() => { if (!dragging.current) setLocal(value); }, [value]);
+
+  const onInput = useCallback((v) => {
+    dragging.current = true;
+    setLocal(v);
+    const s = slot.current;
+    s.pending = v;
+    if (s.timer) return;
+    const fire = () => {
+      if (s.pending == null) { s.timer = null; dragging.current = false; return; }
+      const x = s.pending; s.pending = null;
+      commitRef.current(x);
+      s.timer = setTimeout(fire, ms);
+    };
+    fire();
+  }, [ms]);
+
+  return [local, onInput];
+}
+
 // ─── Color Utilities ────────────────────────────────────────────────────────
 
 function hsvToRgb(h, s, v) {

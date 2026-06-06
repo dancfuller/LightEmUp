@@ -59,9 +59,30 @@ function CTCalibrationPanel({ hueLights, goveeDevices, nicknames, ctRgb, onContr
   // Drive the device with the RGB approximation of the effective Kelvin. This is
   // a raw RGB command (the server applies no further calibration to RGB), so
   // what you see while tuning is exactly what a calibrated scene will send.
-  const sendGovee = (device, effK) => {
+  // withOn is only needed once per step (turning the device on each tick just
+  // doubles the LAN traffic and slows the response).
+  const sendGovee = (device, effK, withOn = false) => {
     const { r, g, b } = kelvinToRGB(effK);
-    onControlGovee(device, { on: true, r, g, b });
+    onControlGovee(device, withOn ? { on: true, r, g, b } : { r, g, b });
+  };
+
+  // Govee LAN lights apply commands slowly and animate each change, so sending
+  // on every slider tick floods the device and it lags seconds behind. Throttle
+  // to the latest value per device (trailing), keeping the UI instant while the
+  // light keeps up.
+  const sendThrottle = useRef({});
+  const throttledSend = (device, effK) => {
+    const key = goveeKey(device);
+    const slot = sendThrottle.current[key] || (sendThrottle.current[key] = { timer: null, pending: null });
+    slot.pending = effK;
+    if (slot.timer) return;
+    const fire = () => {
+      if (slot.pending == null) { slot.timer = null; return; }
+      const v = slot.pending; slot.pending = null;
+      sendGovee(device, v);
+      slot.timer = setTimeout(fire, 200);
+    };
+    fire();
   };
 
   // On entering a step (or changing reference/selection while active), drive the
@@ -70,7 +91,7 @@ function CTCalibrationPanel({ hueLights, goveeDevices, nicknames, ctRgb, onContr
   useEffect(() => {
     if (!active || targetK == null) return;
     if (refLight) onControlHue(refLight, { on: true, color_temp: kelvinToMired(targetK) });
-    activeDevices.forEach(d => sendGovee(d, effectiveFor(goveeKey(d), targetK)));
+    activeDevices.forEach(d => sendGovee(d, effectiveFor(goveeKey(d), targetK), true));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, stepIndex, referenceId, selectedKeys.join(",")]);
 
@@ -87,12 +108,13 @@ function CTCalibrationPanel({ hueLights, goveeDevices, nicknames, ctRgb, onContr
     const key = goveeKey(device);
     const cur = effectiveFor(key, targetK);
     const out = setEffective(key, targetK, cur + RATING_DELTAS[rating]);
+    if (sendThrottle.current[key]) sendThrottle.current[key].pending = null;
     sendGovee(device, out);
   };
   const tune = (device, effK) => {
     const key = goveeKey(device);
     const out = setEffective(key, targetK, effK);
-    sendGovee(device, out);
+    throttledSend(device, out);
   };
 
   const saveAll = async () => {

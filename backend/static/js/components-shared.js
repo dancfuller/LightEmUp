@@ -73,16 +73,17 @@ function HueBar({ currentColor, onChange, height = 22 }) {
 }
 
 function RgbSliderInput({ label, value, onChange, color }) {
+  const [local, onInput] = useThrottledControl(value, onChange, 180);
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
       <span style={{ fontSize: 11, fontWeight: 700, color, width: 12, textAlign: "center" }}>{label}</span>
       <input
-        type="range" min={0} max={255} value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
+        type="range" min={0} max={255} value={local}
+        onChange={(e) => onInput(Number(e.target.value))}
         style={{
           flex: 1, height: 5, appearance: "none", borderRadius: 3,
           background: `linear-gradient(to right, ${
-            label === "R" ? `rgb(0,${value > 128 ? 0 : 0},${value > 128 ? 0 : 0}), rgb(255,0,0)` :
+            label === "R" ? `rgb(0,0,0), rgb(255,0,0)` :
             label === "G" ? `rgb(0,0,0), rgb(0,255,0)` :
             `rgb(0,0,0), rgb(0,0,255)`
           })`,
@@ -90,10 +91,10 @@ function RgbSliderInput({ label, value, onChange, color }) {
         }}
       />
       <input
-        type="number" min={0} max={255} value={value}
+        type="number" min={0} max={255} value={local}
         onChange={(e) => {
           const v = Math.max(0, Math.min(255, Number(e.target.value) || 0));
-          onChange(v);
+          onInput(v);
         }}
         style={{
           width: 46, padding: "3px 6px", borderRadius: 6,
@@ -410,17 +411,18 @@ function ColorWheel({ size = 180, onColorSelect }) {
   );
 }
 
-function Slider({ label, value, min, max, onChange, color, unit = "" }) {
-  const pct = ((value - min) / (max - min)) * 100;
+function Slider({ label, value, min, max, onChange, color, unit = "", throttleMs = 180 }) {
+  const [local, onInput] = useThrottledControl(value, onChange, throttleMs);
+  const pct = ((local - min) / (max - min)) * 100;
   return (
     <div style={{ marginBottom: 12 }}>
       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
         <span style={{ fontSize: 12, color: "#94a3b8", fontWeight: 500 }}>{label}</span>
-        <span style={{ fontSize: 12, color: "#e2e8f0", fontWeight: 600 }}>{value}{unit}</span>
+        <span style={{ fontSize: 12, color: "#e2e8f0", fontWeight: 600 }}>{local}{unit}</span>
       </div>
       <input
-        type="range" min={min} max={max} value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
+        type="range" min={min} max={max} value={local}
+        onChange={(e) => onInput(Number(e.target.value))}
         style={{
           width: "100%", height: 6, appearance: "none", borderRadius: 3,
           background: `linear-gradient(to right, ${color || "#6366f1"} ${pct}%, #334155 ${pct}%)`,
@@ -433,18 +435,19 @@ function Slider({ label, value, min, max, onChange, color, unit = "" }) {
 
 // Tunable-white slider: a warm→cool gradient track, value shown in Kelvin.
 // The thumb is the standard one (styled globally in index.html).
-function ColorTempSlider({ label = "Color Temperature", kelvin, onChange, min = CT_MIN_K, max = CT_MAX_K }) {
+function ColorTempSlider({ label = "Color Temperature", kelvin, onChange, min = CT_MIN_K, max = CT_MAX_K, throttleMs = 180 }) {
   const warm = kelvinToRGB(min), cool = kelvinToRGB(max);
   const mid = kelvinToRGB(Math.round((min + max) / 2));
+  const [local, onInput] = useThrottledControl(kelvin, onChange, throttleMs);
   return (
     <div style={{ marginBottom: 12 }}>
       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
         <span style={{ fontSize: 12, color: "#94a3b8", fontWeight: 500 }}>{label}</span>
-        <span style={{ fontSize: 12, color: "#e2e8f0", fontWeight: 600 }}>{kelvin}K</span>
+        <span style={{ fontSize: 12, color: "#e2e8f0", fontWeight: 600 }}>{local}K</span>
       </div>
       <input
-        type="range" min={min} max={max} step={50} value={kelvin}
-        onChange={(e) => onChange(Number(e.target.value))}
+        type="range" min={min} max={max} step={50} value={local}
+        onChange={(e) => onInput(Number(e.target.value))}
         style={{
           width: "100%", height: 10, appearance: "none", borderRadius: 5,
           background: `linear-gradient(to right, rgb(${warm.r},${warm.g},${warm.b}), rgb(${mid.r},${mid.g},${mid.b}), rgb(${cool.r},${cool.g},${cool.b}))`,
