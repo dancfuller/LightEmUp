@@ -1531,7 +1531,11 @@ app.mount("/js", StaticFiles(directory=str(STATIC_DIR / "js")), name="js")
 
 if __name__ == "__main__":
     import uvicorn
-    uvi_config = uvicorn.Config(app, host="0.0.0.0", port=8420)
+    # timeout_graceful_shutdown: the SSE streams (/api/events, lightning events)
+    # are long-lived requests that never finish on their own. Without a bound,
+    # uvicorn waits forever for them on shutdown, so `systemctl restart` hangs
+    # until systemd force-kills. Cap it so a restart force-closes them in a few s.
+    uvi_config = uvicorn.Config(app, host="0.0.0.0", port=8420, timeout_graceful_shutdown=5)
     server = uvicorn.Server(uvi_config)
     _server_ref = server
     server.run()

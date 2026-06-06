@@ -12,6 +12,9 @@ WorkingDirectory=/home/pi/lightemup/backend
 ExecStart=/home/pi/lightemup/backend/venv/bin/python main.py
 Restart=always
 RestartSec=5
+# Backstop: if uvicorn's graceful shutdown still can't close long-lived SSE
+# connections, force-kill after 10s instead of systemd's default 90s.
+TimeoutStopSec=10
 StandardOutput=journal
 StandardError=journal
 
