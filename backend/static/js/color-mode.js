@@ -410,6 +410,13 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
   const [applyDone, setApplyDone] = useState(0);
   const [applyEndAt, setApplyEndAt] = useState(0);
   const [tickNow, setTickNow] = useState(0);
+  // Name of the device/segment currently being updated — surfaced as text
+  // because rooms with many segments take 40s+ (1.8s stagger per cloud panel).
+  const [applyLabel, setApplyLabel] = useState("");
+  // Cancellation: applyCancelRef short-circuits scheduled sends, applyTimers
+  // holds the pending setTimeout ids so a cancel can clear the whole queue.
+  const applyCancelRef = useRef(false);
+  const applyTimers = useRef([]);
 
   // Tick clock for the countdown while applying
   useEffect(() => {
@@ -418,6 +425,13 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     const id = setInterval(() => setTickNow(Date.now()), 250);
     return () => clearInterval(id);
   }, [applying]);
+
+  // Cancel any in-flight scheduled sends if the panel unmounts mid-apply.
+  useEffect(() => () => {
+    applyCancelRef.current = true;
+    applyTimers.current.forEach(id => clearTimeout(id));
+    applyTimers.current = [];
+  }, []);
 
   const secondsLeft = applying ? Math.max(0, Math.ceil((applyEndAt - tickNow) / 1000)) : 0;
 
@@ -1159,9 +1173,44 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     setPreview(pipeline(computeForMode()));
   }, [mode, colorSpace, ctPreset, maxKelvin, baseColor, direction, paletteColors, customColors, customShadeMode, hasLayout, layout, fixtures, beaconSourceKey, brightness, addressSegments, minSatEnabled, minSatPct, segmentFillModes, shuffleSeed, targetVendor]);
 
+  // Human-readable name for a preview key ("hue:5", "govee:ip", "govee:ip:seg3")
+  // used in the live apply-progress label.
+  const nameForKey = (key) => {
+    const m = key.match(/^(.+):seg(\d+)$/);
+    const parentKey = m ? m[1] : key;
+    const light = lightMap[parentKey];
+    const base = nicknames?.[parentKey] || light?.name
+      || (light?.sku ? GOVEE_SKU_NAMES?.[light.sku] : null) || parentKey;
+    return m ? `${base} · panel ${parseInt(m[2]) + 1}` : base;
+  };
+
+  const clearApplyTimers = () => {
+    applyTimers.current.forEach(id => clearTimeout(id));
+    applyTimers.current = [];
+  };
+
+  // Schedule a send that no-ops if the apply was canceled before it fired.
+  const scheduleSend = (fn, delay) => {
+    const id = setTimeout(() => {
+      if (applyCancelRef.current) return;
+      fn();
+    }, delay);
+    applyTimers.current.push(id);
+  };
+
+  const cancelApply = () => {
+    applyCancelRef.current = true;
+    clearApplyTimers();
+    setApplying(false);
+    setApplyPhase(null);
+    setApplyLabel("");
+  };
+
   // ─── Apply colors to lights ─────────────────────────────────────────
   const applyColors = () => {
     if (!preview || applying) return;
+    applyCancelRef.current = false;
+    clearApplyTimers();
     const entries = Object.entries(preview);
 
     // Split entries by destination protocol so we can schedule each correctly:
@@ -1226,9 +1275,14 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
       setApplyPhase("resetting");
       setApplyTotal(resetCount);
       setApplyDone(0);
+      setApplyLabel("Preparing segments…");
 
       let resetCompleted = 0;
-      const resetTick = () => { resetCompleted++; setApplyDone(resetCompleted); };
+      const resetTick = () => {
+        if (applyCancelRef.current) return;
+        resetCompleted++;
+        setApplyDone(resetCompleted);
+      };
 
       // All V1 LAN whites fire in parallel — UDP fire-and-forget, no rate limit
       resetDeviceKeys.forEach(parentKey => {
@@ -1246,18 +1300,20 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
 
     // ─── Phase 2: apply (Hue + Govee whole-device + Govee segments) ──
     const phase2Start = resetMs + holdMs;
-    setTimeout(() => {
+    scheduleSend(() => {
       setApplyPhase("applying");
       setApplyTotal(applyCount);
       setApplyDone(0);
 
       let applyCompleted = 0;
       const applyTick = () => {
+        if (applyCancelRef.current) return;
         applyCompleted++;
         setApplyDone(applyCompleted);
         if (applyCompleted >= applyCount) {
           setApplying(false);
           setApplyPhase(null);
+          setApplyLabel("");
         }
       };
 
@@ -1265,6 +1321,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
       hueEntries.forEach(([key, color]) => {
         const light = lightMap[key];
         if (!light || !light._controlFn) { applyTick(); return; }
+        setApplyLabel(nameForKey(key));
         const briPct = color.brightness ?? brightness;
         const bri = Math.round(briPct * 254 / 100);
         if (color.kelvin != null && light.capabilities?.has_color_temp) {
@@ -1286,7 +1343,8 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
         const cmd = color.kelvin != null
           ? { on: true, color_temp_kelvin: color.kelvin, brightness: color.brightness ?? brightness }
           : { on: true, r: color.r, g: color.g, b: color.b, brightness: color.brightness ?? brightness };
-        setTimeout(() => {
+        scheduleSend(() => {
+          setApplyLabel(nameForKey(key));
           light._controlFn(light, cmd);
           applyTick();
         }, goveeDelay);
@@ -1303,6 +1361,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
       // LightCard brightness slider moves.
       razerGroups.forEach(({ parent, light, segs }) => {
         if (!light) { segs.forEach(() => applyTick()); return; }
+        setApplyLabel(nameForKey(parent));
         const segCountFromInfo = segmentInfo?.sku_table?.[light.sku]?.count || segs.length;
         const colorsArr = Array.from({ length: segCountFromInfo }, () => [0, 0, 0]);
         segs.forEach(({ idx, color }) => {
@@ -1331,7 +1390,8 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
         if (!light) { segs.forEach(() => applyTick()); return; }
         segs.forEach(({ idx, color }) => {
           const cmd = { ip: light.ip, sku: light.sku, device_mac: light.mac, segment_idx: idx, r: color.r, g: color.g, b: color.b, brightness: color.brightness ?? brightness };
-          setTimeout(() => {
+          scheduleSend(() => {
+            setApplyLabel(nameForKey(`${parent}:seg${idx}`));
             api("/govee/segment-control", { method: "POST", body: JSON.stringify(cmd), headers: { "Content-Type": "application/json" } })
               .catch(e => console.warn("[ColorMode] Segment control failed:", parent, idx, e));
             applyTick();
@@ -2303,7 +2363,27 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
                 </>
               ) : "Apply"}
             </button>
+            {applying && (
+              <button onClick={cancelApply}
+                style={{
+                  padding: "6px 16px", borderRadius: 8, border: "1px solid #ef4444",
+                  background: "transparent", color: "#f87171",
+                  fontSize: 12, fontWeight: 700, cursor: "pointer",
+                }}
+              >Cancel</button>
+            )}
           </div>
+
+          {/* Live progress label — which device/segment is updating right now.
+              Helps when a many-segment room takes 40s+ to apply. */}
+          {applying && applyLabel && (
+            <div style={{
+              marginTop: 8, fontSize: 11, color: "#94a3b8",
+              whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+            }}>
+              Updating <span style={{ color: "#e2e8f0", fontWeight: 600 }}>{applyLabel}</span>
+            </div>
+          )}
         </>
       )}
     </div>
