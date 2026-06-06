@@ -368,6 +368,13 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
   // variation.
   const [addressSegments, setAddressSegments] = useState("individual");
 
+  // Deterministic assignment seed. The adjacency-aware color assignment is
+  // randomized; seeding it (instead of Math.random) makes every client compute
+  // the same device→color layout from the same palette, so a second session
+  // matches the lights another device already set. "Shuffle" bumps this; it is
+  // persisted in room_color_state so a re-roll syncs across sessions.
+  const [shuffleSeed, setShuffleSeed] = useState(1);
+
   // Restore the last-applied selection for this room (display-only — pre-selects
   // the same mode/palette/brightness a previous LightEmUp session set, so a
   // second device opens onto accurate state). Seeds once per room; never
@@ -387,6 +394,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     if (typeof s.brightness === "number") setBrightness(s.brightness);
     if (s.direction) setDirection(s.direction);
     if (s.address_segments) setAddressSegments(s.address_segments);
+    if (typeof s.shuffle_seed === "number") setShuffleSeed(s.shuffle_seed);
   }, [roomName, savedColorState]);
 
   // Apply progress state
@@ -609,6 +617,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
   const computePalette = useCallback(() => {
     if (placedColorLights.length === 0 || paletteColors.length === 0) return null;
 
+    const rng = seededRng(`${roomName}|palette|${shuffleSeed}`);
     const adj = buildAdjacency(placedColorLights);
     const colors = paletteColors;
     const N = colors.length;
@@ -710,7 +719,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
       // discriminate by lightness/saturation instead of tying at the cap.
       let chosen;
       if (neighborIdxs.length === 0) {
-        chosen = candidates[Math.floor(Math.random() * candidates.length)];
+        chosen = candidates[Math.floor(rng() * candidates.length)];
       } else {
         let bestClamped = -Infinity;
         let bestRank = -Infinity;
@@ -734,7 +743,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
             bestCandidates.push(idx);
           }
         }
-        chosen = bestCandidates[Math.floor(Math.random() * bestCandidates.length)];
+        chosen = bestCandidates[Math.floor(rng() * bestCandidates.length)];
       }
 
       assignment[device.key] = chosen;
@@ -869,11 +878,12 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
       result[key] = colors[ci];
     });
     return result;
-  }, [placedColorLights, paletteColors, buildAdjacency, fixtures]);
+  }, [placedColorLights, paletteColors, buildAdjacency, fixtures, roomName, shuffleSeed]);
 
   // ─── Tonal mode: 8 shades of one color, randomly assigned with adjacency gap ─
   const computeTonal = useCallback(() => {
     if (placedColorLights.length === 0) return null;
+    const rng = seededRng(`${roomName}|tonal|${shuffleSeed}`);
     const shades = generateTonalShades(baseColor.r, baseColor.g, baseColor.b, 8);
     const adj = buildAdjacency(placedColorLights);
 
@@ -892,7 +902,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
       // Shuffle shade indices, then pick the first that is ≥2 steps from every neighbor
       const indices = Array.from({ length: 8 }, (_, i) => i);
       for (let i = 7; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
+        const j = Math.floor(rng() * (i + 1));
         [indices[i], indices[j]] = [indices[j], indices[i]];
       }
 
@@ -908,7 +918,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     const result = {};
     Object.entries(assignment).forEach(([key, idx]) => { result[key] = shades[idx]; });
     return result;
-  }, [placedColorLights, baseColor, buildAdjacency]);
+  }, [placedColorLights, baseColor, buildAdjacency, roomName, shuffleSeed]);
 
   // ─── Beacon mode: one color, brightness falls off with distance from source ─
   const computeBeacon = useCallback(() => {
@@ -940,6 +950,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
   // proposal if the current one isn't appealing. ─────────────────────
   const computeCustom = useCallback(() => {
     if (placedColorLights.length === 0 || customColors.length === 0) return null;
+    const rng = seededRng(`${roomName}|custom|${shuffleSeed}`);
     const M = customColors.length;
     const exact = customShadeMode === "exact";
     const SHADES_PER_SEED = exact ? 1 : 4;
@@ -968,10 +979,10 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
 
       // Shuffled seed order, then pick first one not used by a neighbor.
       const order = Array.from({ length: M }, (_, i) => i)
-        .sort(() => Math.random() - 0.5);
+        .sort(() => rng() - 0.5);
       let seedIdx = order.find(s => !neighborSeeds.has(s));
       if (seedIdx === undefined) seedIdx = order[0];
-      const shadeIdx = Math.floor(Math.random() * SHADES_PER_SEED);
+      const shadeIdx = Math.floor(rng() * SHADES_PER_SEED);
       assignment[d.key] = { seedIdx, shadeIdx };
     });
 
@@ -980,7 +991,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
       result[k] = shadesBySeed[a.seedIdx][a.shadeIdx];
     });
     return result;
-  }, [placedColorLights, customColors, customShadeMode, buildAdjacency]);
+  }, [placedColorLights, customColors, customShadeMode, buildAdjacency, roomName, shuffleSeed]);
 
   // ─── White (color-temperature) compute variants ─────────────────────
   // Entries carry { r, g, b, kelvin } — r/g/b is the display approximation
@@ -991,6 +1002,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
   // first, preferring a ≥gap index distance from already-assigned neighbors.
   const assignCTPool = useCallback((entries) => {
     if (placedColorLights.length === 0 || entries.length === 0) return null;
+    const rng = seededRng(`${roomName}|ct|${shuffleSeed}`);
     const n = entries.length;
     const adj = buildAdjacency(placedColorLights);
     const sorted = [...placedColorLights].sort((a, b) =>
@@ -1004,7 +1016,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
       });
       const indices = Array.from({ length: n }, (_, i) => i);
       for (let i = n - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
+        const j = Math.floor(rng() * (i + 1));
         [indices[i], indices[j]] = [indices[j], indices[i]];
       }
       let chosen = indices.find(idx => ![...neighborIdx].some(nn => Math.abs(idx - nn) < gap));
@@ -1014,7 +1026,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     const result = {};
     Object.entries(assignment).forEach(([key, idx]) => { result[key] = { ...entries[idx] }; });
     return result;
-  }, [placedColorLights, buildAdjacency]);
+  }, [placedColorLights, buildAdjacency, roomName, shuffleSeed]);
 
   // ─── Color-temperature (White) compute ──────────────────────────────────────
   // "Your scientists were so preoccupied with whether or not they could, they
@@ -1122,7 +1134,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
   useEffect(() => {
     if (!hasLayout) return;
     setPreview(pipeline(computeForMode()));
-  }, [mode, colorSpace, ctPreset, maxKelvin, baseColor, direction, paletteColors, customColors, customShadeMode, hasLayout, layout, fixtures, beaconSourceKey, brightness, addressSegments, minSatEnabled, minSatPct, segmentFillModes]);
+  }, [mode, colorSpace, ctPreset, maxKelvin, baseColor, direction, paletteColors, customColors, customShadeMode, hasLayout, layout, fixtures, beaconSourceKey, brightness, addressSegments, minSatEnabled, minSatPct, segmentFillModes, shuffleSeed]);
 
   // ─── Apply colors to lights ─────────────────────────────────────────
   const applyColors = () => {
@@ -1317,6 +1329,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
       brightness,
       direction,
       address_segments: addressSegments,
+      shuffle_seed: shuffleSeed,
     };
     if (onApply) onApply(preview, addressSegments, colorStateSnapshot);
   };
@@ -2195,7 +2208,13 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
 
           {/* ─── Action buttons ──────────────────────────────────── */}
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-            <button onClick={generatePreview}
+            <button onClick={() => {
+                // Gradient/beacon are deterministic (spatial) — just regenerate.
+                // Palette/tonal/custom re-roll by bumping the seed, which also
+                // syncs the new layout to other sessions on Apply.
+                if (mode === "gradient" || mode === "beacon") generatePreview();
+                else setShuffleSeed(s => s + 1);
+              }}
               disabled={applying}
               style={{
                 padding: "6px 16px", borderRadius: 8, border: "1px solid #334155",

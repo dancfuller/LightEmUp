@@ -1069,6 +1069,7 @@ class RoomColorStateRequest(BaseModel):
     brightness: Optional[int] = None
     direction: Optional[str] = None
     address_segments: Optional[str] = None
+    shuffle_seed: Optional[int] = None
 
 
 @app.post("/api/room-color-state")

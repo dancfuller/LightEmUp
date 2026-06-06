@@ -32,6 +32,33 @@ function useIsMobile() {
   return isMobile;
 }
 
+// ─── Seeded PRNG ──────────────────────────────────────────────────────────
+// Color assignment (palette/tonal/custom adjacency) used to call Math.random(),
+// so every browser computed a *different* device→color layout from the same
+// palette. That meant a second session never matched the lights another phone
+// had already set. seededRng makes the assignment deterministic: given the same
+// room + shuffle seed + inputs, every client computes the identical layout. The
+// "Shuffle" button bumps the seed (persisted in room_color_state) so a re-roll
+// propagates to all sessions instead of diverging.
+function hashStr(str) {
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  return h >>> 0;
+}
+
+function seededRng(seed) {
+  let a = (typeof seed === "number" ? seed : hashStr(String(seed))) >>> 0;
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 // ─── Color Utilities ────────────────────────────────────────────────────────
 
 function hsvToRgb(h, s, v) {
