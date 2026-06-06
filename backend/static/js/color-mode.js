@@ -1389,7 +1389,10 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
       cloudGroups.forEach(({ parent, light, segs }) => {
         if (!light) { segs.forEach(() => applyTick()); return; }
         segs.forEach(({ idx, color }) => {
-          const cmd = { ip: light.ip, sku: light.sku, device_mac: light.mac, segment_idx: idx, r: color.r, g: color.g, b: color.b, brightness: color.brightness ?? brightness };
+          // In white mode, pass the target Kelvin too: if the device has an
+          // RGB-space white calibration, the server swaps in the calibrated warm
+          // RGB; otherwise it falls back to the r/g/b approximation sent here.
+          const cmd = { ip: light.ip, sku: light.sku, device_mac: light.mac, segment_idx: idx, r: color.r, g: color.g, b: color.b, brightness: color.brightness ?? brightness, color_temp_kelvin: color.kelvin };
           scheduleSend(() => {
             setApplyLabel(nameForKey(`${parent}:seg${idx}`));
             api("/govee/segment-control", { method: "POST", body: JSON.stringify(cmd), headers: { "Content-Type": "application/json" } })

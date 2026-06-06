@@ -5,6 +5,7 @@ LightEmUp - FastAPI backend for controlling Hue and Govee lights.
 import asyncio
 import json
 import logging
+import math
 import os
 import sys
 import subprocess
@@ -75,6 +76,13 @@ DEFAULT_CONFIG = {
                            # Per-device white-balance calibration: Govee CT renders
                            # bluer than Hue, so we send a warmer corrected Kelvin to
                            # match a Hue reference. Interpolated in mired space.
+    "ct_rgb": {},         # "govee:<ip>" → [{ in: requestedK, out: effectiveK }, ...]
+                           # RGB-space white calibration. Govee's *native* CT can't go
+                           # warm enough (still blue at its warmest), so instead of a
+                           # CT command we send kelvin_to_rgb(out) as an RGB color —
+                           # not bounded by the device's white LEDs. Takes precedence
+                           # over ct_correction when present. Same {in,out} shape /
+                           # mired interpolation; out is an *effective* warm Kelvin.
     "ui_prefs": {       # UI-only preferences shared across browsers
         "color_picker_style": "huebar",  # "huebar" | "wheel"
         "min_saturation_enabled": True,  # clamp generated colors to a floor
@@ -207,6 +215,55 @@ def correct_kelvin(ip: str, kelvin: int) -> int:
             m_out = a["m_out"] + (b["m_out"] - a["m_out"]) * f
             return int(round(1e6 / m_out))
     return kelvin
+
+
+def kelvin_to_rgb(kelvin: int):
+    """Kelvin → approximate RGB (Tanner Helland). Mirror of utils.js kelvinToRGB
+    so the device shows the same warm tint the UI previews."""
+    t = max(1000, min(40000, kelvin)) / 100.0
+    if t <= 66:
+        r = 255.0
+        g = 99.4708025861 * math.log(t) - 161.1195681661
+        b = 0.0 if t <= 19 else 138.5177312231 * math.log(t - 10) - 305.0447927307
+    else:
+        r = 329.698727446 * ((t - 60) ** -0.1332047592)
+        g = 288.1221695283 * ((t - 60) ** -0.0755148492)
+        b = 255.0
+    clamp = lambda v: max(0, min(255, int(round(v))))
+    return clamp(r), clamp(g), clamp(b)
+
+
+def ct_rgb_color(ip: str, kelvin):
+    """If this device has an RGB-space white calibration, return the RGB tuple to
+    send for a requested Kelvin (interpolated effective-K, then kelvin_to_rgb).
+    Returns None when the device has no ct_rgb calibration — caller falls back to
+    the native CT path. Same mired-space interpolation as correct_kelvin."""
+    pts = config.get("ct_rgb", {}).get(f"govee:{ip}")
+    if not pts or kelvin is None:
+        return None
+    samples = sorted(
+        ({"m_in": 1e6 / p["in"], "m_out": 1e6 / p["out"]} for p in pts if p.get("in") and p.get("out")),
+        key=lambda s: s["m_in"],
+    )
+    if not samples:
+        return None
+    m = 1e6 / kelvin
+    if m <= samples[0]["m_in"]:
+        eff = 1e6 / samples[0]["m_out"]
+    elif m >= samples[-1]["m_in"]:
+        eff = 1e6 / samples[-1]["m_out"]
+    else:
+        eff = None
+        for a, b in zip(samples, samples[1:]):
+            if a["m_in"] <= m <= b["m_in"]:
+                span = b["m_in"] - a["m_in"]
+                f = 0 if span == 0 else (m - a["m_in"]) / span
+                m_out = a["m_out"] + (b["m_out"] - a["m_out"]) * f
+                eff = 1e6 / m_out
+                break
+        if eff is None:
+            return None
+    return kelvin_to_rgb(int(round(eff)))
 
 
 # ─── Live-sync event bus ──────────────────────────────────────────────────────
@@ -605,9 +662,17 @@ async def control_govee(req: GoveeCommandRequest):
     if req.r is not None and req.g is not None and req.b is not None:
         results["color"] = await govee_lan_color(req.ip, req.r, req.g, req.b)
 
+    # Track what we actually sent so device_state reflects reality: an RGB-space
+    # calibrated CT request goes out as an RGB color, not a CT command.
+    applied_rgb = None
     if req.color_temp_kelvin is not None:
-        out_k = req.color_temp_kelvin if req.raw_ct else correct_kelvin(req.ip, req.color_temp_kelvin)
-        results["color_temp"] = await govee_lan_color_temp(req.ip, out_k)
+        rgb = None if req.raw_ct else ct_rgb_color(req.ip, req.color_temp_kelvin)
+        if rgb is not None:
+            applied_rgb = rgb
+            results["color"] = await govee_lan_color(req.ip, *rgb)
+        else:
+            out_k = req.color_temp_kelvin if req.raw_ct else correct_kelvin(req.ip, req.color_temp_kelvin)
+            results["color_temp"] = await govee_lan_color_temp(req.ip, out_k)
 
     # Send brightness after color — some Govee devices reset brightness on color change
     if req.brightness is not None:
@@ -615,7 +680,10 @@ async def control_govee(req: GoveeCommandRequest):
 
     record_govee_state(
         req.ip, on=req.on, brightness=req.brightness,
-        r=req.r, g=req.g, b=req.b, color_temp_kelvin=req.color_temp_kelvin,
+        r=applied_rgb[0] if applied_rgb else req.r,
+        g=applied_rgb[1] if applied_rgb else req.g,
+        b=applied_rgb[2] if applied_rgb else req.b,
+        color_temp_kelvin=None if applied_rgb else req.color_temp_kelvin,
     )
     return {"results": results}
 
@@ -884,6 +952,9 @@ class GoveeSegmentControlRequest(BaseModel):
     g: Optional[int] = None
     b: Optional[int] = None
     brightness: Optional[int] = None
+    color_temp_kelvin: Optional[int] = None  # white scenes: if the device has an
+                                             # ct_rgb calibration, this is converted
+                                             # to a calibrated RGB for the segment.
 
 
 @app.post("/api/govee/segment-control")
@@ -896,6 +967,13 @@ async def control_govee_segment(req: GoveeSegmentControlRequest):
     if not seg_info:
         raise HTTPException(400, f"Unknown SKU {req.sku}")
     proto = seg_info.get("protocol")
+
+    # White scenes send a per-segment CT. If this device has an RGB-space white
+    # calibration, render that segment as the calibrated warm RGB instead.
+    if req.color_temp_kelvin is not None:
+        rgb = ct_rgb_color(req.ip, req.color_temp_kelvin)
+        if rgb is not None:
+            req.r, req.g, req.b = rgb
 
     if proto == "razer":
         if req.r is None or req.g is None or req.b is None:
@@ -1103,6 +1181,22 @@ async def set_ct_calibration(req: CTCalibrationRequest):
     return {"success": True, "ct_correction": store}
 
 
+@app.post("/api/calibration/ct-rgb")
+async def set_ct_rgb_calibration(req: CTCalibrationRequest):
+    """RGB-space white calibration: same {in,out} shape as /calibration/ct, but
+    out is an effective warm Kelvin we send as kelvin_to_rgb() RGB. Setting an
+    ct_rgb entry takes precedence over ct_correction for that device."""
+    store = config.setdefault("ct_rgb", {})
+    pts = [p for p in (req.points or []) if p.get("in") and p.get("out")]
+    if pts:
+        store[req.device_key] = sorted(pts, key=lambda p: p["in"])
+    else:
+        store.pop(req.device_key, None)
+    schedule_save()
+    publish_event("config")
+    return {"success": True, "ct_rgb": store}
+
+
 # ─── Config Endpoint ────────────────────────────────────────────────────────
 
 @app.get("/api/config")
@@ -1118,6 +1212,7 @@ async def get_config():
         "device_state": config.get("device_state", {}),
         "room_color_state": config.get("room_color_state", {}),
         "ct_correction": config.get("ct_correction", {}),
+        "ct_rgb": config.get("ct_rgb", {}),
     }
 
 

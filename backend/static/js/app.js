@@ -53,6 +53,11 @@ function App() {
   const [fixtures, setFixtures] = useState({});
   const [roomColorState, setRoomColorState] = useState({});
   const [ctCorrection, setCtCorrection] = useState({});
+  // ctRgb: RGB-space white calibration (takes precedence over ctCorrection).
+  const [ctRgb, setCtRgb] = useState({});
+  // Union of both calibration types — drives the "calibrated" badge anywhere a
+  // device name is shown (the kind of calibration doesn't matter for the badge).
+  const ctCalibrated = { ...ctCorrection, ...ctRgb };
   // deviceModes: persisted LightCard preference per device_key.
   // "whole" or "segments". Loaded from config, updated on toggle.
   const [deviceModes, setDeviceModes] = useState({});
@@ -96,6 +101,7 @@ function App() {
       setFixtures(cfg.fixtures || {});
       setRoomColorState(cfg.room_color_state || {});
       setCtCorrection(cfg.ct_correction || {});
+      setCtRgb(cfg.ct_rgb || {});
       setDeviceModes(cfg.device_modes || {});
       setSegmentFillModes(cfg.segment_fill_modes || {});
       setPickerStyle(cfg.ui_prefs?.color_picker_style === "wheel" ? "wheel" : "huebar");
@@ -632,7 +638,7 @@ function App() {
                   minSatEnabled={minSatEnabled}
                   minSatPct={minSatPct}
                   savedColorState={roomColorState[roomName]}
-                  ctCorrection={ctCorrection}
+                  ctCorrection={ctCalibrated}
                 />
               );
             })}
@@ -643,7 +649,7 @@ function App() {
                 onControlRoom={() => {}}
                 favorites={favoriteColors} onFavoritesChange={updateFavorites}
                 nicknames={nicknames} onNicknameChange={updateNickname}
-                ctCorrection={ctCorrection}
+                ctCorrection={ctCalibrated}
               />
             )}
           </>
@@ -694,7 +700,7 @@ function App() {
                     onControlModeChange={(m) => updateDeviceMode && updateDeviceMode(devKey, m)}
                     segmentFillMode={segmentFillModes?.[devKey]}
                     onSegmentFillModeChange={(m) => updateSegmentFillMode && updateSegmentFillMode(devKey, m)}
-                    ctCorrection={ctCorrection} />
+                    ctCorrection={ctCalibrated} />
                 );
               })}
             </div>
@@ -806,7 +812,7 @@ function App() {
                           background: "#4ade80", opacity: 0.8,
                         }} />
                         <span style={{ color: "#e2e8f0", fontWeight: 600, minWidth: isMobile ? 0 : 140, flex: isMobile ? "1 1 auto" : "0 0 auto" }}>{name}</span>
-                        {ctCorrection?.[dk] && (
+                        {ctCalibrated?.[dk] && (
                           <span title="White-balance calibrated" style={{ color: "#fbbf24", fontSize: 13, lineHeight: 1, cursor: "default" }}>&#x25D0;</span>
                         )}
                         <span style={{ color: "#64748b" }}>{device.sku}</span>
@@ -875,9 +881,9 @@ function App() {
 
             <CTCalibrationPanel
               hueLights={hueLights} goveeDevices={goveeDevices}
-              nicknames={nicknames} ctCorrection={ctCorrection}
+              nicknames={nicknames} ctRgb={ctRgb}
               onControlHue={controlHueLight} onControlGovee={controlGoveeDevice}
-              onSaved={setCtCorrection}
+              onSaved={setCtRgb}
             />
 
             {/* UI preferences */}
