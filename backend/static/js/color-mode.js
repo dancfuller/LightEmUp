@@ -368,6 +368,11 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
   // variation.
   const [addressSegments, setAddressSegments] = useState("individual");
 
+  // Target vendor filter: "all" | "hue" | "govee". Restricts which devices a
+  // scene touches so e.g. a palette can be applied to Govee strips only without
+  // disturbing the Hue bulbs. Default "all".
+  const [targetVendor, setTargetVendor] = useState("all");
+
   // Deterministic assignment seed. The adjacency-aware color assignment is
   // randomized; seeding it (instead of Math.random) makes every client compute
   // the same device→color layout from the same palette, so a second session
@@ -394,6 +399,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     if (typeof s.brightness === "number") setBrightness(s.brightness);
     if (s.direction) setDirection(s.direction);
     if (s.address_segments) setAddressSegments(s.address_segments);
+    if (s.target_vendor) setTargetVendor(s.target_vendor);
     if (typeof s.shuffle_seed === "number") setShuffleSeed(s.shuffle_seed);
   }, [roomName, savedColorState]);
 
@@ -437,10 +443,27 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
   //   addressSegments=individual + no positions → auto-cluster N segments
   //     near the device position so gradient/beacon get spatial variation
   //   addressSegments=unit                       → single entry at device pos
+  // Which vendors have color-capable devices placed in this room — drives
+  // whether the All/Hue/Govee filter is worth showing, and lets us fall back
+  // to "all" if the saved filter targets a vendor that's no longer here.
+  const placedVendors = { hue: false, govee: false };
+  Object.keys(devices).forEach((key) => {
+    const light = lightMap[key];
+    if (!light?.capabilities?.has_color) return;
+    if (key.startsWith("hue:")) placedVendors.hue = true;
+    else if (key.startsWith("govee:")) placedVendors.govee = true;
+  });
+  const effectiveVendor =
+    (targetVendor === "hue" && !placedVendors.hue) ||
+    (targetVendor === "govee" && !placedVendors.govee)
+      ? "all" : targetVendor;
+
   const placedColorLights = [];
   Object.entries(devices).forEach(([key, pos]) => {
     const light = lightMap[key];
     if (!light?.capabilities?.has_color) return;
+    if (effectiveVendor === "hue" && !key.startsWith("hue:")) return;
+    if (effectiveVendor === "govee" && !key.startsWith("govee:")) return;
     const segData = segments[key];
     const segCountForDevice = light?.sku ? (segmentInfo?.sku_table?.[light.sku]?.count || 0) : 0;
     const addressIndividual = addressSegments === "individual" && segCountForDevice > 1;
@@ -1134,7 +1157,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
   useEffect(() => {
     if (!hasLayout) return;
     setPreview(pipeline(computeForMode()));
-  }, [mode, colorSpace, ctPreset, maxKelvin, baseColor, direction, paletteColors, customColors, customShadeMode, hasLayout, layout, fixtures, beaconSourceKey, brightness, addressSegments, minSatEnabled, minSatPct, segmentFillModes, shuffleSeed]);
+  }, [mode, colorSpace, ctPreset, maxKelvin, baseColor, direction, paletteColors, customColors, customShadeMode, hasLayout, layout, fixtures, beaconSourceKey, brightness, addressSegments, minSatEnabled, minSatPct, segmentFillModes, shuffleSeed, targetVendor]);
 
   // ─── Apply colors to lights ─────────────────────────────────────────
   const applyColors = () => {
@@ -1330,6 +1353,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
       direction,
       address_segments: addressSegments,
       shuffle_seed: shuffleSeed,
+      target_vendor: targetVendor,
     };
     if (onApply) onApply(preview, addressSegments, colorStateSnapshot);
   };
@@ -1655,6 +1679,37 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
           >{opt.label}</button>
         ))}
       </div>
+
+      {/* Target vendor filter — only when the room has both Hue and Govee
+          color devices, otherwise the choice is meaningless. Lets a scene
+          apply to all devices, Hue only, or Govee only. */}
+      {placedVendors.hue && placedVendors.govee && (
+        <div style={{
+          display: "flex", alignItems: "center", gap: 8, marginBottom: 14, flexWrap: "wrap",
+        }}>
+          <span style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600 }}>Apply to:</span>
+          <div style={{
+            display: "flex", gap: 4, background: "#0f172a", borderRadius: 8,
+            padding: 3, border: "1px solid #1e293b",
+          }}>
+            {[
+              { key: "all", label: "All" },
+              { key: "hue", label: "Hue only" },
+              { key: "govee", label: "Govee only" },
+            ].map(opt => (
+              <button key={opt.key}
+                onClick={() => setTargetVendor(opt.key)}
+                style={{
+                  padding: "6px 12px", borderRadius: 6, border: "none",
+                  background: targetVendor === opt.key ? "#6366f1" : "transparent",
+                  color: targetVendor === opt.key ? "#fff" : "#94a3b8",
+                  fontSize: 12, fontWeight: 600, cursor: "pointer",
+                }}
+              >{opt.label}</button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Address-segments toggle. Only shown when this room actually has a
           segmented device — otherwise it has no effect and is just noise. */}
