@@ -480,7 +480,14 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     if (effectiveVendor === "govee" && !key.startsWith("govee:")) return;
     const segData = segments[key];
     const segCountForDevice = light?.sku ? (segmentInfo?.sku_table?.[light.sku]?.count || 0) : 0;
-    const addressIndividual = addressSegments === "individual" && segCountForDevice > 1;
+    // White mode always drives segmented devices as a whole unit: per-segment
+    // white goes over the rate-limited cloud_v2 API (15 calls/device, 1.8s
+    // apart) so later segments get dropped and stay at the bluish whole-device
+    // reset — looking "uncalibrated". The whole-device LAN command is instant,
+    // reliable, and calibrated (ct_rgb), and uniform warm white is what a white
+    // scene wants anyway.
+    const addressIndividual = addressSegments === "individual"
+      && segCountForDevice > 1 && colorSpace !== "white";
 
     if (addressIndividual && segData?.expanded && segData.positions) {
       // Layout-placed: use explicit positions.
@@ -1775,8 +1782,10 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
       )}
 
       {/* Address-segments toggle. Only shown when this room actually has a
-          segmented device — otherwise it has no effect and is just noise. */}
-      {allLights.some(l => l?.sku && (segmentInfo?.sku_table?.[l.sku]?.count || 0) > 1) && (
+          segmented device — otherwise it has no effect and is just noise.
+          Hidden in White mode, where segmented devices are always driven as a
+          whole unit (reliable, calibrated) regardless of this setting. */}
+      {colorSpace !== "white" && allLights.some(l => l?.sku && (segmentInfo?.sku_table?.[l.sku]?.count || 0) > 1) && (
         <div style={{
           display: "flex", alignItems: "center", gap: 8, marginBottom: 14,
           padding: "8px 10px", background: "rgba(15,23,42,0.5)",
