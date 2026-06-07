@@ -1181,7 +1181,11 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     const light = lightMap[parentKey];
     const base = nicknames?.[parentKey] || light?.name
       || (light?.sku ? GOVEE_SKU_NAMES?.[light.sku] : null) || parentKey;
-    return m ? `${base} · panel ${parseInt(m[2]) + 1}` : base;
+    if (!m) return base;
+    // Hexa panels say "panel"; everything else (globe/string, outdoor spots,
+    // rope) is a strip of "segments".
+    const unit = light?.sku === "H6061" ? "panel" : "segment";
+    return `${base} · ${unit} ${parseInt(m[2]) + 1}`;
   };
 
   const clearApplyTimers = () => {
@@ -1395,20 +1399,38 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
           .finally(() => { segs.forEach(() => applyTick()); });
       });
 
-      // Cloud V2 segments (H7065/H7066): staggered per-segment cloud calls.
+      // Cloud V2 segments: batch by color so each distinct color is ONE call
+      // (the V2 API accepts a segment list per color), instead of one call per
+      // segment plus a separate brightness call. That's what was overrunning the
+      // rate limit and leaving segments stuck on the base color. Per-segment
+      // (beacon) brightness is folded into the color; whole-device brightness is
+      // already set by the base-color phase.
       let segDelay = 0;
       cloudGroups.forEach(({ parent, light, segs }) => {
         if (!light) { segs.forEach(() => applyTick()); return; }
+        const byColor = new Map();
         segs.forEach(({ idx, color }) => {
-          // In white mode, pass the target Kelvin too: if the device has an
-          // RGB-space white calibration, the server swaps in the calibrated warm
-          // RGB; otherwise it falls back to the r/g/b approximation sent here.
-          const cmd = { ip: light.ip, sku: light.sku, device_mac: light.mac, segment_idx: idx, r: color.r, g: color.g, b: color.b, brightness: color.brightness ?? brightness, color_temp_kelvin: color.kelvin };
+          const f = color.brightness !== undefined ? color.brightness / 100 : 1;
+          const rr = Math.round(color.r * f), gg = Math.round(color.g * f), bb = Math.round(color.b * f);
+          // Use calibrated CT only when the segment isn't dimmed (f === 1);
+          // a dimmed beacon segment must send the pre-scaled RGB.
+          const useKelvin = color.kelvin != null && f === 1;
+          const key = useKelvin ? `k${color.kelvin}` : `${rr},${gg},${bb}`;
+          if (!byColor.has(key)) {
+            byColor.set(key, { segments: [], r: rr, g: gg, b: bb, color_temp_kelvin: useKelvin ? color.kelvin : undefined });
+          }
+          byColor.get(key).segments.push(idx);
+        });
+        const unit = light?.sku === "H6061" ? "panel" : "segment";
+        [...byColor.values()].forEach(group => {
           scheduleSend(() => {
-            setApplyLabel(nameForKey(`${parent}:seg${idx}`));
-            api("/govee/segment-control", { method: "POST", body: JSON.stringify(cmd), headers: { "Content-Type": "application/json" } })
-              .catch(e => console.warn("[ColorMode] Segment control failed:", parent, idx, e));
-            applyTick();
+            setApplyLabel(`${nameForKey(parent)} · ${group.segments.length} ${unit}${group.segments.length === 1 ? "" : "s"}`);
+            api("/govee/segments-multi", {
+              method: "POST",
+              body: JSON.stringify({ ip: light.ip, sku: light.sku, device_mac: light.mac, segments: group.segments, r: group.r, g: group.g, b: group.b, color_temp_kelvin: group.color_temp_kelvin }),
+              headers: { "Content-Type": "application/json" },
+            }).catch(e => console.warn("[ColorMode] segments-multi failed:", parent, e));
+            group.segments.forEach(() => applyTick());
           }, segDelay);
           segDelay += SEG_APPLY_STAGGER;
         });

@@ -891,6 +891,34 @@ async def govee_v2_segment_color(api_key: str, sku: str, device_mac: str,
         return resp.status_code == 200
 
 
+async def govee_v2_segments_color(api_key: str, sku: str, device_mac: str,
+                                   segments: list, r: int, g: int, b: int) -> bool:
+    """Set many segments to ONE color in a single V2 call. The segmentedColorRgb
+    capability accepts a list of segment indices, so a scene that shares a color
+    across N panels needs one request instead of N — the difference between
+    staying under the rate limit and dropping segments."""
+    rgb_int = (r << 16) | (g << 8) | b
+    payload = {
+        "requestId": f"segs-{int(asyncio.get_event_loop().time() * 1000)}",
+        "payload": {
+            "sku": sku,
+            "device": device_mac,
+            "capability": {
+                "type": "devices.capabilities.segment_color_setting",
+                "instance": "segmentedColorRgb",
+                "value": {"segment": list(segments), "rgb": rgb_int},
+            },
+        },
+    }
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.post(
+            f"{GOVEE_V2_BASE}/device/control",
+            headers={"Govee-API-Key": api_key, "Content-Type": "application/json"},
+            json=payload,
+        )
+        return resp.status_code == 200
+
+
 async def govee_v2_segment_brightness(api_key: str, sku: str, device_mac: str,
                                        segment_idx: int, brightness: int) -> bool:
     """Set a single segment's brightness via the Govee Platform API v2."""

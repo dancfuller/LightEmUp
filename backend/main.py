@@ -35,6 +35,7 @@ from discovery import (
     govee_cloud_get_devices,
     govee_get_segment_info,
     govee_v2_segment_color,
+    govee_v2_segments_color,
     govee_v2_segment_brightness,
     govee_razer_enable,
     govee_razer_set_segments,
@@ -1024,6 +1025,56 @@ async def control_govee_segment(req: GoveeSegmentControlRequest):
             api_key, req.sku, req.device_mac, req.segment_idx, req.brightness
         )
     return {"results": results, "protocol": "cloud_v2"}
+
+
+class GoveeSegmentsMultiRequest(BaseModel):
+    ip: str
+    sku: str
+    device_mac: str
+    segments: list  # segment indices that share this one color
+    r: Optional[int] = None
+    g: Optional[int] = None
+    b: Optional[int] = None
+    color_temp_kelvin: Optional[int] = None  # white scenes: resolved via ct_rgb
+
+
+@app.post("/api/govee/segments-multi")
+async def control_govee_segments_multi(req: GoveeSegmentsMultiRequest):
+    """Set a whole group of cloud_v2 segments to one color in a single V2 call.
+    Scene applies share colors across many segments; one call per color (instead
+    of one per segment, plus a separate brightness call) keeps us under the rate
+    limit so segments stop getting dropped. Brightness is handled whole-device."""
+    seg_info = GOVEE_SEGMENT_INFO.get(req.sku)
+    if not seg_info:
+        raise HTTPException(400, f"Unknown SKU {req.sku}")
+    if seg_info.get("protocol") != "cloud_v2":
+        raise HTTPException(400, f"SKU {req.sku} is not a cloud_v2 segment device")
+    api_key = config.get("govee_api_key")
+    if not api_key:
+        raise HTTPException(400, "No Govee API key configured")
+
+    # Resolve the color: white scenes send a Kelvin → calibrated RGB (ct_rgb),
+    # falling back to the RGB approximation the client also sent.
+    rgb = None
+    if req.color_temp_kelvin is not None:
+        rgb = ct_rgb_color(req.ip, req.color_temp_kelvin)
+    if rgb is None and req.r is not None and req.g is not None and req.b is not None:
+        rgb = (req.r, req.g, req.b)
+    if rgb is None and req.color_temp_kelvin is not None:
+        rgb = kelvin_to_rgb(req.color_temp_kelvin)
+    if rgb is None:
+        raise HTTPException(400, "segments-multi needs r,g,b or color_temp_kelvin")
+
+    count = seg_info.get("count") or 0
+    segs = [int(s) for s in req.segments if isinstance(s, int) and 0 <= s < count]
+    if not segs:
+        raise HTTPException(400, "no valid segment indices")
+
+    ok = await govee_v2_segments_color(api_key, req.sku, req.device_mac, segs, *rgb)
+    for idx in segs:
+        segment_state.set_one(req.ip, idx, rgb[0], rgb[1], rgb[2])
+    persist_segments()
+    return {"success": ok, "segments": len(segs), "protocol": "cloud_v2"}
 
 
 # ─── Razer-protocol bulk segment apply (LAN) ────────────────────────────────
