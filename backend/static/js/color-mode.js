@@ -1270,12 +1270,18 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     setApplyEndAt(Date.now() + totalMs);
     setTickNow(Date.now());
 
-    // ─── Phase 1: V1 LAN whole-device white reset (skipped if no segments) ──
+    // ─── Phase 1: fast whole-device base color (skipped if no segments) ──
+    // Cloud_v2 per-segment apply is slow (V2 API rate limit), so the device
+    // sits on this base for many seconds while segments fill in. We used to
+    // send white (255,255,255) here, which blasted blue-white during the whole
+    // apply. Instead seed each device with one of ITS OWN scene colors (the
+    // middle segment) via the fast whole-device LAN command — so the strip
+    // already looks like the scene, and segments only refine it.
     if (resetCount > 0) {
       setApplyPhase("resetting");
       setApplyTotal(resetCount);
       setApplyDone(0);
-      setApplyLabel("Preparing segments…");
+      setApplyLabel("Setting base color…");
 
       let resetCompleted = 0;
       const resetTick = () => {
@@ -1284,16 +1290,21 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
         setApplyDone(resetCompleted);
       };
 
-      // All V1 LAN whites fire in parallel — UDP fire-and-forget, no rate limit
-      resetDeviceKeys.forEach(parentKey => {
-        const light = lightMap[parentKey];
+      // Fast whole-device LAN commands fire in parallel (UDP, no rate limit).
+      cloudGroups.forEach(({ parent, light, segs }) => {
         if (!light) { resetTick(); return; }
+        const seed = (segs[Math.floor(segs.length / 2)] || segs[0])?.color;
+        const body = seed?.kelvin != null
+          ? { ip: light.ip, color_temp_kelvin: seed.kelvin, brightness: seed.brightness ?? brightness }
+          : seed
+            ? { ip: light.ip, r: seed.r, g: seed.g, b: seed.b, brightness: seed.brightness ?? brightness }
+            : { ip: light.ip, r: 255, g: 255, b: 255 };
         api("/govee/control", {
           method: "POST",
-          body: JSON.stringify({ ip: light.ip, r: 255, g: 255, b: 255 }),
+          body: JSON.stringify(body),
           headers: { "Content-Type": "application/json" },
         })
-          .catch(e => console.warn("[ColorMode] V1 reset failed:", parentKey, e))
+          .catch(e => console.warn("[ColorMode] base color failed:", parent, e))
           .finally(() => resetTick());
       });
     }
