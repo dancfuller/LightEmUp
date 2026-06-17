@@ -424,7 +424,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
   // one of the seed colors with no shading.
   const [customColors, setCustomColors] = useState([{ r: 60, g: 100, b: 255 }]);
   const [editingCustomIdx, setEditingCustomIdx] = useState(null);
-  const [customShadeMode, setCustomShadeMode] = useState("shades"); // "shades" | "exact"
+  const [customShadeMode, setCustomShadeMode] = useState("exact"); // "shades" | "exact"
   const [beaconSourceKey, setBeaconSourceKey] = useState(null);
   const [baseColor, setBaseColor] = useState({ r: 40, g: 180, b: 80 });
   // paletteColors = visible/active subset of paletteSource.
