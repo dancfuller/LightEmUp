@@ -6,6 +6,46 @@ This file helps Claude Code (or any AI coding assistant) understand the project 
 
 LightEmUp is a local-network web app for unified control of Philips Hue (Zigbee) and Govee (LAN/UDP) smart lights. FastAPI backend + React frontend, fully local with no cloud dependency.
 
+## Workflow Rules (every session — not optional)
+
+These conventions are already established. A fresh session must follow them without
+being re-told. Nested `CLAUDE.md` files document subsystem internals:
+`backend/CLAUDE.md` (server) and `backend/static/js/CLAUDE.md` (frontend). Read those
+instead of spelunking, and **update them when you change how something works.**
+
+### Versioning
+- SemVer `X.Y.Z`. Single source of truth: `backend/version.py` (`__version__`).
+- **Bump the version on every functional commit.** Claude decides the bump:
+  - **Z (patch)**: bug fixes, small UI refinements, internal cleanup.
+  - **Y (minor)**: meaningful new user-visible feature or capability.
+  - **X (major)**: breaking config-schema change, removed/renamed endpoint, UX rework.
+- Include the new version in the commit subject as a `(vX.Y.Z)` suffix.
+
+### Commits
+- Subject: imperative summary + ` (vX.Y.Z)`, e.g.
+  `Batch cloud_v2 segment apply by color to stop dropped segments (v2.10.0)`.
+- Body: explain the **why** (the problem) and the approach.
+- Always end with this trailer exactly:
+  `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`
+- **Never commit**: `backend/config.json` (gitignored — local IPs/creds), the
+  untracked `mockups/` directory, or any secret/.env. Stage only the files your change
+  touched — don't `git add -A` blindly.
+- **Push only when the user explicitly says to** ("push", "commit and push").
+
+### Deploy / restart
+- Runs on a Raspberry Pi as the `lightemup` systemd service.
+- To deploy after pushing, the user runs (in their PowerShell):
+  `ssh -t pi@lightemup '~/lightemup/deploy/update.sh'`
+  (git pull --ff-only → pip install → reinstall unit if changed → restart service).
+- **After every code change, state the deploy impact:** frontend `static/js/*` change
+  = browser hard-refresh only; any backend `*.py` change = server restart required.
+  Emit the ssh command only when a restart is needed, and only after pushing.
+
+### Testing with physical lights
+- Before running any debug/diagnostic test that drives real lights, **ask which room**
+  it should run in. (Dan works in the living room at night; a stray test once lit the
+  bedroom/study/stairs and woke the house.)
+
 ## Architecture
 
 - **Backend**: Python FastAPI in `backend/main.py`, device layer in `backend/discovery.py`, scene engine in `backend/scenes.py`
@@ -24,17 +64,21 @@ backend/
   config.json.example  # Template for config.json
   static/
     index.html         # HTML shell — CSS, CDN imports, script tags
-    js/
-      utils.js            # React hooks, API wrapper, color math, SKU names, favorites
+    js/                   # Load order is set by <script> tags in index.html (authoritative)
+      utils.js            # React hooks, api() wrapper, color math, useIsMobile, useThrottledControl, seeded PRNG
       audio.js            # Thunder synth (WebAudio), fart sounds (preloaded MP3s)
-      components-shared.js # ColorPicker, ColorWheel, Slider, StatusBadge, RgbSliderInput
+      components-shared.js # ColorPicker, ColorWheel, Slider, ColorTempSlider, StatusBadge, RgbSliderInput
       light-card.js       # LightCard — per-device control (toggle, brightness, color, nickname)
       lightning-panel.js  # LightningPanel — storm scene UI with presets and SSE sync
       room-map.js         # RoomMap — interactive SVG floor plan & linear layout editor
+      color-mode.js       # Room color tool — palette/gradient/beacon/custom assignment + apply pipeline
+      segment-reset-debug.js # Debug panel for segment reset behavior
       room-section.js     # RoomSection — room grouping with controls, map, lightning toggles
       room-assignment.js  # RoomAssignment — device-to-room assignment UI
       setup-wizard.js     # SetupWizard — Hue Bridge discovery and pairing
-      app.js              # App component — state management, routing, API orchestration
+      server-logs.js      # ServerLogs — live server log viewer
+      ct-calibration.js   # CTCalibrationPanel — RGB-space white calibration UI
+      app.js              # App component — state, routing, SSE client, API orchestration
     sounds/farts/       # 20 MP3 files for "funny mode" thunder replacement
 ```
 
