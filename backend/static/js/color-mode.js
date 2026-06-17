@@ -287,7 +287,9 @@ function applyMinSat(preview, enabled, pct) {
   if (!preview || !enabled) return preview;
   const minS = Math.max(0, Math.min(1, (pct || 0) / 100));
   const out = {};
-  Object.entries(preview).forEach(([k, v]) => { out[k] = clampSaturation(v, minS); });
+  // White (color-temperature) entries are intentionally low-saturation; never
+  // clamp them back toward vivid color. They carry a `kelvin`.
+  Object.entries(preview).forEach(([k, v]) => { out[k] = v.kelvin != null ? v : clampSaturation(v, minS); });
   return out;
 }
 
@@ -980,55 +982,72 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     return result;
   }, [placedColorLights, baseColor, beaconSourceKey, brightness, isLinear]);
 
-  // ─── Custom mode: 1-4 seed colors. Each light gets a random
-  // (seed, shade) pair. Adjacency-aware: neighbors prefer a different
-  // seed family. Pure random distribution — no direction concept.
-  // Shuffle re-rolls the assignment so the user can ask for a different
-  // proposal if the current one isn't appealing. ─────────────────────
+  // ─── Custom mode: 1-4 seed colors, assigned as a simple repeating cycle.
+  // Devices are ordered spatially and colored A,B,C,A,B,C… along that order
+  // so the result reads as a clean repeating pattern (the thing people
+  // actually expect from "use my 2-3 colors"). No adjacency graph here —
+  // the positional cycle inherently keeps neighbors distinct:
+  //   • Linear layouts sort left-to-right → ABABAB / ABCABC down the strip.
+  //   • Floor plans sort row-major (top→bottom, then left→right) and shift
+  //     each row by one so the pattern staggers into a checkerboard/diagonal
+  //     instead of stacking the same color vertically.
+  // "Shades" mode advances to a fresh tonal shade on each wrap of the
+  // palette so repeats of a seed aren't identical. Shuffle rotates the
+  // starting phase so a re-roll gives a different-but-still-repeating
+  // proposal. ─────────────────────────────────────────────────────────
   const computeCustom = useCallback(() => {
     if (placedColorLights.length === 0 || customColors.length === 0) return null;
-    const rng = seededRng(`${roomName}|custom|${shuffleSeed}`);
     const M = customColors.length;
     const exact = customShadeMode === "exact";
     const SHADES_PER_SEED = exact ? 1 : 4;
 
-    // In "exact" mode each seed contributes only itself (one shade).
-    // In "shades" mode we generate a tonal range per seed.
-    const shadesBySeed = customColors.map(c =>
-      exact ? [c] : generateTonalShades(c.r, c.g, c.b, SHADES_PER_SEED)
-    );
-
-    const adj = buildAdjacency(placedColorLights);
-
-    // Most-constrained first so the hardest devices get picked when the
-    // most seed options are still free.
-    const sorted = [...placedColorLights].sort((a, b) =>
-      (adj[b.key]?.size || 0) - (adj[a.key]?.size || 0)
-    );
-
-    const assignment = {}; // key → { seedIdx, shadeIdx }
-
-    sorted.forEach(d => {
-      const neighborSeeds = new Set();
-      adj[d.key]?.forEach(nk => {
-        if (assignment[nk] !== undefined) neighborSeeds.add(assignment[nk].seedIdx);
-      });
-
-      // Shuffled seed order, then pick first one not used by a neighbor.
-      const order = Array.from({ length: M }, (_, i) => i)
-        .sort(() => rng() - 0.5);
-      let seedIdx = order.find(s => !neighborSeeds.has(s));
-      if (seedIdx === undefined) seedIdx = order[0];
-      const shadeIdx = Math.floor(rng() * SHADES_PER_SEED);
-      assignment[d.key] = { seedIdx, shadeIdx };
+    // Each seed slot is either a color ({r,g,b}) or a white temperature
+    // ({r,g,b,kelvin} — r/g/b is the kelvinToRGB approximation for display,
+    // kelvin drives the real CT command on apply). In "exact" mode each seed
+    // contributes only itself; in "shades" mode color slots get a tonal range
+    // and white slots get a few temperature steps spanning ±~600K.
+    const ctE = (k) => ({ ...kelvinToRGB(k), kelvin: k });
+    const shadesBySeed = customColors.map(c => {
+      const isWhite = c.kelvin != null;
+      if (exact) return [isWhite ? ctE(c.kelvin) : c];
+      if (isWhite) {
+        const lo = Math.max(CT_MIN_K, c.kelvin - 600);
+        const hi = Math.min(CT_MAX_K, c.kelvin + 600);
+        return spreadKelvin(lo, hi, SHADES_PER_SEED).map(ctE);
+      }
+      return generateTonalShades(c.r, c.g, c.b, SHADES_PER_SEED);
     });
+
+    // Spatial order. Floor plans bucket y into rows (devices roughly level
+    // count as one row) so a row reads left-to-right before dropping down.
+    const ROW = 1.5; // grid units that count as "the same row"
+    const rowOf = (d) => (isLinear ? 0 : Math.round(d.y / ROW));
+    const ordered = [...placedColorLights].sort((a, b) => {
+      const ra = rowOf(a), rb = rowOf(b);
+      if (ra !== rb) return ra - rb;
+      if (a.x !== b.x) return a.x - b.x;
+      return a.y - b.y;
+    });
+
+    // Shuffle just rotates which color the cycle starts on.
+    const offset = Math.floor(seededRng(`${roomName}|custom|${shuffleSeed}`)() * M);
 
     const result = {};
-    Object.entries(assignment).forEach(([k, a]) => {
-      result[k] = shadesBySeed[a.seedIdx][a.shadeIdx];
+    let rowKey = null, rowNum = 0, col = 0;
+    ordered.forEach((d) => {
+      const r = rowOf(d);
+      if (rowKey === null) rowKey = r;
+      else if (r !== rowKey) { rowKey = r; rowNum++; col = 0; }
+      // Per-row shift (rowNum) staggers the pattern in 2D so vertically
+      // adjacent rows don't line up the same color.
+      const phase = col + rowNum + offset;
+      const seedIdx = ((phase % M) + M) % M;
+      const shadeIdx = exact ? 0 : Math.floor(phase / M) % SHADES_PER_SEED;
+      result[d.key] = shadesBySeed[seedIdx][shadeIdx];
+      col++;
     });
     return result;
-  }, [placedColorLights, customColors, customShadeMode, buildAdjacency, roomName, shuffleSeed]);
+  }, [placedColorLights, customColors, customShadeMode, roomName, shuffleSeed, isLinear]);
 
   // ─── White (color-temperature) compute variants ─────────────────────
   // Entries carry { r, g, b, kelvin } — r/g/b is the display approximation
@@ -2196,43 +2215,78 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
                 ))}
               </div>
 
-              {/* Color slots — each row: swatch | hue bar | RGB triple | × */}
+              {/* Color slots — each is a Color (hue) or White (temperature)
+                  selector, so one scene can mix vivid colors and white shades. */}
               <div style={{ fontSize: 11, color: "#64748b", marginBottom: 6 }}>
                 Seed colors ({customColors.length} of 4):
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 12 }}>
-                {customColors.map((c, idx) => (
-                  <div key={idx} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <div style={{
-                      width: 26, height: 26, borderRadius: 6, flexShrink: 0,
-                      background: `rgb(${c.r},${c.g},${c.b})`,
-                      border: "1px solid rgba(255,255,255,0.2)",
-                    }} />
-                    <HueBar
-                      currentColor={c}
-                      onChange={(rgb) => {
-                        setCustomColors(prev => prev.map((cc, i) => i === idx ? rgb : cc));
-                      }}
-                    />
-                    <span style={{
-                      fontSize: 10, color: "#94a3b8", fontFamily: "monospace",
-                      minWidth: 92, textAlign: "right", flexShrink: 0,
-                    }}>R:{c.r} G:{c.g} B:{c.b}</span>
-                    {idx > 0 && (
-                      <button
-                        onClick={() => setCustomColors(prev => prev.filter((_, i) => i !== idx))}
-                        style={{
-                          width: 22, height: 22, borderRadius: 11,
-                          background: "transparent", color: "#f87171",
-                          border: "1px solid #7f1d1d", cursor: "pointer",
-                          fontSize: 12, fontWeight: 700, lineHeight: 1,
-                          padding: 0, flexShrink: 0,
-                        }}
-                        title="Remove slot"
-                      >×</button>
+                {customColors.map((c, idx) => {
+                  const isWhite = c.kelvin != null;
+                  const setSlot = (next) =>
+                    setCustomColors(prev => prev.map((cc, i) => i === idx ? next : cc));
+                  return (
+                  <div key={idx} style={{
+                    display: "flex", flexDirection: "column", gap: 6,
+                    background: "#0f172a", border: "1px solid #1e293b",
+                    borderRadius: 8, padding: 8,
+                  }}>
+                    {/* Header row: swatch | Color/White toggle | readout | × */}
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <div style={{
+                        width: 24, height: 24, borderRadius: 6, flexShrink: 0,
+                        background: `rgb(${c.r},${c.g},${c.b})`,
+                        border: "1px solid rgba(255,255,255,0.2)",
+                      }} />
+                      <div style={{ display: "flex", gap: 3, background: "#1e293b", borderRadius: 6, padding: 2 }}>
+                        {[{ k: "color", l: "Color" }, { k: "white", l: "White" }].map(opt => {
+                          const active = (opt.k === "white") === isWhite;
+                          return (
+                            <button key={opt.k}
+                              onClick={() => {
+                                if (opt.k === "white" && !isWhite) setSlot({ ...kelvinToRGB(3000), kelvin: 3000 });
+                                else if (opt.k === "color" && isWhite) { const { kelvin, ...rgb } = c; setSlot(rgb); }
+                              }}
+                              style={{
+                                padding: "3px 10px", borderRadius: 4, border: "none",
+                                background: active ? "#6366f1" : "transparent",
+                                color: active ? "#fff" : "#94a3b8",
+                                fontSize: 10, fontWeight: 600, cursor: "pointer",
+                              }}
+                            >{opt.l}</button>
+                          );
+                        })}
+                      </div>
+                      <span style={{
+                        marginLeft: "auto", fontSize: 10, color: "#94a3b8",
+                        fontFamily: "monospace", flexShrink: 0,
+                      }}>{isWhite ? `${c.kelvin}K` : `R:${c.r} G:${c.g} B:${c.b}`}</span>
+                      {idx > 0 && (
+                        <button
+                          onClick={() => setCustomColors(prev => prev.filter((_, i) => i !== idx))}
+                          style={{
+                            width: 22, height: 22, borderRadius: 11,
+                            background: "transparent", color: "#f87171",
+                            border: "1px solid #7f1d1d", cursor: "pointer",
+                            fontSize: 12, fontWeight: 700, lineHeight: 1,
+                            padding: 0, flexShrink: 0,
+                          }}
+                          title="Remove slot"
+                        >×</button>
+                      )}
+                    </div>
+                    {/* Selector: hue bar (color) or temperature slider (white) */}
+                    {isWhite ? (
+                      <ColorTempSlider
+                        kelvin={c.kelvin}
+                        onChange={(k) => setSlot({ ...kelvinToRGB(k), kelvin: k })}
+                      />
+                    ) : (
+                      <HueBar currentColor={c} onChange={(rgb) => setSlot(rgb)} />
                     )}
                   </div>
-                ))}
+                  );
+                })}
                 {customColors.length < 4 && (
                   <button
                     onClick={() => {
