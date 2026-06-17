@@ -71,7 +71,8 @@ backend/
       light-card.js       # LightCard — per-device control (toggle, brightness, color, nickname)
       lightning-panel.js  # LightningPanel — storm scene UI with presets and SSE sync
       room-map.js         # RoomMap — interactive SVG floor plan & linear layout editor
-      color-mode.js       # Room color tool — palette/gradient/beacon/custom assignment + apply pipeline
+      palette-data.js     # Static color datasets for Teams/NCAA/Flags modes (PRESET_TEAMS/NCAA/FLAGS)
+      color-mode.js       # Room color tool — palette/gradient/beacon/custom/teams/ncaa/flags + apply pipeline
       segment-reset-debug.js # Debug panel for segment reset behavior
       room-section.js     # RoomSection — room grouping with controls, map, lightning toggles
       room-assignment.js  # RoomAssignment — device-to-room assignment UI

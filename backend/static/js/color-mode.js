@@ -10,6 +10,26 @@ function dimRgbCss(c) {
   return `rgb(${Math.round(c.r * f)},${Math.round(c.g * f)},${Math.round(c.b * f)})`;
 }
 
+// ─── Preset color helpers (Teams / NCAA / Flags modes) ──────────────────────
+function hexToRgb(hex) {
+  const m = /^#?([0-9a-f]{6})$/i.exec((hex || "").trim());
+  if (!m) return null;
+  const n = parseInt(m[1], 16);
+  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+}
+// Near-black guard: these modes skip black so a "team color" of black doesn't
+// just leave a light off-looking. Luminance threshold ~ very dark.
+function isNearBlack(c) {
+  return c && (0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b) < 28;
+}
+// Convert a preset's hex list into usable RGB entries, dropping near-black.
+// Falls back to the raw set if everything was filtered (e.g. an all-black flag).
+function presetColors(hexes) {
+  const rgb = (hexes || []).map(hexToRgb).filter(Boolean);
+  const kept = rgb.filter(c => !isNearBlack(c));
+  return kept.length ? kept : rgb;
+}
+
 // ─── Palette extension ────────────────────────────────────────────────────
 // Extend a palette of N colors to targetLen (up to 24) by generating variations
 // (lighter, darker, hue-shifted) of the first 8 colors. Deterministic so repeated
@@ -323,6 +343,73 @@ function applySegmentFillModes(preview, fillModes) {
   return out;
 }
 
+// Searchable single-select picker for the preset modes (Teams / NCAA / Flags).
+// Filters items by name, previews the selected item's swatches, and lists each
+// option with its color chips. Controlled: parent owns `value` (an item name).
+function PresetPicker({ items, value, onChange, placeholder, isMobile }) {
+  const [q, setQ] = useState("");
+  const needle = q.trim().toLowerCase();
+  const filtered = needle ? items.filter(it => it.name.toLowerCase().includes(needle)) : items;
+  const selected = items.find(it => it.name === value);
+  return (
+    <div>
+      {selected && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+          <span style={{ fontSize: isMobile ? 13 : 14, fontWeight: 700, color: "#e2e8f0" }}>{selected.name}</span>
+          {selected.group && <span style={{ fontSize: 10, color: "#64748b" }}>{selected.group}</span>}
+          <div style={{ display: "flex", gap: 4, marginLeft: "auto" }}>
+            {presetColors(selected.colors).map((c, i) => (
+              <div key={i} style={{
+                width: 22, height: 22, borderRadius: 5,
+                background: `rgb(${c.r},${c.g},${c.b})`, border: "1px solid rgba(255,255,255,0.25)",
+              }} />
+            ))}
+          </div>
+        </div>
+      )}
+      <input
+        type="text" value={q} onChange={(e) => setQ(e.target.value)}
+        placeholder={placeholder || "Search…"}
+        style={{
+          width: "100%", boxSizing: "border-box", padding: "8px 10px", borderRadius: 8,
+          border: "1px solid #334155", background: "#0f172a", color: "#e2e8f0",
+          fontSize: 13, marginBottom: 6,
+        }}
+      />
+      <div style={{
+        maxHeight: 220, overflowY: "auto", border: "1px solid #1e293b",
+        borderRadius: 8, background: "rgba(15,23,42,0.5)",
+      }}>
+        {filtered.length === 0 && (
+          <div style={{ padding: 10, fontSize: 12, color: "#64748b" }}>No matches</div>
+        )}
+        {filtered.map(it => {
+          const active = it.name === value;
+          const sw = presetColors(it.colors);
+          return (
+            <button key={it.name} onClick={() => onChange(it.name)}
+              style={{
+                display: "flex", alignItems: "center", gap: 8, width: "100%",
+                textAlign: "left", padding: "7px 10px", border: "none", cursor: "pointer",
+                background: active ? "rgba(99,102,241,0.25)" : "transparent",
+                color: active ? "#fff" : "#cbd5e1", fontSize: 12,
+                borderBottom: "1px solid rgba(30,41,59,0.6)",
+              }}>
+              <div style={{ display: "flex", gap: 2, flexShrink: 0 }}>
+                {sw.slice(0, 4).map((c, i) => (
+                  <div key={i} style={{ width: 12, height: 12, borderRadius: 2, background: `rgb(${c.r},${c.g},${c.b})` }} />
+                ))}
+              </div>
+              <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.name}</span>
+              {it.group && <span style={{ fontSize: 10, color: "#64748b", flexShrink: 0 }}>{it.group}</span>}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlGovee, favorites, onFavoritesChange, nicknames, segmentInfo, roomLayouts, fixtures, onApply, minSatEnabled, minSatPct, segmentFillModes, savedColorState }) {
   const isMobile = useIsMobile();
   const [mode, setMode] = useState("palette"); // "palette" | "gradient" | "tonal" | "custom" | "beacon"
@@ -382,6 +469,13 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
   // persisted in room_color_state so a re-roll syncs across sessions.
   const [shuffleSeed, setShuffleSeed] = useState(1);
 
+  // Preset-mode selections (Teams / NCAA / Flags). Stored by name so they
+  // survive data edits; default to the first entry so switching into the mode
+  // immediately previews something.
+  const [selectedTeam, setSelectedTeam] = useState(PRESET_TEAMS[0]?.name || null);
+  const [selectedNcaa, setSelectedNcaa] = useState(PRESET_NCAA[0]?.name || null);
+  const [selectedFlag, setSelectedFlag] = useState(PRESET_FLAGS[0]?.name || null);
+
   // Restore the last-applied selection for this room (display-only — pre-selects
   // the same mode/palette/brightness a previous LightEmUp session set, so a
   // second device opens onto accurate state). Seeds once per room; never
@@ -403,6 +497,9 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     if (s.address_segments) setAddressSegments(s.address_segments);
     if (s.target_vendor) setTargetVendor(s.target_vendor);
     if (typeof s.shuffle_seed === "number") setShuffleSeed(s.shuffle_seed);
+    if (s.selected_team) setSelectedTeam(s.selected_team);
+    if (s.selected_ncaa) setSelectedNcaa(s.selected_ncaa);
+    if (s.selected_flag) setSelectedFlag(s.selected_flag);
   }, [roomName, savedColorState]);
 
   // Apply progress state
@@ -1049,6 +1146,48 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     return result;
   }, [placedColorLights, customColors, customShadeMode, roomName, shuffleSeed, isLinear]);
 
+  // ─── Preset modes (Teams / NCAA / Flags) ────────────────────────────
+  // Assign an array of exact colors across devices using the same spatial
+  // repeating cycle as Custom mode (A,B,C,A,B,C…, row-staggered so neighbors
+  // differ). Exact colors only — no shades. Shuffle rotates the start color.
+  const cycleAssign = useCallback((colors, seedKey) => {
+    if (placedColorLights.length === 0 || !colors || colors.length === 0) return null;
+    const M = colors.length;
+    const ROW = 1.5;
+    const rowOf = (d) => (isLinear ? 0 : Math.round(d.y / ROW));
+    const ordered = [...placedColorLights].sort((a, b) => {
+      const ra = rowOf(a), rb = rowOf(b);
+      if (ra !== rb) return ra - rb;
+      if (a.x !== b.x) return a.x - b.x;
+      return a.y - b.y;
+    });
+    const offset = Math.floor(seededRng(`${roomName}|${seedKey}|${shuffleSeed}`)() * M);
+    const result = {};
+    let rowKey = null, rowNum = 0, col = 0;
+    ordered.forEach((d) => {
+      const r = rowOf(d);
+      if (rowKey === null) rowKey = r;
+      else if (r !== rowKey) { rowKey = r; rowNum++; col = 0; }
+      const phase = col + rowNum + offset;
+      result[d.key] = { ...colors[((phase % M) + M) % M] };
+      col++;
+    });
+    return result;
+  }, [placedColorLights, roomName, shuffleSeed, isLinear]);
+
+  const computeTeams = useCallback(() => {
+    const t = PRESET_TEAMS.find(x => x.name === selectedTeam);
+    return t ? cycleAssign(presetColors(t.colors), `teams|${selectedTeam}`) : null;
+  }, [cycleAssign, selectedTeam]);
+  const computeNcaa = useCallback(() => {
+    const t = PRESET_NCAA.find(x => x.name === selectedNcaa);
+    return t ? cycleAssign(presetColors(t.colors), `ncaa|${selectedNcaa}`) : null;
+  }, [cycleAssign, selectedNcaa]);
+  const computeFlags = useCallback(() => {
+    const t = PRESET_FLAGS.find(x => x.name === selectedFlag);
+    return t ? cycleAssign(presetColors(t.colors), `flags|${selectedFlag}`) : null;
+  }, [cycleAssign, selectedFlag]);
+
   // ─── White (color-temperature) compute variants ─────────────────────
   // Entries carry { r, g, b, kelvin } — r/g/b is the display approximation
   // (kelvinToRGB), kelvin drives the real CT command on Apply.
@@ -1167,6 +1306,10 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
 
   // ─── Generate preview ───────────────────────────────────────────────
   const computeForMode = () => {
+    // Preset modes are exact-color only — they ignore the Color/White space.
+    if (mode === "teams") return computeTeams();
+    if (mode === "ncaa") return computeNcaa();
+    if (mode === "flags") return computeFlags();
     if (colorSpace === "white") return computeForModeCT();
     if (mode === "gradient") return computeGradient();
     if (mode === "tonal") return computeTonal();
@@ -1178,8 +1321,10 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     // Order matters: clamp saturation first (so per-device overrides
     // start from clean colors), then apply per-device fill mode.
     // White mode skips min-saturation — whites are intentionally low-sat and
-    // clamping would push them back toward vivid color.
-    const sat = colorSpace === "white" ? raw : applyMinSat(raw, minSatEnabled, minSatPct);
+    // clamping would push them back toward vivid color. Preset modes (Teams/
+    // NCAA/Flags) are always color, regardless of the (hidden) color-space.
+    const isPreset = mode === "teams" || mode === "ncaa" || mode === "flags";
+    const sat = (colorSpace === "white" && !isPreset) ? raw : applyMinSat(raw, minSatEnabled, minSatPct);
     return applySegmentFillModes(sat, segmentFillModes);
   };
   const generatePreview = () => {
@@ -1190,7 +1335,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
   useEffect(() => {
     if (!hasLayout) return;
     setPreview(pipeline(computeForMode()));
-  }, [mode, colorSpace, ctPreset, maxKelvin, baseColor, direction, paletteColors, customColors, customShadeMode, hasLayout, layout, fixtures, beaconSourceKey, brightness, addressSegments, minSatEnabled, minSatPct, segmentFillModes, shuffleSeed, targetVendor]);
+  }, [mode, colorSpace, ctPreset, maxKelvin, baseColor, direction, paletteColors, customColors, customShadeMode, hasLayout, layout, fixtures, beaconSourceKey, brightness, addressSegments, minSatEnabled, minSatPct, segmentFillModes, shuffleSeed, targetVendor, selectedTeam, selectedNcaa, selectedFlag]);
 
   // Human-readable name for a preview key ("hue:5", "govee:ip", "govee:ip:seg3")
   // used in the live apply-progress label.
@@ -1469,6 +1614,9 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
       address_segments: addressSegments,
       shuffle_seed: shuffleSeed,
       target_vendor: targetVendor,
+      selected_team: selectedTeam,
+      selected_ncaa: selectedNcaa,
+      selected_flag: selectedFlag,
     };
     if (onApply) onApply(preview, addressSegments, colorStateSnapshot);
   };
@@ -1723,6 +1871,8 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
   })();
 
   const isLinear = layout?.mode === "linear";
+  // Preset modes (Teams/NCAA/Flags) are exact-color only — no Color/White space.
+  const isPresetMode = mode === "teams" || mode === "ncaa" || mode === "flags";
   const availableDirections = isLinear
     ? ["left-right", "right-left", "center-out"]
     : ["left-right", "right-left", "top-bottom", "bottom-top", "center-out"];
@@ -1770,10 +1920,21 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
           <button onClick={() => setMode("beacon")} style={btnStyle(mode === "beacon")}>
             Beacon
           </button>
+          <button onClick={() => setMode("teams")} style={btnStyle(mode === "teams")}>
+            Teams
+          </button>
+          <button onClick={() => setMode("ncaa")} style={btnStyle(mode === "ncaa")}>
+            NCAA
+          </button>
+          <button onClick={() => setMode("flags")} style={btnStyle(mode === "flags")}>
+            Flags
+          </button>
         </div>
       </div>
 
-      {/* Color vs White (color temperature) toggle */}
+      {/* Color vs White (color temperature) toggle — hidden for preset modes,
+          which are exact-color only. */}
+      {!isPresetMode && (
       <div style={{
         display: "flex", gap: 4, marginBottom: 14,
         background: "#0f172a", borderRadius: 8, padding: 3,
@@ -1794,6 +1955,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
           >{opt.label}</button>
         ))}
       </div>
+      )}
 
       {/* Target vendor filter — only when the room has both Hue and Govee
           color devices, otherwise the choice is meaningless. Lets a scene
@@ -2345,6 +2507,36 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
                   <ColorTempSlider kelvin={maxKelvin} onChange={setMaxKelvin} />
                 </div>
               )}
+            </div>
+          )}
+
+          {/* ─── Teams mode ──────────────────────────────────────── */}
+          {mode === "teams" && (
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 10 }}>
+                Pick a pro team (NFL · NBA · MLB · NHL); its colors fill the room in a repeating pattern. Shuffle rotates the pattern.
+              </div>
+              <PresetPicker items={PRESET_TEAMS} value={selectedTeam} onChange={setSelectedTeam} placeholder="Search teams…" isMobile={isMobile} />
+            </div>
+          )}
+
+          {/* ─── NCAA mode ───────────────────────────────────────── */}
+          {mode === "ncaa" && (
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 10 }}>
+                Pick a Power 5 program (SEC · Big Ten · Big 12 · ACC · Pac-12); its colors fill the room in a repeating pattern.
+              </div>
+              <PresetPicker items={PRESET_NCAA} value={selectedNcaa} onChange={setSelectedNcaa} placeholder="Search schools…" isMobile={isMobile} />
+            </div>
+          )}
+
+          {/* ─── Flags mode ──────────────────────────────────────── */}
+          {mode === "flags" && (
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 10 }}>
+                Pick a country; its flag colors fill the room in a repeating pattern (black is skipped).
+              </div>
+              <PresetPicker items={PRESET_FLAGS} value={selectedFlag} onChange={setSelectedFlag} placeholder="Search countries…" isMobile={isMobile} />
             </div>
           )}
 

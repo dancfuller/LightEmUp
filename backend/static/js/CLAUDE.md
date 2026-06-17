@@ -8,8 +8,8 @@ rules that apply to every UI change. **Keep this file current when behavior chan
 
 ## Load order (from index.html)
 utils → audio → components-shared → light-card → lightning-panel → room-map →
-color-mode → segment-reset-debug → room-section → room-assignment → setup-wizard →
-server-logs → ct-calibration → app
+palette-data → color-mode → segment-reset-debug → room-section → room-assignment →
+setup-wizard → server-logs → ct-calibration → app
 
 A new file must be added to index.html in the correct slot (after its dependencies).
 
@@ -34,6 +34,13 @@ Assigns colors/temperatures across a room's devices and applies them.
 - **Color vs White space:** `colorSpace` is `"color"` or `"white"`. White mode emits
   entries with a `kelvin` field; whole-device/Hue apply sends real CT, segments send
   the K→RGB approximation (calibrated server-side via `ct_rgb`).
+- **Teams / NCAA / Flags modes** are preset-color modes backed by `palette-data.js`
+  (`PRESET_TEAMS` NFL/NBA/MLB/NHL, `PRESET_NCAA` Power 5, `PRESET_FLAGS` ~195
+  countries). A searchable `PresetPicker` selects one entity by name; its exact hex
+  colors (near-black filtered via `isNearBlack`, no shades) are assigned with the
+  shared `cycleAssign` — the same positional cycle as Custom mode. These modes are
+  color-only: they ignore the Color/White space (the toggle is hidden via
+  `isPresetMode`). Selection persists as `selected_team`/`selected_ncaa`/`selected_flag`.
 - **Custom mode assignment is a positional cycle, not an adjacency graph.**
   `computeCustom` sorts devices spatially (linear → left-to-right; floor plan →
   row-major) and colors them `A,B,C,A,B,C…` along that order, shifting each row by one
