@@ -52,7 +52,7 @@ function HueBar({ currentColor, onChange, height = 22 }) {
       onMouseDown={onDown}
       onTouchStart={onDown}
       style={{
-        flex: 1, height, borderRadius: height / 2, position: "relative",
+        width: "100%", height, flexShrink: 0, borderRadius: height / 2, position: "relative",
         cursor: "pointer", userSelect: "none",
         background: "linear-gradient(to right, "
           + "hsl(0,100%,50%), hsl(30,100%,50%), hsl(60,100%,50%), "
