@@ -343,6 +343,32 @@ function applySegmentFillModes(preview, fillModes) {
   return out;
 }
 
+// Shades/exact toggle, shared by Custom and the preset modes. "shades" expands
+// each base color into a tonal range; "exact" uses the colors as-is.
+function ShadeToggle({ value, onChange }) {
+  return (
+    <div style={{
+      display: "flex", gap: 4, marginBottom: 12,
+      background: "#0f172a", borderRadius: 8, padding: 3, border: "1px solid #1e293b",
+    }}>
+      {[
+        { key: "shades", label: "Create shades" },
+        { key: "exact", label: "Use exact colors" },
+      ].map(opt => (
+        <button key={opt.key}
+          onClick={() => onChange(opt.key)}
+          style={{
+            flex: 1, padding: "6px 10px", borderRadius: 6, border: "none",
+            background: value === opt.key ? "#6366f1" : "transparent",
+            color: value === opt.key ? "#fff" : "#94a3b8",
+            fontSize: 11, fontWeight: 600, cursor: "pointer",
+          }}
+        >{opt.label}</button>
+      ))}
+    </div>
+  );
+}
+
 // Searchable single-select picker for the preset modes (Teams / NCAA / Flags).
 // Filters items by name, previews the selected item's swatches, and lists each
 // option with its color chips. Controlled: parent owns `value` (an item name).
@@ -1150,9 +1176,16 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
   // Assign an array of exact colors across devices using the same spatial
   // repeating cycle as Custom mode (A,B,C,A,B,C…, row-staggered so neighbors
   // differ). Exact colors only — no shades. Shuffle rotates the start color.
-  const cycleAssign = useCallback((colors, seedKey) => {
+  const cycleAssign = useCallback((colors, seedKey, shadeMode = "exact") => {
     if (placedColorLights.length === 0 || !colors || colors.length === 0) return null;
     const M = colors.length;
+    const exact = shadeMode !== "shades";
+    const SHADES_PER_SEED = exact ? 1 : 4;
+    // exact → each color is itself; shades → a tonal range per color, advanced
+    // on each wrap of the cycle so repeats aren't identical (as in Custom mode).
+    const shadesBySeed = colors.map(c =>
+      exact ? [c] : generateTonalShades(c.r, c.g, c.b, SHADES_PER_SEED)
+    );
     const ROW = 1.5;
     const rowOf = (d) => (isLinear ? 0 : Math.round(d.y / ROW));
     const ordered = [...placedColorLights].sort((a, b) => {
@@ -1169,7 +1202,9 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
       if (rowKey === null) rowKey = r;
       else if (r !== rowKey) { rowKey = r; rowNum++; col = 0; }
       const phase = col + rowNum + offset;
-      result[d.key] = { ...colors[((phase % M) + M) % M] };
+      const seedIdx = ((phase % M) + M) % M;
+      const shadeIdx = exact ? 0 : Math.floor(phase / M) % SHADES_PER_SEED;
+      result[d.key] = { ...shadesBySeed[seedIdx][shadeIdx] };
       col++;
     });
     return result;
@@ -1177,16 +1212,16 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
 
   const computeTeams = useCallback(() => {
     const t = PRESET_TEAMS.find(x => x.name === selectedTeam);
-    return t ? cycleAssign(presetColors(t.colors), `teams|${selectedTeam}`) : null;
-  }, [cycleAssign, selectedTeam]);
+    return t ? cycleAssign(presetColors(t.colors), `teams|${selectedTeam}`, customShadeMode) : null;
+  }, [cycleAssign, selectedTeam, customShadeMode]);
   const computeNcaa = useCallback(() => {
     const t = PRESET_NCAA.find(x => x.name === selectedNcaa);
-    return t ? cycleAssign(presetColors(t.colors), `ncaa|${selectedNcaa}`) : null;
-  }, [cycleAssign, selectedNcaa]);
+    return t ? cycleAssign(presetColors(t.colors), `ncaa|${selectedNcaa}`, customShadeMode) : null;
+  }, [cycleAssign, selectedNcaa, customShadeMode]);
   const computeFlags = useCallback(() => {
     const t = PRESET_FLAGS.find(x => x.name === selectedFlag);
-    return t ? cycleAssign(presetColors(t.colors), `flags|${selectedFlag}`) : null;
-  }, [cycleAssign, selectedFlag]);
+    return t ? cycleAssign(presetColors(t.colors), `flags|${selectedFlag}`, customShadeMode) : null;
+  }, [cycleAssign, selectedFlag, customShadeMode]);
 
   // ─── White (color-temperature) compute variants ─────────────────────
   // Entries carry { r, g, b, kelvin } — r/g/b is the display approximation
@@ -2516,6 +2551,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
               <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 10 }}>
                 Pick a pro team (NFL · NBA · MLB · NHL); its colors fill the room in a repeating pattern. Shuffle rotates the pattern.
               </div>
+              <ShadeToggle value={customShadeMode} onChange={setCustomShadeMode} />
               <PresetPicker items={PRESET_TEAMS} value={selectedTeam} onChange={setSelectedTeam} placeholder="Search teams…" isMobile={isMobile} />
             </div>
           )}
@@ -2526,6 +2562,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
               <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 10 }}>
                 Pick a Power 5 program (SEC · Big Ten · Big 12 · ACC · Pac-12); its colors fill the room in a repeating pattern.
               </div>
+              <ShadeToggle value={customShadeMode} onChange={setCustomShadeMode} />
               <PresetPicker items={PRESET_NCAA} value={selectedNcaa} onChange={setSelectedNcaa} placeholder="Search schools…" isMobile={isMobile} />
             </div>
           )}
@@ -2536,6 +2573,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
               <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 10 }}>
                 Pick a country; its flag colors fill the room in a repeating pattern (black is skipped).
               </div>
+              <ShadeToggle value={customShadeMode} onChange={setCustomShadeMode} />
               <PresetPicker items={PRESET_FLAGS} value={selectedFlag} onChange={setSelectedFlag} placeholder="Search countries…" isMobile={isMobile} />
             </div>
           )}
