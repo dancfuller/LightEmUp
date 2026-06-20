@@ -76,6 +76,22 @@ brightness}}` shape, and favorites come from config (`POST /api/favorites` to sa
 no more localStorage). `getInitialColor`/`hueXYToRGB` remain only for the interactive
 color picker; the *displayed current color* now comes from backend `state.color`.
 
+## Settled architecture decisions (do not "fix" these)
+The goal is a thin frontend: the backend owns all derivation, scheduling, and
+state-of-record. Two deliberate exceptions stay client-side — they are display
+conveniences, not logic, and the backend is still the single source of truth:
+
+- **KEEP optimistic UI.** Control actions (toggle, brightness, color) update local
+  React state immediately and fire the API in the background (fire-and-forget); the UI
+  does not wait for the backend. Any disagreement self-corrects on the next load/SSE
+  refresh. Making the UI wait for backend + SSE confirmation would make every control
+  feel laggy (esp. slow Govee LAN) for no architectural gain. Do not remove this.
+- **No server-side scene preview.** The room color tool computes its preview locally so
+  slider/shuffle/mode edits stay instant. The preview is just a "what will this look
+  like" visualization; the actual apply is already server-side
+  (`POST /api/scenes/room-apply`), so there's nothing to gain by round-tripping the
+  preview. Do not move preview computation to the backend.
+
 ## app.js — orchestration
 State, routing, API calls. `controlHueLight` / `controlGoveeDevice` spread `cmd` into
 the POST body, so passing CT keys (`color_temp` mireds / `color_temp_kelvin`) works
