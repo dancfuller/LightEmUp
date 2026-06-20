@@ -504,6 +504,27 @@ async def discover_govee():
         except Exception:
             dev["state"] = {"on": False, "brightness": 0, "reachable": False}
 
+    # Overlay the last color/temp/on/brightness we set via LightEmUp so the
+    # returned devices are render-ready (Govee LAN devStatus doesn't report color
+    # reliably). The frontend no longer merges this itself — it just paints what
+    # the backend returns.
+    device_state = config.get("device_state", {})
+    for dev in devices:
+        stored = device_state.get(f"govee:{dev.get('ip')}")
+        if not stored:
+            continue
+        st = dev.setdefault("state", {})
+        if stored.get("r") is not None and stored.get("g") is not None and stored.get("b") is not None:
+            st["color"] = {"r": stored["r"], "g": stored["g"], "b": stored["b"]}
+            st["color_temp"] = None
+        elif stored.get("color_temp_kelvin") is not None:
+            st["color_temp"] = stored["color_temp_kelvin"]
+            st["color"] = None
+        if st.get("on") is None and stored.get("on") is not None:
+            st["on"] = stored["on"]
+        if st.get("brightness") is None and stored.get("brightness") is not None:
+            st["brightness"] = stored["brightness"]
+
     # Upsert seen devices into the known set and compute the missing list.
     if "known_devices" not in config:
         config["known_devices"] = {"govee": {}}
@@ -588,6 +609,32 @@ async def discover_all():
 
 # ─── Hue Control Endpoints ──────────────────────────────────────────────────
 
+def _hue_xy_to_rgb(xy, bri):
+    """Hue CIE xy + brightness → display RGB (wide-gamut D65). Mirror of the old
+    frontend hueXYToRGB so the backend serves render-ready colors."""
+    if not xy or len(xy) < 2:
+        return None
+    x, y = xy[0], xy[1]
+    if not y:
+        return None
+    z = 1.0 - x - y
+    Y = (bri or 254) / 254
+    X = (Y / y) * x
+    Z = (Y / y) * z
+    r = X * 1.656492 - Y * 0.354851 - Z * 0.255038
+    g = -X * 0.707196 + Y * 1.655397 + Z * 0.036152
+    b = X * 0.051713 - Y * 0.121364 + Z * 1.011530
+
+    def gamma(v):
+        return 12.92 * v if v <= 0.0031308 else 1.055 * (v ** (1.0 / 2.4)) - 0.055
+
+    return {
+        "r": max(0, min(255, round(gamma(r) * 255))),
+        "g": max(0, min(255, round(gamma(g) * 255))),
+        "b": max(0, min(255, round(gamma(b) * 255))),
+    }
+
+
 @app.get("/api/hue/lights")
 async def hue_lights():
     ip = config.get("hue_bridge_ip")
@@ -595,6 +642,15 @@ async def hue_lights():
     if not ip or not username:
         raise HTTPException(400, "Hue Bridge not paired")
     lights = await get_hue_lights(ip, username)
+    # Attach a render-ready RGB derived from the reported xy so the frontend
+    # paints the current color from backend data instead of converting itself.
+    for light in lights:
+        st = light.get("state") or {}
+        if st.get("color") is None and st.get("xy"):
+            rgb = _hue_xy_to_rgb(st.get("xy"), st.get("brightness"))
+            if rgb:
+                st["color"] = rgb
+                light["state"] = st
     return {"lights": lights}
 
 
@@ -1423,9 +1479,19 @@ async def control_govee_segments_brightness(req: GoveeSegmentsBrightnessRequest)
 
 @app.get("/api/govee/segment-state")
 async def get_segment_state():
-    """Return the last-known per-segment colors + brightness for every
-    Govee device the server has set segments on."""
-    return {"state": segment_state.snapshot()}
+    """Return the last-known per-segment colors + brightness for every Govee
+    device the server has set segments on, in the render-ready shape the UI uses:
+    { ip: { colors: { idx: {r,g,b} }, brightness } } (devices with no colors are
+    omitted). The frontend no longer reshapes this itself."""
+    out = {}
+    for ip, entry in segment_state.snapshot().items():
+        colors = {}
+        for k, v in (entry.get("colors") or {}).items():
+            if isinstance(v, (list, tuple)) and len(v) == 3:
+                colors[int(k)] = {"r": v[0], "g": v[1], "b": v[2]}
+        if colors:
+            out[ip] = {"colors": colors, "brightness": entry.get("brightness", 100)}
+    return {"state": out}
 
 
 # ─── Room color-tool state (display-only) ──────────────────────────────────────
@@ -1445,6 +1511,9 @@ class RoomColorStateRequest(BaseModel):
     address_segments: Optional[str] = None
     shuffle_seed: Optional[int] = None
     target_vendor: Optional[str] = None
+    selected_team: Optional[str] = None
+    selected_ncaa: Optional[str] = None
+    selected_flag: Optional[str] = None
 
 
 @app.post("/api/room-color-state")
@@ -1495,6 +1564,33 @@ async def set_ct_rgb_calibration(req: CTCalibrationRequest):
 
 # ─── Config Endpoint ────────────────────────────────────────────────────────
 
+# Default favorite colors, served when the user hasn't saved their own. These
+# used to live in the browser's localStorage (per-device, didn't sync); they now
+# live in config so every session/device sees the same set.
+DEFAULT_FAVORITES = [
+    {"r": 255, "g": 180, "b": 100, "label": "Warm"},
+    {"r": 180, "g": 210, "b": 255, "label": "Cool"},
+    {"r": 255, "g": 245, "b": 228, "label": "Daylight"},
+    {"r": 255, "g": 40, "b": 40, "label": "Red"},
+    {"r": 40, "g": 80, "b": 255, "label": "Blue"},
+    {"r": 40, "g": 220, "b": 80, "label": "Green"},
+    {"r": 160, "g": 50, "b": 255, "label": "Purple"},
+    {"r": 255, "g": 120, "b": 20, "label": "Orange"},
+]
+
+
+class FavoritesRequest(BaseModel):
+    favorites: list
+
+
+@app.post("/api/favorites")
+async def set_favorites(req: FavoritesRequest):
+    config["favorites"] = req.favorites
+    save_config(config)
+    publish_event("config")
+    return {"success": True}
+
+
 @app.get("/api/config")
 async def get_config():
     return {
@@ -1509,6 +1605,10 @@ async def get_config():
         "room_color_state": config.get("room_color_state", {}),
         "ct_correction": config.get("ct_correction", {}),
         "ct_rgb": config.get("ct_rgb", {}),
+        "device_modes": config.get("device_modes", {}),
+        "segment_fill_modes": config.get("segment_fill_modes", {}),
+        "ui_prefs": config.get("ui_prefs", {}),
+        "favorites": config.get("favorites") or DEFAULT_FAVORITES,
     }
 
 

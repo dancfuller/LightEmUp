@@ -150,6 +150,7 @@ All endpoints are under `/api/`. Key groups:
 - `/api/rooms`, `/api/rooms/control` — room CRUD and bulk control
 - `/api/room-layouts` — floor plan / line layout CRUD (auto-saved from frontend)
 - `/api/nicknames` — device nickname CRUD
+- `/api/favorites` — favorite colors (stored in config, synced across sessions)
 - `/api/scenes/lightning/*` — lightning storm scene start/stop/settings
 - `/api/scenes/room-apply` — backend-driven room color-scene apply (staggered in a
   background task so the browser can close); `/cancel` to stop. Progress via SSE.

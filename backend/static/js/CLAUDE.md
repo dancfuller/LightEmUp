@@ -68,6 +68,14 @@ Drives the device by **RGB** while tuning (so it warms past Govee's blue CT floo
 with a warmer slider reaching down to 1200K and live swatches. Saves `{in, out}` to
 `POST /api/calibration/ct-rgb`. Props: `ctRgb`, `onSaved`.
 
+## State comes from the backend (don't re-derive in the browser)
+The frontend paints what the backend returns; it does not merge or reshape device
+state (v2.14.0). Govee devices arrive with color already overlaid, Hue lights carry
+`state.color` (RGB from xy), segment state arrives in `{ip:{colors:{idx:{r,g,b}},
+brightness}}` shape, and favorites come from config (`POST /api/favorites` to save —
+no more localStorage). `getInitialColor`/`hueXYToRGB` remain only for the interactive
+color picker; the *displayed current color* now comes from backend `state.color`.
+
 ## app.js — orchestration
 State, routing, API calls. `controlHueLight` / `controlGoveeDevice` spread `cmd` into
 the POST body, so passing CT keys (`color_temp` mireds / `color_temp_kelvin`) works

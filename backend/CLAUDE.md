@@ -46,6 +46,23 @@ Two mechanisms; `ct_rgb` takes precedence over legacy `ct_correction`:
   first; if present, send RGB; else fall back to corrected native CT. Calibration is
   saved via `POST /api/calibration/ct-rgb`; surfaced in `/api/config` as `ct_rgb`.
 
+## Render-ready state (the frontend is "dumb")
+The backend returns data the UI can paint directly — derivation/merging lives here,
+not in the browser (v2.14.0):
+- `GET /api/discover/govee` overlays the last color/temp/on/brightness set via
+  LightEmUp (`device_state`) onto each scanned device, so devices come back
+  render-ready (LAN devStatus doesn't report color reliably).
+- `GET /api/hue/lights` attaches `state.color` (RGB from the reported xy via
+  `_hue_xy_to_rgb`) so the frontend paints the current color from backend data.
+- `GET /api/govee/segment-state` returns the UI shape directly:
+  `{ ip: { colors: { idx: {r,g,b} }, brightness } }` (empties omitted).
+- Favorite colors live in config (`GET /api/config` → `favorites`, default
+  `DEFAULT_FAVORITES`; `POST /api/favorites` to save) instead of browser
+  localStorage, so they sync across sessions/devices.
+- `GET /api/config` also returns `device_modes`, `segment_fill_modes`, `ui_prefs`
+  (the frontend reads them on load). `room_color_state` persists the preset-mode
+  selections too (`selected_team/ncaa/flag`).
+
 ## Backend-driven room scene apply
 - `POST /api/scenes/room-apply` accepts a fully-resolved scene (base seeds, hue,
   govee_whole, razer, cloud segment groups) and runs the **whole staggered apply

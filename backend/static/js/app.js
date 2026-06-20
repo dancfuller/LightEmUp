@@ -1,26 +1,5 @@
 // ─── Main App ───────────────────────────────────────────────────────────────
 
-// Convert server segment state shape
-//   { ip: { colors: { "0": [r,g,b], ... }, brightness: N } }
-// to the frontend's
-//   { ip: { colors: { 0: {r,g,b}, ... }, brightness: N } }.
-function normalizeSegmentState(raw) {
-  const out = {};
-  Object.entries(raw || {}).forEach(([ip, entry]) => {
-    const segs = entry?.colors || {};
-    const m = {};
-    Object.entries(segs).forEach(([k, v]) => {
-      if (Array.isArray(v) && v.length === 3) {
-        m[parseInt(k)] = { r: v[0], g: v[1], b: v[2] };
-      }
-    });
-    if (Object.keys(m).length > 0) {
-      out[ip] = { colors: m, brightness: entry?.brightness ?? 100 };
-    }
-  });
-  return out;
-}
-
 function App() {
   const isMobile = useIsMobile();
   const [config, setConfig] = useState(null);
@@ -39,7 +18,8 @@ function App() {
   const [showHueSetup, setShowHueSetup] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
   const [versionInfo, setVersionInfo] = useState(null);
-  const [favoriteColors, setFavoriteColors] = useState(() => loadFavoriteColors());
+  // Favorites live in backend config (loaded in loadAll); [] until then.
+  const [favoriteColors, setFavoriteColors] = useState([]);
   const [nicknames, setNicknames] = useState({});
   const [refreshing, setRefreshing] = useState(false);
   const [lightningActiveRooms, setLightningActiveRooms] = useState([]);
@@ -75,8 +55,9 @@ function App() {
   const [minSatPct, setMinSatPct] = useState(35);
 
   const updateFavorites = (newFavs) => {
-    setFavoriteColors(newFavs);
-    saveFavoriteColors(newFavs);
+    setFavoriteColors(newFavs);  // optimistic; backend is the source of truth
+    api("/favorites", { method: "POST", body: JSON.stringify({ favorites: newFavs }) })
+      .catch(e => console.warn("Failed to save favorites:", e));
   };
 
   const updateNickname = async (deviceKey, nickname) => {
@@ -104,6 +85,7 @@ function App() {
       setCtRgb(cfg.ct_rgb || {});
       setDeviceModes(cfg.device_modes || {});
       setSegmentFillModes(cfg.segment_fill_modes || {});
+      if (Array.isArray(cfg.favorites)) setFavoriteColors(cfg.favorites);
       setPickerStyle(cfg.ui_prefs?.color_picker_style === "wheel" ? "wheel" : "huebar");
       if (cfg.ui_prefs?.min_saturation_enabled !== undefined) {
         setMinSatEnabled(!!cfg.ui_prefs.min_saturation_enabled);
@@ -127,30 +109,15 @@ function App() {
       }
 
       const results = await Promise.all(promises);
-      // Govee LAN devStatus reports on/brightness but not color reliably, so
-      // overlay the last color/temp we set via LightEmUp (stored server-side)
-      // onto each device. Display-only — opening the app issues no commands.
-      const deviceState = cfg.device_state || {};
-      const mergedGovee = (results[0].devices || []).map(d => {
-        const stored = deviceState[`govee:${d.ip}`];
-        if (!stored) return d;
-        const state = { ...d.state };
-        if (stored.r != null && stored.g != null && stored.b != null) {
-          state.color = { r: stored.r, g: stored.g, b: stored.b };
-          state.color_temp = null;
-        } else if (stored.color_temp_kelvin != null) {
-          state.color_temp = stored.color_temp_kelvin;
-          state.color = null;
-        }
-        if (state.on == null && stored.on != null) state.on = stored.on;
-        if (state.brightness == null && stored.brightness != null) state.brightness = stored.brightness;
-        return { ...d, state };
-      });
-      setGoveeDevices(mergedGovee);
+      // Devices arrive render-ready: the backend overlays the last color/temp it
+      // set onto each Govee device (LAN devStatus doesn't report color reliably)
+      // and returns segment state already in the UI's shape. The frontend just
+      // paints what it's given — no client-side merging or reshaping.
+      setGoveeDevices(results[0].devices || []);
       setMissingGovee(results[0].missing || []);
       setLightningActiveRooms(results[1].active || []);
       setSegmentInfo(results[2]);
-      setSegmentState(normalizeSegmentState(results[3]?.state || {}));
+      setSegmentState(results[3]?.state || {});
 
       if (cfg.hue_paired) {
         setHueLights(results[4]?.lights || []);
@@ -292,7 +259,7 @@ function App() {
   const refreshSegmentState = useCallback(async () => {
     try {
       const data = await api("/govee/segment-state");
-      setSegmentState(normalizeSegmentState(data?.state || {}));
+      setSegmentState(data?.state || {});
     } catch (e) {
       console.warn("Failed to refresh segment state:", e);
     }

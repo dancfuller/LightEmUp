@@ -345,27 +345,6 @@ function spreadKelvin(minK, maxK, n) {
   return out;
 }
 
-// ─── Favorite Colors ────────────────────────────────────────────────────────
-
-const STORAGE_KEY = "lightemup_fav_colors";
-
-function loadFavoriteColors() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
-  } catch {}
-  return [
-    { r: 255, g: 180, b: 100, label: "Warm" },
-    { r: 180, g: 210, b: 255, label: "Cool" },
-    { r: 255, g: 245, b: 228, label: "Daylight" },
-    { r: 255, g: 40, b: 40, label: "Red" },
-    { r: 40, g: 80, b: 255, label: "Blue" },
-    { r: 40, g: 220, b: 80, label: "Green" },
-    { r: 160, g: 50, b: 255, label: "Purple" },
-    { r: 255, g: 120, b: 20, label: "Orange" },
-  ];
-}
-
-function saveFavoriteColors(favs) {
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(favs)); } catch {}
-}
+// Favorite colors now live in backend config (GET /api/config → favorites,
+// POST /api/favorites), loaded/saved by app.js — not in localStorage — so they
+// sync across every session and device.
