@@ -52,16 +52,16 @@ Assigns colors/temperatures across a room's devices and applies them.
   saturation-clamp `kelvin` entries.
 - **Target vendor:** `targetVendor` (`"all"`/`"hue"`/`"govee"`) filters which devices
   apply (toggle only shown when both vendors are present). Persisted as `target_vendor`.
-- **Apply pipeline (two phases):**
-  1. *Fast base seed* — one whole-device LAN command per device, set to one of its own
-     scene colors (the middle segment), **not** white. The strip looks right
-     immediately and never flashes blue-white during the slow part (v2.9.7).
-  2. *Batched segment apply* — group each device's segments by color, send one
-     `POST /api/govee/segments-multi` call per distinct color, staggered ~1.8s.
-     Per-segment brightness is folded into the color (no separate brightness calls).
-- **Cancelable + live label:** `applyLabel` shows "Updating <name> · N panels/segments"
-  — `panel` for hexa `H6061`, `segment` otherwise (see `nameForKey`). The Cancel button
-  stops remaining staggered sends (`applyCancelRef`, `clearApplyTimers`).
+- **Apply is backend-driven (v2.13.0).** `applyColors` resolves the preview into a
+  plan (base seeds, hue, govee_whole, razer, cloud segment groups batched by color)
+  and sends it in **one** `POST /api/scenes/room-apply`. The backend owns all the
+  timing/staggering in a background task, so the browser can be closed right after
+  Apply. The frontend does NOT schedule the sends anymore.
+- **Progress + cancel over SSE:** the backend emits `scene_apply` events; `app.js`
+  re-broadcasts them as a `window` `"lightemup-scene-apply"` CustomEvent, and a
+  ColorMode effect (filtered by `roomName`) drives `applying`/`applyPhase`/`applyDone`/
+  `applyTotal`/`applyLabel`/`applyEndAt`. So any open session shows live progress, not
+  just the one that pressed Apply. Cancel → `POST /api/scenes/room-apply/cancel`.
 
 ## ct-calibration.js — RGB-space white calibration UI
 Drives the device by **RGB** while tuning (so it warms past Govee's blue CT floor),

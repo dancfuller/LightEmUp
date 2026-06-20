@@ -9,6 +9,7 @@ import math
 import os
 import sys
 import subprocess
+import time
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 from contextlib import asynccontextmanager
@@ -279,11 +280,18 @@ _event_subscribers: "list[asyncio.Queue]" = []
 # Per-request client id (from the X-Client-Id header), so an event carries the
 # id of the session that caused it and that session can ignore its own echo.
 _current_client_id: ContextVar[str] = ContextVar("client_id", default="")
+# Set inside a background scene-apply task to suppress the per-call device
+# events it would otherwise emit on every step (one refresh is sent at the end).
+# scene_apply progress events are exempt by type. Per-task ContextVar, so it
+# never affects normal concurrent requests.
+_suppress_publish: ContextVar[bool] = ContextVar("suppress_publish", default=False)
 
 
 def publish_event(event_type: str, **fields):
     """Broadcast a change signal to all connected sessions. Best-effort:
     a full subscriber queue is skipped rather than blocking the request."""
+    if _suppress_publish.get() and event_type != "scene_apply":
+        return
     evt = {"type": event_type, "source": _current_client_id.get(), **fields}
     for q in list(_event_subscribers):
         try:
@@ -1126,6 +1134,243 @@ async def control_govee_segments_bulk(req: GoveeSegmentsBulkRequest):
     segment_state.set_bulk(req.ip, colors_tuples, brightness)
     persist_segments()
     return {"success": True}
+
+
+# ─── Backend-driven room scene apply ────────────────────────────────────────
+# The frontend posts a fully-resolved scene once; the backend owns all the
+# timing (fast whole-device base color, a short hold, then staggered Govee
+# whole-device LAN commands and cloud_v2 segment-group calls under the V2 rate
+# limit) in a background task. So the user can close the browser right after
+# pressing Apply — the lights keep filling in server-side. Progress and
+# cancellation flow over the SSE bus (type "scene_apply"); the per-call device
+# events are suppressed during the run so other sessions don't refetch on every
+# step — one "config" refresh is emitted at the end.
+
+SCENE_SEG_STAGGER_S = 1.8     # between cloud_v2 segment-group calls (V2 rate limit)
+SCENE_GOVEE_STAGGER_S = 0.15  # between Govee whole-device LAN commands
+SCENE_HOLD_S = 2.0            # let the base color settle before segments fill in
+
+
+class SceneHueTarget(BaseModel):
+    light_id: str
+    on: bool = True
+    r: Optional[int] = None
+    g: Optional[int] = None
+    b: Optional[int] = None
+    color_temp: Optional[int] = None   # mireds
+    brightness: Optional[int] = None   # 1..254
+    label: Optional[str] = None
+
+
+class SceneGoveeWhole(BaseModel):
+    ip: str
+    on: bool = True
+    r: Optional[int] = None
+    g: Optional[int] = None
+    b: Optional[int] = None
+    color_temp_kelvin: Optional[int] = None
+    brightness: Optional[int] = None   # 0..100
+    label: Optional[str] = None
+
+
+class SceneBaseSeed(BaseModel):
+    ip: str
+    r: Optional[int] = None
+    g: Optional[int] = None
+    b: Optional[int] = None
+    color_temp_kelvin: Optional[int] = None
+    brightness: Optional[int] = None
+
+
+class SceneRazer(BaseModel):
+    ip: str
+    sku: str
+    colors: list[list[int]]            # full-brightness RGB per segment
+    brightness: Optional[int] = 100
+    label: Optional[str] = None
+
+
+class SceneCloudGroup(BaseModel):
+    segments: list[int]
+    r: Optional[int] = None
+    g: Optional[int] = None
+    b: Optional[int] = None
+    color_temp_kelvin: Optional[int] = None
+
+
+class SceneCloudDevice(BaseModel):
+    ip: str
+    sku: str
+    device_mac: str
+    unit: str = "segment"              # "segment" or "panel", for the label
+    label: Optional[str] = None
+    groups: list[SceneCloudGroup] = []
+
+
+class SceneApplyRequest(BaseModel):
+    room: str
+    brightness: int = 100
+    base_seeds: list[SceneBaseSeed] = []
+    hue: list[SceneHueTarget] = []
+    govee_whole: list[SceneGoveeWhole] = []
+    razer: list[SceneRazer] = []
+    cloud: list[SceneCloudDevice] = []
+
+
+class SceneCancelRequest(BaseModel):
+    room: str
+
+
+# room name → running apply task. One scene per room; a new apply cancels the
+# previous so two rapid Applies don't fight over the same lights.
+_scene_tasks: "dict[str, asyncio.Task]" = {}
+
+
+def _scene_emit(room: str, **fields):
+    # scene_apply events bypass the per-run publish suppression (by type).
+    publish_event("scene_apply", room=room, **fields)
+
+
+async def _run_scene_apply(req: SceneApplyRequest):
+    room = req.room
+    # Suppress the noisy per-call device events for this task's context; we emit
+    # one "config" refresh at the end instead.
+    _suppress_publish.set(True)
+
+    has_cloud = any(d.groups for d in req.cloud)
+    cloud_group_count = sum(len(d.groups) for d in req.cloud)
+    apply_total = len(req.hue) + len(req.govee_whole) + len(req.razer) + cloud_group_count
+
+    # Wall-clock estimate so the browser can show a countdown.
+    cloud_time = (max(0, cloud_group_count - 1) * SCENE_SEG_STAGGER_S + 0.1) if cloud_group_count else 0
+    govee_time = (max(0, len(req.govee_whole) - 1) * SCENE_GOVEE_STAGGER_S + 0.2) if req.govee_whole else 0
+    apply_time = max(cloud_time, govee_time, 0.05 if req.hue else 0)
+    base_time = 0.6 if req.base_seeds else 0.0
+    hold = SCENE_HOLD_S if has_cloud else 0.0
+    end_at_ms = int((time.time() + base_time + hold + apply_time) * 1000)
+
+    done = 0
+    prog_lock = asyncio.Lock()
+
+    async def tick(phase: str, total: int, label=None):
+        nonlocal done
+        async with prog_lock:
+            done += 1
+            _scene_emit(room, phase=phase, total=total, done=done, label=label, active=True)
+
+    try:
+        # ── Phase 1: fast whole-device base color (parallel LAN) ──
+        if req.base_seeds:
+            done = 0
+            _scene_emit(room, phase="resetting", total=len(req.base_seeds), done=0,
+                        label="Setting base color…", active=True, end_at=end_at_ms)
+
+            async def seed(s: SceneBaseSeed):
+                try:
+                    await control_govee(GoveeCommandRequest(
+                        ip=s.ip, r=s.r, g=s.g, b=s.b,
+                        color_temp_kelvin=s.color_temp_kelvin, brightness=s.brightness))
+                except Exception as e:
+                    log.warning("scene base seed failed %s: %s", s.ip, e)
+                await tick("resetting", len(req.base_seeds), "Setting base color…")
+
+            await asyncio.gather(*(seed(s) for s in req.base_seeds))
+            if has_cloud:
+                await asyncio.sleep(hold)
+
+        # ── Phase 2: hue + govee whole + razer + cloud segments ──
+        done = 0
+        _scene_emit(room, phase="applying", total=apply_total, done=0, active=True, end_at=end_at_ms)
+
+        async def do_hue():
+            for t in req.hue:
+                try:
+                    await control_hue_light(HueLightStateRequest(
+                        light_id=t.light_id, on=t.on, r=t.r, g=t.g, b=t.b,
+                        color_temp=t.color_temp, brightness=t.brightness))
+                except Exception as e:
+                    log.warning("scene hue failed %s: %s", t.light_id, e)
+                await tick("applying", apply_total, t.label)
+
+        async def do_govee_whole():
+            for i, t in enumerate(req.govee_whole):
+                if i:
+                    await asyncio.sleep(SCENE_GOVEE_STAGGER_S)
+                try:
+                    await control_govee(GoveeCommandRequest(
+                        ip=t.ip, on=t.on, r=t.r, g=t.g, b=t.b,
+                        color_temp_kelvin=t.color_temp_kelvin, brightness=t.brightness))
+                except Exception as e:
+                    log.warning("scene govee whole failed %s: %s", t.ip, e)
+                await tick("applying", apply_total, t.label)
+
+        async def do_razer():
+            for t in req.razer:
+                try:
+                    await control_govee_segments_bulk(GoveeSegmentsBulkRequest(
+                        ip=t.ip, sku=t.sku, colors=t.colors, brightness=t.brightness))
+                except Exception as e:
+                    log.warning("scene razer failed %s: %s", t.ip, e)
+                await tick("applying", apply_total, t.label)
+
+        async def do_cloud():
+            # Flatten groups across devices: the V2 rate limit is per-account, so
+            # space every group call SCENE_SEG_STAGGER_S apart globally.
+            first = True
+            for d in req.cloud:
+                for g in d.groups:
+                    if not first:
+                        await asyncio.sleep(SCENE_SEG_STAGGER_S)
+                    first = False
+                    n = len(g.segments)
+                    unit = d.unit or "segment"
+                    label = f"{d.label or d.ip} · {n} {unit}{'' if n == 1 else 's'}"
+                    try:
+                        await control_govee_segments_multi(GoveeSegmentsMultiRequest(
+                            ip=d.ip, sku=d.sku, device_mac=d.device_mac,
+                            segments=g.segments, r=g.r, g=g.g, b=g.b,
+                            color_temp_kelvin=g.color_temp_kelvin))
+                    except Exception as e:
+                        log.warning("scene cloud failed %s: %s", d.ip, e)
+                    await tick("applying", apply_total, label)
+
+        await asyncio.gather(do_hue(), do_govee_whole(), do_razer(), do_cloud())
+
+        _scene_emit(room, phase="done", total=apply_total, done=apply_total, label="", active=False)
+    except asyncio.CancelledError:
+        _scene_emit(room, phase="canceled", active=False, label="")
+        raise
+    finally:
+        # Re-enable events and emit one refresh so all sessions resync once.
+        _suppress_publish.set(False)
+        publish_event("config")
+        _scene_tasks.pop(room, None)
+
+
+@app.post("/api/scenes/room-apply")
+async def scene_room_apply(req: SceneApplyRequest):
+    """Apply a fully-resolved room scene server-side. Returns immediately; the
+    lights fill in via a background task, so the browser can be closed right
+    after pressing Apply."""
+    existing = _scene_tasks.get(req.room)
+    if existing and not existing.done():
+        existing.cancel()
+        try:
+            await existing
+        except BaseException:
+            pass
+    task = asyncio.create_task(_run_scene_apply(req))
+    _scene_tasks[req.room] = task
+    return {"started": True, "room": req.room}
+
+
+@app.post("/api/scenes/room-apply/cancel")
+async def scene_room_apply_cancel(req: SceneCancelRequest):
+    task = _scene_tasks.get(req.room)
+    if task and not task.done():
+        task.cancel()
+        return {"canceled": True, "room": req.room}
+    return {"canceled": False, "room": req.room}
 
 
 class GoveeSegmentsBrightnessRequest(BaseModel):

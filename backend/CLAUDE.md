@@ -46,6 +46,25 @@ Two mechanisms; `ct_rgb` takes precedence over legacy `ct_correction`:
   first; if present, send RGB; else fall back to corrected native CT. Calibration is
   saved via `POST /api/calibration/ct-rgb`; surfaced in `/api/config` as `ct_rgb`.
 
+## Backend-driven room scene apply
+- `POST /api/scenes/room-apply` accepts a fully-resolved scene (base seeds, hue,
+  govee_whole, razer, cloud segment groups) and runs the **whole staggered apply
+  in a background asyncio task** (`_run_scene_apply`), so the browser can close
+  right after pressing Apply — the lights keep filling in server-side. This is the
+  design goal: the frontend is just an interface that hits this one API.
+- The task reuses the existing endpoint handlers (`control_govee`,
+  `control_hue_light`, `control_govee_segments_multi`, `control_govee_segments_bulk`)
+  so color resolution (ct_rgb), state recording, and persistence stay identical.
+  Timing: base seeds in parallel → `SCENE_HOLD_S` → hue (parallel) + govee whole
+  (`SCENE_GOVEE_STAGGER_S`) + razer (bulk) + cloud groups (`SCENE_SEG_STAGGER_S`,
+  flattened across devices since the V2 rate limit is per-account).
+- Progress + cancellation ride the SSE bus as `scene_apply` events
+  (`phase`/`done`/`total`/`label`/`active`/`end_at`). During a run the task sets the
+  `_suppress_publish` ContextVar so the per-call device events are NOT broadcast
+  (no refetch storm); `scene_apply` events are exempt by type, and one `config`
+  refresh is emitted at the end. One task per room (`_scene_tasks`); a new apply
+  cancels the previous. `POST /api/scenes/room-apply/cancel` cancels by room.
+
 ## SSE live-sync (multi-session)
 - `_event_subscribers` queues; `publish_event(type, **fields)` fans out to all open
   clients via `GET /api/events`. Each event is tagged with the originating client

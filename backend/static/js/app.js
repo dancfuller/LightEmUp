@@ -182,7 +182,14 @@ function App() {
     es.onmessage = (e) => {
       let evt;
       try { evt = JSON.parse(e.data); } catch { return; }
-      if (!evt || evt.source === CLIENT_ID) return;
+      if (!evt) return;
+      // Backend-driven scene apply: re-broadcast progress so the color panel
+      // (any open session) can show it. Not a data change → no refetch here.
+      if (evt.type === "scene_apply") {
+        window.dispatchEvent(new CustomEvent("lightemup-scene-apply", { detail: evt }));
+        return;
+      }
+      if (evt.source === CLIENT_ID) return;
       if (syncTimer.current) clearTimeout(syncTimer.current);
       syncTimer.current = setTimeout(() => { loadAll(); }, 400);
     };

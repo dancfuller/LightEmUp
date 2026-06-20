@@ -538,10 +538,6 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
   // Name of the device/segment currently being updated — surfaced as text
   // because rooms with many segments take 40s+ (1.8s stagger per cloud panel).
   const [applyLabel, setApplyLabel] = useState("");
-  // Cancellation: applyCancelRef short-circuits scheduled sends, applyTimers
-  // holds the pending setTimeout ids so a cancel can clear the whole queue.
-  const applyCancelRef = useRef(false);
-  const applyTimers = useRef([]);
 
   // Tick clock for the countdown while applying
   useEffect(() => {
@@ -551,12 +547,31 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     return () => clearInterval(id);
   }, [applying]);
 
-  // Cancel any in-flight scheduled sends if the panel unmounts mid-apply.
-  useEffect(() => () => {
-    applyCancelRef.current = true;
-    applyTimers.current.forEach(id => clearTimeout(id));
-    applyTimers.current = [];
-  }, []);
+  // Scene apply runs server-side (POST /scenes/room-apply); the backend owns the
+  // timing and emits "scene_apply" SSE progress events. app.js re-broadcasts
+  // those as a window event. Reflect them here so any open session — including
+  // one that didn't start the apply — shows live progress. The apply keeps
+  // running even if this panel unmounts or the browser closes.
+  useEffect(() => {
+    const onProgress = (e) => {
+      const d = e.detail;
+      if (!d || d.room !== roomName) return;
+      if (d.active === false) {
+        setApplying(false);
+        setApplyPhase(null);
+        setApplyLabel("");
+        return;
+      }
+      setApplying(true);
+      if (d.phase) setApplyPhase(d.phase);
+      if (typeof d.total === "number") setApplyTotal(d.total);
+      if (typeof d.done === "number") setApplyDone(d.done);
+      if (d.label !== undefined) setApplyLabel(d.label || "");
+      if (typeof d.end_at === "number") setApplyEndAt(d.end_at);
+    };
+    window.addEventListener("lightemup-scene-apply", onProgress);
+    return () => window.removeEventListener("lightemup-scene-apply", onProgress);
+  }, [roomName]);
 
   const secondsLeft = applying ? Math.max(0, Math.ceil((applyEndAt - tickNow) / 1000)) : 0;
 
@@ -1387,60 +1402,42 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     return `${base} · ${unit} ${parseInt(m[2]) + 1}`;
   };
 
-  const clearApplyTimers = () => {
-    applyTimers.current.forEach(id => clearTimeout(id));
-    applyTimers.current = [];
-  };
-
-  // Schedule a send that no-ops if the apply was canceled before it fired.
-  const scheduleSend = (fn, delay) => {
-    const id = setTimeout(() => {
-      if (applyCancelRef.current) return;
-      fn();
-    }, delay);
-    applyTimers.current.push(id);
-  };
-
+  // Cancel a running server-side apply for this room.
   const cancelApply = () => {
-    applyCancelRef.current = true;
-    clearApplyTimers();
+    api("/scenes/room-apply/cancel", {
+      method: "POST",
+      body: JSON.stringify({ room: roomName }),
+      headers: { "Content-Type": "application/json" },
+    }).catch(e => console.warn("[ColorMode] cancel failed:", e));
     setApplying(false);
     setApplyPhase(null);
     setApplyLabel("");
   };
 
   // ─── Apply colors to lights ─────────────────────────────────────────
+  // The frontend resolves the preview into a plan and POSTs it once; the
+  // BACKEND owns all the timing (base color → hold → staggered Govee whole-
+  // device and cloud_v2 segment batches) in a background task. So you can close
+  // the browser right after pressing Apply and the lights still fill in. Live
+  // progress arrives back over SSE (see the scene_apply effect above).
   const applyColors = () => {
     if (!preview || applying) return;
-    applyCancelRef.current = false;
-    clearApplyTimers();
     const entries = Object.entries(preview);
 
-    // Split entries by destination protocol so we can schedule each correctly:
-    // Hue lights: parallel (REST API, fast)
-    // Govee whole-device: stagger 150ms (LAN UDP, fire-and-forget)
-    // Govee segments — split by parent device's protocol:
-    //   cloud_v2 (H7065/H7066): stagger 1800ms per segment (V2 cloud API,
-    //     burst-bucket limited). V1 LAN whole-device white reset first.
-    //   razer (H6061 hexa): one bulk LAN packet carries all segments at once.
-    //     Skip the V1 reset — V1 commands knock the device out of razer mode,
-    //     which is exactly what we don't want.
-    const SEG_APPLY_STAGGER = 1800;
-    const SEG_WHITE_HOLD = 2000;
-    const V1_RESET_BUDGET = 3500;
+    // Group preview entries by destination so the backend can schedule each:
+    //   Hue (REST, fast), Govee whole-device (LAN), Govee segments split by
+    //   protocol — razer (one bulk LAN packet) vs cloud_v2 (rate-limited V2 API).
     const segmentEntries = entries.filter(([key]) => /^govee:.+:seg\d+$/.test(key));
     const hueEntries = entries.filter(([key]) => key.startsWith("hue:"));
     const goveeEntries = entries.filter(([key]) => /^govee:[^:]+$/.test(key));
 
-    // Group segments by parent device and classify by protocol.
     const segGroups = {};
     segmentEntries.forEach(([key, color]) => {
       const m = key.match(/^(govee:[^:]+):seg(\d+)$/);
       if (!m) return;
       (segGroups[m[1]] ||= []).push({ idx: parseInt(m[2]), color });
     });
-    const razerGroups = [];
-    const cloudGroups = [];
+    const razerGroups = [], cloudGroups = [];
     Object.entries(segGroups).forEach(([parent, segs]) => {
       const light = lightMap[parent];
       const proto = light?.sku && segmentInfo?.sku_table?.[light.sku]?.protocol;
@@ -1448,193 +1445,106 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
       else cloudGroups.push({ parent, light, segs });
     });
 
-    // V1 LAN white reset is only used for cloud_v2 devices.
-    const resetDeviceKeys = cloudGroups.map(g => g.parent);
-
-    const segCount = segmentEntries.length;
-    const hueCount = hueEntries.length;
-    const goveeCount = goveeEntries.length;
-    const resetCount = resetDeviceKeys.length;
-    const applyCount = hueCount + goveeCount + segCount;
+    const applyCount = hueEntries.length + goveeEntries.length + segmentEntries.length;
     if (applyCount === 0) return;
 
-    // Wall-clock estimates per phase. Razer is essentially instant
-    // (one LAN packet per device), so only cloud_v2 segments drive the seg
-    // budget.
-    const cloudSegCount = cloudGroups.reduce((s, g) => s + g.segs.length, 0);
-    const resetMs = resetCount > 0 ? V1_RESET_BUDGET : 0;
-    const holdMs = resetCount > 0 ? SEG_WHITE_HOLD : 0;
-    const applyMsSeg = cloudSegCount > 0 ? (cloudSegCount - 1) * SEG_APPLY_STAGGER + 100 : 0;
-    const applyMsGovee = goveeCount > 0 ? (goveeCount - 1) * 150 + 200 : 0;
-    const applyMs = Math.max(applyMsSeg, applyMsGovee, hueCount > 0 ? 50 : 0);
-    const totalMs = Math.max(resetMs + holdMs + applyMs, 300);
+    // ─── Build the plan (the backend owns all timing) ───────────────────
+    // Phase-1 base color: seed each cloud device with one of ITS OWN scene
+    // colors (the middle segment), sent fast whole-device, so the strip looks
+    // like the scene immediately while segments fill in (no blue-white flash).
+    const base_seeds = [];
+    cloudGroups.forEach(({ light, segs }) => {
+      if (!light) return;
+      const seed = (segs[Math.floor(segs.length / 2)] || segs[0])?.color;
+      if (!seed) { base_seeds.push({ ip: light.ip, r: 255, g: 255, b: 255 }); return; }
+      base_seeds.push(seed.kelvin != null
+        ? { ip: light.ip, color_temp_kelvin: seed.kelvin, brightness: seed.brightness ?? brightness }
+        : { ip: light.ip, r: seed.r, g: seed.g, b: seed.b, brightness: seed.brightness ?? brightness });
+    });
 
+    // Hue: RGB, or true CT (mireds) for tunable-white lights in white mode.
+    const hue = [];
+    hueEntries.forEach(([key, color]) => {
+      const light = lightMap[key];
+      if (!light) return;
+      const bri = Math.round((color.brightness ?? brightness) * 254 / 100);
+      hue.push(color.kelvin != null && light.capabilities?.has_color_temp
+        ? { light_id: key.slice(4), on: true, color_temp: kelvinToMired(color.kelvin), brightness: bri, label: nameForKey(key) }
+        : { light_id: key.slice(4), on: true, r: color.r, g: color.g, b: color.b, brightness: bri, label: nameForKey(key) });
+    });
+
+    // Govee whole-device: RGB or color_temp_kelvin (server resolves ct_rgb).
+    const govee_whole = [];
+    goveeEntries.forEach(([key, color]) => {
+      const light = lightMap[key];
+      if (!light) return;
+      govee_whole.push(color.kelvin != null
+        ? { ip: light.ip, on: true, color_temp_kelvin: color.kelvin, brightness: color.brightness ?? brightness, label: nameForKey(key) }
+        : { ip: light.ip, on: true, r: color.r, g: color.g, b: color.b, brightness: color.brightness ?? brightness, label: nameForKey(key) });
+    });
+
+    // Razer: one bulk packet per device, full N segments (missing → black).
+    // Per-entry (beacon) dimming folded into RGB; device brightness sent apart.
+    const razer = [];
+    razerGroups.forEach(({ parent, light, segs }) => {
+      if (!light) return;
+      const segCountFromInfo = segmentInfo?.sku_table?.[light.sku]?.count || segs.length;
+      const colors = Array.from({ length: segCountFromInfo }, () => [0, 0, 0]);
+      segs.forEach(({ idx, color }) => {
+        const f = color.brightness !== undefined ? color.brightness / 100 : 1;
+        colors[idx] = [Math.round(color.r * f), Math.round(color.g * f), Math.round(color.b * f)];
+      });
+      razer.push({ ip: light.ip, sku: light.sku, colors, brightness, label: nameForKey(parent) });
+    });
+
+    // Cloud_v2: batch segments by color so each distinct color is ONE V2 call.
+    const cloud = [];
+    cloudGroups.forEach(({ parent, light, segs }) => {
+      if (!light) return;
+      const byColor = new Map();
+      segs.forEach(({ idx, color }) => {
+        const f = color.brightness !== undefined ? color.brightness / 100 : 1;
+        const rr = Math.round(color.r * f), gg = Math.round(color.g * f), bb = Math.round(color.b * f);
+        // Calibrated CT only when the segment isn't dimmed (f === 1); a dimmed
+        // beacon segment must send the pre-scaled RGB.
+        const useKelvin = color.kelvin != null && f === 1;
+        const ckey = useKelvin ? `k${color.kelvin}` : `${rr},${gg},${bb}`;
+        if (!byColor.has(ckey)) byColor.set(ckey, { segments: [], r: rr, g: gg, b: bb, color_temp_kelvin: useKelvin ? color.kelvin : undefined });
+        byColor.get(ckey).segments.push(idx);
+      });
+      cloud.push({
+        ip: light.ip, sku: light.sku, device_mac: light.mac,
+        unit: light.sku === "H6061" ? "panel" : "segment",
+        label: nameForKey(parent),
+        groups: [...byColor.values()],
+      });
+    });
+
+    // Optimistic local progress + rough ETA until the first SSE event lands
+    // (matches the backend's estimate so the countdown doesn't jump).
+    const cloudGroupCount = cloud.reduce((s, d) => s + d.groups.length, 0);
+    const roughMs = (base_seeds.length ? 600 : 0) + (cloudGroupCount ? 2000 : 0)
+      + Math.max(cloudGroupCount ? (cloudGroupCount - 1) * 1800 + 100 : 0,
+                 govee_whole.length ? (govee_whole.length - 1) * 150 + 200 : 0,
+                 hue.length ? 50 : 0);
     setApplying(true);
-    setApplyEndAt(Date.now() + totalMs);
+    setApplyPhase(base_seeds.length ? "resetting" : "applying");
+    setApplyTotal(applyCount);
+    setApplyDone(0);
+    setApplyLabel("Starting…");
+    setApplyEndAt(Date.now() + Math.max(roughMs, 300));
     setTickNow(Date.now());
 
-    // ─── Phase 1: fast whole-device base color (skipped if no segments) ──
-    // Cloud_v2 per-segment apply is slow (V2 API rate limit), so the device
-    // sits on this base for many seconds while segments fill in. We used to
-    // send white (255,255,255) here, which blasted blue-white during the whole
-    // apply. Instead seed each device with one of ITS OWN scene colors (the
-    // middle segment) via the fast whole-device LAN command — so the strip
-    // already looks like the scene, and segments only refine it.
-    if (resetCount > 0) {
-      setApplyPhase("resetting");
-      setApplyTotal(resetCount);
-      setApplyDone(0);
-      setApplyLabel("Setting base color…");
-
-      let resetCompleted = 0;
-      const resetTick = () => {
-        if (applyCancelRef.current) return;
-        resetCompleted++;
-        setApplyDone(resetCompleted);
-      };
-
-      // Fast whole-device LAN commands fire in parallel (UDP, no rate limit).
-      cloudGroups.forEach(({ parent, light, segs }) => {
-        if (!light) { resetTick(); return; }
-        const seed = (segs[Math.floor(segs.length / 2)] || segs[0])?.color;
-        const body = seed?.kelvin != null
-          ? { ip: light.ip, color_temp_kelvin: seed.kelvin, brightness: seed.brightness ?? brightness }
-          : seed
-            ? { ip: light.ip, r: seed.r, g: seed.g, b: seed.b, brightness: seed.brightness ?? brightness }
-            : { ip: light.ip, r: 255, g: 255, b: 255 };
-        api("/govee/control", {
-          method: "POST",
-          body: JSON.stringify(body),
-          headers: { "Content-Type": "application/json" },
-        })
-          .catch(e => console.warn("[ColorMode] base color failed:", parent, e))
-          .finally(() => resetTick());
-      });
-    }
-
-    // ─── Phase 2: apply (Hue + Govee whole-device + Govee segments) ──
-    const phase2Start = resetMs + holdMs;
-    scheduleSend(() => {
-      setApplyPhase("applying");
-      setApplyTotal(applyCount);
-      setApplyDone(0);
-
-      let applyCompleted = 0;
-      const applyTick = () => {
-        if (applyCancelRef.current) return;
-        applyCompleted++;
-        setApplyDone(applyCompleted);
-        if (applyCompleted >= applyCount) {
-          setApplying(false);
-          setApplyPhase(null);
-          setApplyLabel("");
-        }
-      };
-
-      // Hue lights: fire immediately (Hue bridge handles concurrency well)
-      hueEntries.forEach(([key, color]) => {
-        const light = lightMap[key];
-        if (!light || !light._controlFn) { applyTick(); return; }
-        setApplyLabel(nameForKey(key));
-        const briPct = color.brightness ?? brightness;
-        const bri = Math.round(briPct * 254 / 100);
-        if (color.kelvin != null && light.capabilities?.has_color_temp) {
-          // Native tunable white → true CT command.
-          light._controlFn(light, { on: true, color_temp: kelvinToMired(color.kelvin), brightness: bri });
-        } else {
-          // Color-only lamp (or color mode) → RGB. In white mode color.r/g/b is
-          // already the kelvinToRGB approximation, so this falls back gracefully.
-          light._controlFn(light, { on: true, r: color.r, g: color.g, b: color.b, brightness: bri });
-        }
-        applyTick();
-      });
-
-      // Govee whole-device (LAN UDP, staggered)
-      let goveeDelay = 0;
-      goveeEntries.forEach(([key, color]) => {
-        const light = lightMap[key];
-        if (!light || !light._controlFn) { applyTick(); return; }
-        const cmd = color.kelvin != null
-          ? { on: true, color_temp_kelvin: color.kelvin, brightness: color.brightness ?? brightness }
-          : { on: true, r: color.r, g: color.g, b: color.b, brightness: color.brightness ?? brightness };
-        scheduleSend(() => {
-          setApplyLabel(nameForKey(key));
-          light._controlFn(light, cmd);
-          applyTick();
-        }, goveeDelay);
-        goveeDelay += 150;
-      });
-
-      // Razer-protocol segments: one bulk LAN packet per device. We must send
-      // all N segments at once. Any segments without a preview entry fall back
-      // to black so the packet is well-formed. (Reserved for the lightning
-      // engine's dynamic use; set-and-leave SKUs like the hexa are cloud_v2.)
-      // Colors are sent at full brightness (with per-entry beacon dimming
-      // folded in); the device-level `brightness` is sent separately so the
-      // server can store unscaled colors and re-scale later when the
-      // LightCard brightness slider moves.
-      razerGroups.forEach(({ parent, light, segs }) => {
-        if (!light) { segs.forEach(() => applyTick()); return; }
-        setApplyLabel(nameForKey(parent));
-        const segCountFromInfo = segmentInfo?.sku_table?.[light.sku]?.count || segs.length;
-        const colorsArr = Array.from({ length: segCountFromInfo }, () => [0, 0, 0]);
-        segs.forEach(({ idx, color }) => {
-          // Beacon mode sets per-entry brightness — fold that in (spatial
-          // falloff is inherent to the chosen color). Global slider brightness
-          // is NOT folded; the server scales by it on send.
-          const perEntryF = color.brightness !== undefined ? color.brightness / 100 : 1;
-          colorsArr[idx] = [
-            Math.round(color.r * perEntryF),
-            Math.round(color.g * perEntryF),
-            Math.round(color.b * perEntryF),
-          ];
-        });
-        api("/govee/segments-bulk", {
-          method: "POST",
-          body: JSON.stringify({ ip: light.ip, sku: light.sku, colors: colorsArr, brightness: brightness }),
-          headers: { "Content-Type": "application/json" },
-        })
-          .catch(e => console.warn("[ColorMode] Razer bulk failed:", parent, e))
-          .finally(() => { segs.forEach(() => applyTick()); });
-      });
-
-      // Cloud V2 segments: batch by color so each distinct color is ONE call
-      // (the V2 API accepts a segment list per color), instead of one call per
-      // segment plus a separate brightness call. That's what was overrunning the
-      // rate limit and leaving segments stuck on the base color. Per-segment
-      // (beacon) brightness is folded into the color; whole-device brightness is
-      // already set by the base-color phase.
-      let segDelay = 0;
-      cloudGroups.forEach(({ parent, light, segs }) => {
-        if (!light) { segs.forEach(() => applyTick()); return; }
-        const byColor = new Map();
-        segs.forEach(({ idx, color }) => {
-          const f = color.brightness !== undefined ? color.brightness / 100 : 1;
-          const rr = Math.round(color.r * f), gg = Math.round(color.g * f), bb = Math.round(color.b * f);
-          // Use calibrated CT only when the segment isn't dimmed (f === 1);
-          // a dimmed beacon segment must send the pre-scaled RGB.
-          const useKelvin = color.kelvin != null && f === 1;
-          const key = useKelvin ? `k${color.kelvin}` : `${rr},${gg},${bb}`;
-          if (!byColor.has(key)) {
-            byColor.set(key, { segments: [], r: rr, g: gg, b: bb, color_temp_kelvin: useKelvin ? color.kelvin : undefined });
-          }
-          byColor.get(key).segments.push(idx);
-        });
-        const unit = light?.sku === "H6061" ? "panel" : "segment";
-        [...byColor.values()].forEach(group => {
-          scheduleSend(() => {
-            setApplyLabel(`${nameForKey(parent)} · ${group.segments.length} ${unit}${group.segments.length === 1 ? "" : "s"}`);
-            api("/govee/segments-multi", {
-              method: "POST",
-              body: JSON.stringify({ ip: light.ip, sku: light.sku, device_mac: light.mac, segments: group.segments, r: group.r, g: group.g, b: group.b, color_temp_kelvin: group.color_temp_kelvin }),
-              headers: { "Content-Type": "application/json" },
-            }).catch(e => console.warn("[ColorMode] segments-multi failed:", parent, e));
-            group.segments.forEach(() => applyTick());
-          }, segDelay);
-          segDelay += SEG_APPLY_STAGGER;
-        });
-      });
-    }, phase2Start);
+    // One POST. The backend runs the staggered apply in a background task and
+    // streams progress back over SSE — so the browser can be closed now.
+    api("/scenes/room-apply", {
+      method: "POST",
+      body: JSON.stringify({ room: roomName, brightness, base_seeds, hue, govee_whole, razer, cloud }),
+      headers: { "Content-Type": "application/json" },
+    }).catch(e => {
+      console.warn("[ColorMode] room-apply failed:", e);
+      setApplying(false); setApplyPhase(null); setApplyLabel("");
+    });
 
     // Notify map so it updates dot colors and clears Identify active state.
     // The third arg is a display-only snapshot of the current selection so the
