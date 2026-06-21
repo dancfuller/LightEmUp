@@ -1368,13 +1368,17 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     return computePalette();
   };
   const pipeline = (raw) => {
-    // Order matters: clamp saturation first (so per-device overrides
-    // start from clean colors), then apply per-device fill mode.
-    // White mode skips min-saturation — whites are intentionally low-sat and
-    // clamping would push them back toward vivid color. Preset modes (Teams/
-    // NCAA/Flags) are always color, regardless of the (hidden) color-space.
-    const isPreset = mode === "teams" || mode === "ncaa" || mode === "flags";
-    const sat = (colorSpace === "white" && !isPreset) ? raw : applyMinSat(raw, minSatEnabled, minSatPct);
+    // Order matters: clamp saturation first (so per-device overrides start from
+    // clean colors), then apply per-device fill mode.
+    //
+    // The min-saturation floor only applies to the GENERATED-shade modes (tonal,
+    // gradient): it exists to stop shades derived from one base color from
+    // drifting near-white. It must NOT touch colors the user explicitly chose and
+    // can see as swatches — palette, custom, beacon, and the preset team/flag
+    // modes apply VERBATIM so "what you see is what gets set". (White entries are
+    // intentionally low-saturation; applyMinSat already leaves those alone.)
+    const generatedShades = mode === "tonal" || mode === "gradient";
+    const sat = generatedShades ? applyMinSat(raw, minSatEnabled, minSatPct) : raw;
     return applySegmentFillModes(sat, segmentFillModes);
   };
   const generatePreview = () => {
