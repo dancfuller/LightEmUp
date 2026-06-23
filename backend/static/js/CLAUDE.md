@@ -47,7 +47,14 @@ Assigns colors/temperatures across a room's devices and applies them.
   row-major) and colors them `A,B,C,A,B,C…` along that order, shifting each row by one
   so neighbors differ (clean `ABAB` instead of clumped `AABB`). Shuffle rotates the
   start color; "shades" mode advances a shade on each wrap. `buildAdjacency` is still
-  used by Palette/Gradient/Beacon/CT-pool modes — don't delete it. Each custom seed
+  used by Palette/Gradient/Beacon/CT-pool modes — don't delete it. **Segments now
+  spatially constrain neighbors (v2.14.2):** the old relaxation skipped every spatial
+  edge that touched a segment of a different device, so two side-by-side strips (and a
+  strip next to a bulb) had *no* adjacency constraint and palette colors clumped. Now a
+  segment constrains nearby segments of other devices and nearby whole lights; only
+  same-parent segment pairs are still handled purely by the intra-device rule. A lone
+  hexa close to other lights may over-constrain a small palette, but the relax
+  fallbacks resolve it. Each custom seed
   slot can be Color (hue) or White (a `kelvin` temperature); `applyMinSat` must not
   saturation-clamp `kelvin` entries.
 - **Target vendor:** `targetVendor` (`"all"`/`"hue"`/`"govee"`) filters which devices

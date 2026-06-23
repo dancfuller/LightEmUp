@@ -651,11 +651,15 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
 
   // ─── Adjacency graph (for palette mode) ─────────────────────────────
   // Two entries (lights or segments) are adjacent if any of:
-  //   1. They're within the spatial threshold on the map — EXCEPT when one
-  //      side is a segment and they don't share a parent device. Multi-
-  //      segment devices (e.g. Govee hexa) are physically one fixture, so
-  //      their segments must NOT spatially constrain (or be constrained by)
-  //      surrounding lights — palette colors can repeat across that border.
+  //   1. They're within the spatial threshold on the map — segments included.
+  //      A segment constrains nearby segments of OTHER devices and nearby
+  //      whole lights, so two strips placed side by side (and a strip next to
+  //      a bulb) get distinct colors across their border. (Previously segments
+  //      never spatially constrained non-mates, to keep a lone hexa's 7 panels
+  //      from over-constraining the room; but that silently dropped the
+  //      strip-to-strip / strip-to-bulb borders people actually want. A hexa
+  //      sitting close to other lights now constrains them — if the palette is
+  //      too small the graceful relax fallbacks below still resolve it.)
   //   2. They're segments of the same parent device (intra-device segments
   //      are mutually adjacent regardless of distance — siblings of one hexa
   //      must all be distinct).
@@ -673,13 +677,13 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     };
     const isSegment = (k) => /:seg\d+$/.test(k);
 
-    // 1. Spatial adjacency, with the hexa-segment relaxation: if either side
-    // is a segment, the pair must share a parent device for the spatial edge
-    // to count. Segments-of-X don't spatially constrain non-mates.
+    // 1. Spatial adjacency: any two entries within the threshold are adjacent,
+    // segments included. (Same-parent segment pairs are also forced adjacent by
+    // rule 1b below regardless of distance, so the spatial check is redundant
+    // for them but harmless — the Set dedupes.)
     for (let i = 0; i < entries.length; i++) {
       for (let j = i + 1; j < entries.length; j++) {
         const ki = entries[i].key, kj = entries[j].key;
-        if ((isSegment(ki) || isSegment(kj)) && parentKey(ki) !== parentKey(kj)) continue;
         const dx = entries[i].x - entries[j].x;
         const dy = entries[i].y - entries[j].y;
         const dist = Math.sqrt(dx * dx + dy * dy);
