@@ -1,3 +1,78 @@
+// ─── Settings device row ─────────────────────────────────────────────────────
+// One device line in Settings → Hue Bridge / Govee Devices. Shows status,
+// display name, a Flash button to physically locate the device (POST
+// /identify), and inline nickname editing (reuses the same nickname API as the
+// light cards). `flashBody` is the /identify payload ({light_id} or {ip}); pass
+// null to hide Flash (e.g. unreachable/missing devices).
+function SettingsDeviceRow({ deviceKey, nickname, friendlyName, meta, statusColor, statusOpacity, statusLabel, flashBody, onNicknameChange, isMobile, dim, italicName, extra }) {
+  const [editing, setEditing] = useState(false);
+  const [val, setVal] = useState(nickname || "");
+  const [flashing, setFlashing] = useState(false);
+  const displayName = nickname || friendlyName;
+
+  const startEdit = () => { setVal(nickname || ""); setEditing(true); };
+  const saveEdit = () => { onNicknameChange(deviceKey, val.trim()); setEditing(false); };
+  const clearNick = () => { onNicknameChange(deviceKey, ""); setEditing(false); };
+
+  const flash = async () => {
+    if (!flashBody || flashing) return;
+    setFlashing(true);
+    try { await api("/identify", { method: "POST", body: JSON.stringify(flashBody) }); }
+    catch (e) { console.error("Flash failed:", e); }
+    finally { setFlashing(false); }
+  };
+
+  const btn = (label, onClick, opts = {}) => (
+    <button onClick={onClick} disabled={opts.disabled} title={opts.title}
+      style={{
+        padding: "3px 10px", borderRadius: 6, fontSize: 11, fontWeight: 600,
+        border: `1px solid ${opts.border || "#334155"}`, background: "transparent",
+        color: opts.disabled ? "#475569" : (opts.color || "#a5b4fc"),
+        cursor: opts.disabled ? "wait" : "pointer", whiteSpace: "nowrap",
+      }}>{label}</button>
+  );
+
+  return (
+    <div style={{
+      padding: "7px 0", borderBottom: "1px solid rgba(51,65,85,0.4)",
+      opacity: dim ? 0.6 : 1,
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <span style={{
+          width: 6, height: 6, borderRadius: "50%", flexShrink: 0,
+          background: statusColor, opacity: statusOpacity ?? 0.8,
+        }} />
+        <span style={{ color: italicName ? "#94a3b8" : "#e2e8f0", fontStyle: italicName ? "italic" : "normal", fontWeight: 600, fontSize: 13, flex: "1 1 auto", minWidth: 0 }}>{displayName}</span>
+        {statusLabel && (
+          <span style={{ color: statusColor, fontSize: 10, flexShrink: 0 }}>{statusLabel}</span>
+        )}
+        {flashBody && btn(flashing ? "Flashing…" : "⚡ Flash", flash, { disabled: flashing, title: "Flash this light to locate it" })}
+        {btn(nickname ? "✎ Rename" : "✎ Name", startEdit, { title: "Set a nickname" })}
+        {extra}
+      </div>
+      {editing && (
+        <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 6, flexWrap: "wrap" }}>
+          <input type="text" value={val} autoFocus
+            onChange={(e) => setVal(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") saveEdit(); if (e.key === "Escape") setEditing(false); }}
+            placeholder="Enter a nickname…"
+            style={{
+              flex: "1 1 160px", padding: "5px 9px", borderRadius: 6, minWidth: 0,
+              border: "1px solid #6366f1", background: "#0f172a",
+              color: "#f1f5f9", fontSize: 13, fontWeight: 600, outline: "none",
+            }} />
+          <button onClick={saveEdit} style={{ padding: "5px 10px", borderRadius: 6, border: "none", background: "#6366f1", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Save</button>
+          {nickname && <button onClick={clearNick} title="Remove nickname" style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #475569", background: "transparent", color: "#94a3b8", fontSize: 12, cursor: "pointer" }}>Clear</button>}
+          <button onClick={() => setEditing(false)} style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #475569", background: "transparent", color: "#94a3b8", fontSize: 12, cursor: "pointer" }}>Cancel</button>
+        </div>
+      )}
+      {meta && (
+        <div style={{ color: "#475569", fontSize: 11, fontFamily: "monospace", marginTop: 3, marginLeft: 14 }}>{meta}</div>
+      )}
+    </div>
+  );
+}
+
 // ─── Main App ───────────────────────────────────────────────────────────────
 
 function App() {
@@ -15,6 +90,7 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [activeTab, setActiveTab] = useState("rooms");
+  const [newRoomName, setNewRoomName] = useState("");
   const [showHueSetup, setShowHueSetup] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
   const [versionInfo, setVersionInfo] = useState(null);
@@ -70,6 +146,24 @@ function App() {
     } catch (e) {
       console.error("Failed to save nickname:", e);
     }
+  };
+
+  // Create an empty room from the Rooms tab. Persists immediately (the Rooms
+  // tab has no separate Save step, unlike Assign Rooms). Returns true on
+  // success so the caller can clear its input. Rejects blank/duplicate names.
+  const addRoom = async (rawName) => {
+    const name = (rawName || "").trim();
+    if (!name || rooms[name]) return false;
+    setRooms(prev => ({ ...prev, [name]: { hue_light_ids: [], govee_devices: [] } }));
+    try {
+      await api("/rooms", {
+        method: "POST",
+        body: JSON.stringify({ name, hue_light_ids: [], govee_devices: [] }),
+      });
+    } catch (e) {
+      console.error("Failed to create room:", e);
+    }
+    return true;
   };
 
   const loadAll = useCallback(async () => {
@@ -584,6 +678,44 @@ function App() {
 
         {activeTab === "rooms" && (
           <>
+            {/* Add-room control — top of the Rooms tab so a new room can be
+                created without detouring through Assign Rooms. */}
+            <div style={{
+              display: "flex", gap: 8, marginBottom: isMobile ? 14 : 20,
+              flexWrap: "wrap", alignItems: "center",
+            }}>
+              <input
+                type="text" value={newRoomName}
+                onChange={(e) => setNewRoomName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") addRoom(newRoomName).then(ok => { if (ok) setNewRoomName(""); });
+                }}
+                placeholder="New room name…"
+                style={{
+                  flex: "1 1 200px", minWidth: 0,
+                  padding: isMobile ? "9px 12px" : "10px 14px", borderRadius: 10,
+                  border: "1px solid #334155", background: "#0f172a",
+                  color: "#f1f5f9", fontSize: isMobile ? 14 : 14, outline: "none",
+                }}
+              />
+              <button
+                onClick={() => addRoom(newRoomName).then(ok => { if (ok) setNewRoomName(""); })}
+                disabled={!newRoomName.trim() || !!rooms[newRoomName.trim()]}
+                style={{
+                  padding: isMobile ? "9px 16px" : "10px 20px", borderRadius: 10, border: "none",
+                  background: (!newRoomName.trim() || !!rooms[newRoomName.trim()]) ? "#334155" : "#6366f1",
+                  color: (!newRoomName.trim() || !!rooms[newRoomName.trim()]) ? "#64748b" : "#fff",
+                  fontSize: isMobile ? 13 : 14, fontWeight: 600,
+                  cursor: (!newRoomName.trim() || !!rooms[newRoomName.trim()]) ? "default" : "pointer",
+                  whiteSpace: "nowrap",
+                }}
+              >+ Add Room</button>
+              {!!newRoomName.trim() && !!rooms[newRoomName.trim()] && (
+                <span style={{ fontSize: 12, color: "#f87171", flex: "1 1 100%" }}>
+                  A room named "{newRoomName.trim()}" already exists.
+                </span>
+              )}
+            </div>
             {Object.keys(rooms).map(roomName => {
               const { hue, govee } = getRoomLights(roomName);
               return (
@@ -724,28 +856,19 @@ function App() {
                   </div>
                   {hueLights.map(light => {
                     const dk = `hue:${light.id}`;
-                    const nick = nicknames?.[dk];
-                    const name = nick || light.product_name || light.name || light.model || `Light ${light.id}`;
+                    const friendlyName = light.product_name || light.name || light.model || `Light ${light.id}`;
                     const model = light.product_name || light.model || "Unknown";
                     const reachable = light.state?.reachable !== false;
                     return (
-                      <div key={light.id} style={{
-                        display: "flex", alignItems: "center", gap: 8, padding: "5px 0",
-                        borderBottom: "1px solid rgba(51,65,85,0.4)", fontSize: 12,
-                        flexWrap: "wrap",
-                      }}>
-                        <span style={{
-                          width: 6, height: 6, borderRadius: "50%", flexShrink: 0,
-                          background: reachable ? "#4ade80" : "#f87171",
-                          opacity: reachable ? 0.8 : 0.5,
-                        }} />
-                        <span style={{ color: "#e2e8f0", fontWeight: 600, minWidth: isMobile ? 0 : 140, flex: isMobile ? "1 1 auto" : "0 0 auto" }}>{name}</span>
-                        <span style={{ color: "#64748b", flex: isMobile ? "1 1 100%" : 1, order: isMobile ? 10 : 0 }}>{model}</span>
-                        <span style={{ color: "#475569", fontSize: 11, fontFamily: "monospace" }}>ID: {light.id}</span>
-                        <span style={{ color: reachable ? "#64748b" : "#f87171", fontSize: 10, width: isMobile ? "auto" : 70, textAlign: "right" }}>
-                          {reachable ? "reachable" : "unreachable"}
-                        </span>
-                      </div>
+                      <SettingsDeviceRow key={light.id}
+                        deviceKey={dk} nickname={nicknames?.[dk]} friendlyName={friendlyName}
+                        meta={`${model} · ID ${light.id}`}
+                        statusColor={reachable ? "#4ade80" : "#f87171"}
+                        statusOpacity={reachable ? 0.8 : 0.5}
+                        statusLabel={reachable ? null : "unreachable"}
+                        flashBody={reachable ? { light_id: String(light.id) } : null}
+                        onNicknameChange={updateNickname} isMobile={isMobile}
+                      />
                     );
                   })}
                 </div>
@@ -773,78 +896,44 @@ function App() {
                   </div>
                   {goveeDevices.map(device => {
                     const dk = `govee:${device.ip}`;
-                    const nick = nicknames?.[dk];
-                    const name = nick || GOVEE_SKU_NAMES[device.sku] || device.name || device.sku || "Unknown";
+                    const friendlyName = GOVEE_SKU_NAMES[device.sku] || device.name || device.sku || "Unknown";
+                    const meta = [device.sku, device.ip, device.mac].filter(Boolean).join(" · ");
                     return (
-                      <div key={device.ip} style={{
-                        display: "flex", alignItems: "center", gap: 8, padding: "5px 0",
-                        borderBottom: "1px solid rgba(51,65,85,0.4)", fontSize: 12,
-                        flexWrap: "wrap",
-                      }}>
-                        <span style={{
-                          width: 6, height: 6, borderRadius: "50%", flexShrink: 0,
-                          background: "#4ade80", opacity: 0.8,
-                        }} />
-                        <span style={{ color: "#e2e8f0", fontWeight: 600, minWidth: isMobile ? 0 : 140, flex: isMobile ? "1 1 auto" : "0 0 auto" }}>{name}</span>
-                        {ctCalibrated?.[dk] && (
-                          <span title="White-balance calibrated" style={{ color: "#fbbf24", fontSize: 13, lineHeight: 1, cursor: "default" }}>&#x25D0;</span>
-                        )}
-                        <span style={{ color: "#64748b" }}>{device.sku}</span>
-                        <span style={{ color: "#475569", fontSize: 11, fontFamily: "monospace", flex: isMobile ? "1 1 100%" : 1, order: isMobile ? 10 : 0 }}>{device.ip}</span>
-                        {device.mac && (
-                          <span style={{ color: "#475569", fontSize: 10, fontFamily: "monospace", order: isMobile ? 11 : 0 }}>{device.mac}</span>
-                        )}
-                      </div>
+                      <SettingsDeviceRow key={device.ip}
+                        deviceKey={dk} nickname={nicknames?.[dk]} friendlyName={friendlyName}
+                        meta={meta}
+                        statusColor="#4ade80" statusOpacity={0.8}
+                        statusLabel={ctCalibrated?.[dk] ? "◐ calibrated" : null}
+                        flashBody={{ ip: device.ip }}
+                        onNicknameChange={updateNickname} isMobile={isMobile}
+                      />
                     );
                   })}
                   {/* Missing devices — greyed out, red status dot, with
                       "X" (forget) and a re-scan affordance. */}
                   {missingGovee.map(device => {
                     const dk = `govee:${device.ip}`;
-                    const nick = nicknames?.[dk];
-                    const name = nick || GOVEE_SKU_NAMES[device.sku] || device.name || device.sku || "Unknown";
+                    const friendlyName = GOVEE_SKU_NAMES[device.sku] || device.name || device.sku || "Unknown";
+                    const name = nicknames?.[dk] || friendlyName;
+                    const meta = [device.sku, device.ip, (device.mac && device.mac !== device.ip) ? device.mac : null].filter(Boolean).join(" · ");
                     return (
-                      <div key={device.mac} style={{
-                        display: "flex", alignItems: "center", gap: 8, padding: "5px 0",
-                        borderBottom: "1px solid rgba(51,65,85,0.4)", fontSize: 12,
-                        flexWrap: "wrap", opacity: 0.7,
-                      }}>
-                        <span style={{
-                          width: 6, height: 6, borderRadius: "50%", flexShrink: 0,
-                          background: "#f87171", boxShadow: "0 0 4px rgba(248,113,113,0.5)",
-                        }} />
-                        <span style={{ color: "#94a3b8", fontWeight: 600, fontStyle: "italic", minWidth: isMobile ? 0 : 140, flex: isMobile ? "1 1 auto" : "0 0 auto" }}>{name}</span>
-                        <span style={{ color: "#64748b" }}>{device.sku}</span>
-                        <span style={{ color: "#475569", fontSize: 11, fontFamily: "monospace", flex: isMobile ? "1 1 100%" : 1, order: isMobile ? 10 : 0 }}>{device.ip}</span>
-                        {device.mac && device.mac !== device.ip && (
-                          <span style={{ color: "#475569", fontSize: 10, fontFamily: "monospace", order: isMobile ? 11 : 0 }}>{device.mac}</span>
-                        )}
-                        <span style={{ fontSize: 10, color: "#f87171", fontWeight: 600, order: isMobile ? 12 : 0 }}>missing</span>
-                        <button
-                          onClick={rescanGovee} disabled={rescanning}
-                          style={{
-                            padding: "2px 8px", borderRadius: 5, border: "1px solid #334155",
-                            background: "transparent", color: rescanning ? "#475569" : "#a5b4fc",
-                            fontSize: 10, fontWeight: 600, cursor: rescanning ? "wait" : "pointer",
-                            order: isMobile ? 13 : 0,
-                          }}
-                          title="Re-scan for this device"
-                        >Re-scan</button>
-                        <button
-                          onClick={() => {
-                            if (confirm(`Remove "${name}" from known devices? Re-scanning will bring it back if it comes online.`)) {
-                              forgetGoveeDevice(device.mac);
-                            }
-                          }}
-                          style={{
-                            padding: "2px 7px", borderRadius: 5, border: "1px solid #7f1d1d",
-                            background: "transparent", color: "#f87171",
-                            fontSize: 11, fontWeight: 700, cursor: "pointer", lineHeight: 1,
-                            order: isMobile ? 14 : 0,
-                          }}
-                          title="Forget this device"
-                        >×</button>
-                      </div>
+                      <SettingsDeviceRow key={device.mac}
+                        deviceKey={dk} nickname={nicknames?.[dk]} friendlyName={friendlyName}
+                        meta={meta} italicName dim
+                        statusColor="#f87171" statusOpacity={1} statusLabel="missing"
+                        flashBody={null}
+                        onNicknameChange={updateNickname} isMobile={isMobile}
+                        extra={
+                          <>
+                            <button onClick={rescanGovee} disabled={rescanning}
+                              style={{ padding: "3px 9px", borderRadius: 6, border: "1px solid #334155", background: "transparent", color: rescanning ? "#475569" : "#a5b4fc", fontSize: 11, fontWeight: 600, cursor: rescanning ? "wait" : "pointer", whiteSpace: "nowrap" }}
+                              title="Re-scan for this device">Re-scan</button>
+                            <button onClick={() => { if (confirm(`Remove "${name}" from known devices? Re-scanning will bring it back if it comes online.`)) forgetGoveeDevice(device.mac); }}
+                              style={{ padding: "3px 8px", borderRadius: 6, border: "1px solid #7f1d1d", background: "transparent", color: "#f87171", fontSize: 12, fontWeight: 700, cursor: "pointer", lineHeight: 1 }}
+                              title="Forget this device">×</button>
+                          </>
+                        }
+                      />
                     );
                   })}
                 </div>
