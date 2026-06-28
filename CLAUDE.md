@@ -123,6 +123,7 @@ Every UI change must work well on both desktop (16:9) and modern phones in portr
 ## Key Gotchas
 
 1. **Govee port 4002 conflicts**: If the server holds a socket on 4002 (e.g. during discovery), concurrent requests will fail. The discovery code uses `SO_REUSEADDR` and falls back to a random port.
+1b. **Govee discovery is lossy; presence is assumed (v2.16.0)**: a Govee device's identity is its stable device id, not its IP (which is DHCP). One rescan re-broadcasts several times and known-but-silent devices still surface (badged offline) and stay controllable. `GET /api/discover/govee` returns each device with a `responding` flag. NOTE: storage is still keyed by IP, so a DHCP IP change orphans associations until the planned MAC-keying migration — see `backend/CLAUDE.md`. Mitigation today: DHCP reservations.
 2. **Razer protocol 60s timeout**: Per-segment control via the Razer protocol auto-disables after 60 seconds with no LED data. The scene engine sends keepalive packets.
 3. **Babel script order matters**: The `<script>` tags in `index.html` must be in dependency order. `utils.js` first (defines hooks, API, color utils), `app.js` last (uses everything).
 4. **config.json is gitignored**: It contains local network IPs and credentials. Always use `config.json.example` as the template.

@@ -7,6 +7,7 @@ import base64
 import json
 import socket
 import struct
+import time
 import httpx
 from typing import Optional
 
@@ -550,10 +551,14 @@ GOVEE_SKU_NAMES = {
 }
 
 
-async def discover_govee_lan(timeout: float = 5.0) -> list[dict]:
+async def discover_govee_lan(timeout: float = 6.0) -> list[dict]:
     """
     Discover Govee devices on the LAN via UDP broadcast.
     Govee devices with LAN control enabled respond to a scan message.
+
+    `timeout` is the total discovery window: we re-broadcast the scan several
+    times across it and keep listening, deduping replies by device id, so a
+    single dropped UDP packet no longer causes a device to be "missed".
     """
     loop = asyncio.get_event_loop()
 
@@ -573,10 +578,13 @@ async def discover_govee_lan(timeout: float = 5.0) -> list[dict]:
         send_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         send_sock.settimeout(timeout)
 
-        # Listen on port 4002
+        # Listen on port 4002. Use a SHORT per-recv timeout so the loop below can
+        # interleave repeated scan bursts with listening (a single UDP burst is
+        # lossy — Govee devices routinely miss one), then keep polling for the
+        # full window.
         recv_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
         recv_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        recv_sock.settimeout(timeout)
+        recv_sock.settimeout(0.4)
 
         try:
             recv_sock.bind(("", GOVEE_LISTEN_PORT))
@@ -601,49 +609,69 @@ async def discover_govee_lan(timeout: float = 5.0) -> list[dict]:
         except socket.gaierror:
             pass
 
-        for target in targets:
-            try:
-                send_sock.sendto(scan_message.encode(), (target, GOVEE_MULTICAST_PORT))
-            except OSError as e:
-                print(f"[Govee] broadcast to {target} failed: {e}")
+        def send_burst():
+            for target in targets:
+                try:
+                    send_sock.sendto(scan_message.encode(), (target, GOVEE_MULTICAST_PORT))
+                except OSError as e:
+                    print(f"[Govee] broadcast to {target} failed: {e}")
 
-        # Listen for responses
-        seen_ips = set()
+        # Repeated bursts + continuous listen, deduped by Govee device id (the
+        # stable identity; IP can change under DHCP). `timeout` is the total
+        # window; we re-broadcast every BURST_INTERVAL up to MAX_BURSTS so a
+        # dropped scan packet or a device that missed the first one still gets
+        # picked up within a single rescan.
+        BURST_INTERVAL = 0.7
+        MAX_BURSTS = 6
+        seen = {}  # device id -> device dict
+        start = time.monotonic()
+        last_send = -BURST_INTERVAL  # force an immediate first burst
+        bursts = 0
         try:
-            while True:
-                data, addr = recv_sock.recvfrom(4096)
-                if addr[0] in seen_ips:
+            while time.monotonic() - start < timeout:
+                now = time.monotonic()
+                if bursts < MAX_BURSTS and now - last_send >= BURST_INTERVAL:
+                    send_burst()
+                    last_send = now
+                    bursts += 1
+                try:
+                    data, addr = recv_sock.recvfrom(4096)
+                except socket.timeout:
                     continue
-                seen_ips.add(addr[0])
-
+                except OSError:
+                    continue
                 try:
                     response = json.loads(data.decode("utf-8"))
                     msg = response.get("msg", {})
-                    if msg.get("cmd") == "scan":
-                        dev_data = msg.get("data", {})
-                        sku = dev_data.get("sku", "unknown")
-                        devices.append({
-                            "ip": dev_data.get("ip", addr[0]),
-                            "device": dev_data.get("device", "unknown"),
-                            "mac": dev_data.get("device", "unknown"),
-                            "sku": sku,
-                            "type": "govee",
-                            "name": GOVEE_SKU_NAMES.get(sku, sku),
-                            "capabilities": {
-                                "has_color": True,
-                                "has_brightness": True,
-                                "has_segments": False,
-                            },
-                        })
+                    if msg.get("cmd") != "scan":
+                        continue
+                    dev_data = msg.get("data", {})
+                    sku = dev_data.get("sku", "unknown")
+                    dev_id = dev_data.get("device", "unknown")
+                    # Dedupe by device id when present, else by IP.
+                    key = dev_id if dev_id and dev_id != "unknown" else addr[0]
+                    if key in seen:
+                        continue
+                    seen[key] = {
+                        "ip": dev_data.get("ip", addr[0]),
+                        "device": dev_id,
+                        "mac": dev_id,
+                        "sku": sku,
+                        "type": "govee",
+                        "name": GOVEE_SKU_NAMES.get(sku, sku),
+                        "capabilities": {
+                            "has_color": True,
+                            "has_brightness": True,
+                            "has_segments": False,
+                        },
+                    }
                 except (json.JSONDecodeError, UnicodeDecodeError):
                     pass
-        except socket.timeout:
-            pass
         finally:
             send_sock.close()
             recv_sock.close()
 
-        return devices
+        return list(seen.values())
 
     try:
         devices = await loop.run_in_executor(None, _do_scan)

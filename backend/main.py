@@ -557,7 +557,48 @@ async def discover_govee():
             known[mac] = new_entry
             config_changed = True
 
-    missing = [entry for mac, entry in known.items() if mac not in seen_macs]
+    # Assume-presence: a Govee LAN scan is lossy, so a device that didn't reply
+    # to THIS scan isn't necessarily gone. Every device that did reply is marked
+    # responding; every known device that didn't is appended as a non-responding
+    # entry, rendered from its last-known state (device_state). Control is
+    # fire-and-forget UDP to the stored IP, so these stay fully controllable —
+    # the UI just badges them "not responding now". `missing` is still returned
+    # for the Settings forget/re-scan affordance.
+    for dev in devices:
+        dev["responding"] = True
+
+    missing = []
+    for mac, entry in known.items():
+        if mac in seen_macs:
+            continue
+        ip = entry.get("ip")
+        sku = entry.get("sku")
+        absent = {
+            "ip": ip,
+            "device": mac,
+            "mac": mac,
+            "sku": sku,
+            "type": "govee",
+            "name": entry.get("name") or sku or "Govee Device",
+            "capabilities": {"has_color": True, "has_brightness": True, "has_segments": False},
+            "responding": False,
+            "last_seen": entry.get("last_seen"),
+            "state": {"on": None, "brightness": None, "reachable": False},
+        }
+        stored = device_state.get(f"govee:{ip}") if ip else None
+        if stored:
+            st = absent["state"]
+            if stored.get("r") is not None and stored.get("g") is not None and stored.get("b") is not None:
+                st["color"] = {"r": stored["r"], "g": stored["g"], "b": stored["b"]}
+            elif stored.get("color_temp_kelvin") is not None:
+                st["color_temp"] = stored["color_temp_kelvin"]
+            if stored.get("on") is not None:
+                st["on"] = stored["on"]
+            if stored.get("brightness") is not None:
+                st["brightness"] = stored["brightness"]
+        devices.append(absent)
+        missing.append(entry)
+
     if config_changed:
         save_config(config)
 

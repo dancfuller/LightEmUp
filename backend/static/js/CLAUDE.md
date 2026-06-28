@@ -99,6 +99,16 @@ conveniences, not logic, and the backend is still the single source of truth:
   (`POST /api/scenes/room-apply`), so there's nothing to gain by round-tripping the
   preview. Do not move preview computation to the backend.
 
+## Govee devices: assume-presence (v2.16.0)
+`GET /api/discover/govee` returns a `responding` flag on each device and includes
+known-but-silent devices (`responding: false`, rendered from last-known state). The
+frontend puts **all** of them in `goveeDevices`, so a device that missed a scan still
+appears in rooms / the color tool / the map and stays controllable (control is
+fire-and-forget UDP by IP); `light.state.reachable === false` drives the existing
+"offline" badge + dimming on the LightCard. Settings filters its main Govee list to
+`responding !== false` (absent devices show in the "not responding" section instead).
+Don't gate per-device UI on the live scan — the backend already assumes presence.
+
 ## Settings device list (app.js — `SettingsDeviceRow`)
 Settings → Hue Bridge / Govee Devices render each device through `SettingsDeviceRow`,
 which gives every device (Hue or Govee, present or missing) inline nickname editing

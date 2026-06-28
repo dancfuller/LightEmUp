@@ -34,6 +34,28 @@ rules (versioning, commits, deploy). **Keep this file current when behavior chan
 - The Razer per-segment protocol is the alternative but auto-reverts after 60s without
   keepalive packets — prefer cloud_v2 for set-and-leave scenes.
 
+## Govee discovery reliability & device identity (v2.16.0)
+A single UDP scan burst is lossy — Govee devices routinely miss one — so discovery
+is built to tolerate that, and to treat IP as ephemeral:
+- **Multi-burst scan** (`discover_govee_lan`): one rescan re-broadcasts the scan
+  several times across the `timeout` window (default 6s) and keeps listening, deduping
+  replies by **device id** (not IP). A dropped packet no longer "loses" a device.
+- **Assume-presence** (`discover_govee`): every reply is marked `responding: True`;
+  every *known* device (`config.known_devices.govee`, keyed by device id/MAC) that
+  didn't reply is appended as a `responding: False` entry rendered from `device_state`
+  (last-known color/on/brightness, `state.reachable = False`). Control is fire-and-
+  forget UDP to the stored IP, so absent devices stay fully controllable — the UI just
+  badges them offline. `missing` is still returned for the Settings forget affordance.
+- **Identity is the device id, IP is DHCP** — but today every stored structure is still
+  *keyed by IP* (`govee:<ip>` maps + bare-IP lists), so a DHCP IP change currently
+  orphans associations. **Planned next (the proper fix):** re-key everything by the
+  device id (`govee:<mac>`), keep `known_devices` as the MAC→current-IP map, and resolve
+  the IP at send time (control is UDP to an IP). That's a breaking config-schema
+  migration (major version) and threads through the whole frontend device key, so it's
+  scoped as its own effort. An IP-remap-on-change workaround was intentionally **not**
+  shipped (it'd be dead code once MAC-keying lands). Until then, a DHCP reservation per
+  Govee light avoids the issue entirely.
+
 ## White-temperature calibration (Govee renders CT bluer than Hue)
 Two mechanisms; `ct_rgb` takes precedence over legacy `ct_correction`:
 - `ct_correction` {in→out Kelvin}: remaps a requested Kelvin to a warmer Kelvin still

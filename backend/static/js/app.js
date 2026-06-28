@@ -889,12 +889,12 @@ function App() {
               {(goveeDevices.length > 0 || missingGovee.length > 0) ? (
                 <div>
                   <div style={{ fontSize: 11, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>
-                    {goveeDevices.length} devices via LAN
+                    {goveeDevices.filter(d => d.responding !== false).length} responding via LAN
                     {missingGovee.length > 0 && (
-                      <span style={{ color: "#f87171", marginLeft: 8 }}>· {missingGovee.length} missing</span>
+                      <span style={{ color: "#f87171", marginLeft: 8 }}>· {missingGovee.length} not responding</span>
                     )}
                   </div>
-                  {goveeDevices.map(device => {
+                  {goveeDevices.filter(d => d.responding !== false).map(device => {
                     const dk = `govee:${device.ip}`;
                     const friendlyName = GOVEE_SKU_NAMES[device.sku] || device.name || device.sku || "Unknown";
                     const meta = [device.sku, device.ip, device.mac].filter(Boolean).join(" · ");
@@ -920,7 +920,7 @@ function App() {
                       <SettingsDeviceRow key={device.mac}
                         deviceKey={dk} nickname={nicknames?.[dk]} friendlyName={friendlyName}
                         meta={meta} italicName dim
-                        statusColor="#f87171" statusOpacity={1} statusLabel="missing"
+                        statusColor="#f87171" statusOpacity={1} statusLabel="not responding"
                         flashBody={null}
                         onNicknameChange={updateNickname} isMobile={isMobile}
                         extra={
