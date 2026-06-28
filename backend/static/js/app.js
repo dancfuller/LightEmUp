@@ -1092,6 +1092,15 @@ function App() {
           </div>
         </div>
       )}
+
+      {/* Global footer — version + commit date on every tab, not just Settings. */}
+      <footer style={{
+        marginTop: isMobile ? 24 : 36, paddingTop: 14, paddingBottom: 6,
+        borderTop: "1px solid #1e293b", textAlign: "center",
+        fontSize: 11, color: "#475569",
+      }}>
+        LightEmUp {versionInfo?.display || "(loading…)"}
+      </footer>
       </main>
     </div>
     </PickerStyleContext.Provider>
