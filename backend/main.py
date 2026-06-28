@@ -388,6 +388,12 @@ class GoveeCommandRequest(BaseModel):
     raw_ct: Optional[bool] = None  # skip per-device CT calibration (used by the
                                    # calibration panel so it previews native output)
 
+class FlashRequest(BaseModel):
+    """Identify a single device by flashing it. Exactly one of light_id (Hue)
+    or ip (Govee) is set."""
+    light_id: Optional[str] = None
+    ip: Optional[str] = None
+
 class RoomConfig(BaseModel):
     name: str
     hue_light_ids: list[str] = []
@@ -751,6 +757,47 @@ async def control_govee(req: GoveeCommandRequest):
         color_temp_kelvin=None if applied_rgb else req.color_temp_kelvin,
     )
     return {"results": results}
+
+
+@app.post("/api/identify")
+async def identify_device(req: FlashRequest):
+    """Flash a device so the user can physically locate it.
+
+    Hue: use the bridge's native ``alert: lselect`` (a ~15s breathe) — it's
+    temporary and the bridge restores the prior state automatically, so we
+    don't touch our recorded state.
+
+    Govee: there's no native identify, so blink the device on/off a few times
+    (on/off is digital, unlike the slow color/brightness animation) and then
+    restore its last-known state from ``device_state``. Runs inline; the call
+    returns once the blink sequence finishes (~4s)."""
+    if req.light_id:
+        ip = config.get("hue_bridge_ip")
+        username = config.get("hue_username")
+        if not ip or not username:
+            raise HTTPException(400, "Hue Bridge not paired")
+        ok = await set_hue_light_state(ip, username, req.light_id, {"alert": "lselect"})
+        return {"success": ok}
+
+    if req.ip:
+        prior = config.get("device_state", {}).get(f"govee:{req.ip}", {})
+        for _ in range(3):
+            await govee_lan_turn(req.ip, True)
+            await govee_lan_brightness(req.ip, 100)
+            await asyncio.sleep(0.5)
+            await govee_lan_turn(req.ip, False)
+            await asyncio.sleep(0.5)
+        # Restore last-known state (default: leave it on if we never tracked it).
+        restore_on = prior.get("on", True)
+        await govee_lan_turn(req.ip, bool(restore_on))
+        if restore_on:
+            if prior.get("brightness") is not None:
+                await govee_lan_brightness(req.ip, prior["brightness"])
+            if prior.get("r") is not None and prior.get("g") is not None and prior.get("b") is not None:
+                await govee_lan_color(req.ip, prior["r"], prior["g"], prior["b"])
+        return {"success": True}
+
+    raise HTTPException(400, "Provide light_id (Hue) or ip (Govee)")
 
 
 # ─── Room Endpoints ─────────────────────────────────────────────────────────

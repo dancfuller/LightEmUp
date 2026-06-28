@@ -82,6 +82,16 @@ not in the browser (v2.14.0):
   refresh is emitted at the end. One task per room (`_scene_tasks`); a new apply
   cancels the previous. `POST /api/scenes/room-apply/cancel` cancels by room.
 
+## Device identify (flash to locate)
+`POST /api/identify` flashes one device so the user can physically find it.
+- Hue (`light_id`): sends the bridge's native `alert: "lselect"` (~15s breathe). It's
+  temporary and the bridge restores the prior state, so we don't touch recorded state.
+- Govee (`ip`): there's no native identify and color/brightness animate slowly, so we
+  blink on/off (digital, crisp) 3× then restore the last-known state from
+  `device_state`. Runs inline (~4s) using the existing `govee_lan_*` fire-and-forget
+  helpers. The SKU→name table lives in `discovery.py` (`GOVEE_SKUS`); the frontend
+  falls back to backend `device.name` when its small `GOVEE_SKU_NAMES` subset misses.
+
 ## SSE live-sync (multi-session)
 - `_event_subscribers` queues; `publish_event(type, **fields)` fans out to all open
   clients via `GET /api/events`. Each event is tagged with the originating client

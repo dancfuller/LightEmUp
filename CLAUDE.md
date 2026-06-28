@@ -150,6 +150,7 @@ All endpoints are under `/api/`. Key groups:
 - `/api/rooms`, `/api/rooms/control` — room CRUD and bulk control
 - `/api/room-layouts` — floor plan / line layout CRUD (auto-saved from frontend)
 - `/api/nicknames` — device nickname CRUD
+- `/api/identify` — flash a device to locate it (Hue native `alert`; Govee on/off blink then restore)
 - `/api/favorites` — favorite colors (stored in config, synced across sessions)
 - `/api/scenes/lightning/*` — lightning storm scene start/stop/settings
 - `/api/scenes/room-apply` — backend-driven room color-scene apply (staggered in a
@@ -161,6 +162,11 @@ All endpoints are under `/api/`. Key groups:
 The room map (`room-map.js`) is the most complex frontend component:
 - **Two modes**: "Floor Plan" (2D grid) and "Line" (linear strip). Each mode's layout is preserved independently when toggling.
 - **SVG rendering**: Devices are pill-shaped nodes with color dots, draggable in edit mode with grid snapping.
+- **Full-screen mobile editor (v2.15.0)**: on a phone, entering edit (`isMobile && isEdit`)
+  pops the whole editor into a fixed overlay and renders the SVG at a fixed on-screen
+  cell size (`FS_CELL` px/cell) inside a pannable area, so device pills are big enough
+  to tap/drag. The viewBox stays in user units, so the `getScreenCTM()` click/drag math
+  is unchanged. Desktop keeps the inline fit-to-width map.
 - **Auto-save**: Layouts save to backend 600ms after any change (debounced).
 - **Reference items**: Furniture/landmark items can be placed on the map for spatial context.
 - **Tonal mode**: Generates harmonious color schemes across devices using HSL manipulation — supports random shade variation and spatial gradient modes.

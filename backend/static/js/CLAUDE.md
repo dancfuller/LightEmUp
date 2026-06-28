@@ -99,6 +99,24 @@ conveniences, not logic, and the backend is still the single source of truth:
   (`POST /api/scenes/room-apply`), so there's nothing to gain by round-tripping the
   preview. Do not move preview computation to the backend.
 
+## Settings device list (app.js — `SettingsDeviceRow`)
+Settings → Hue Bridge / Govee Devices render each device through `SettingsDeviceRow`,
+which gives every device (Hue or Govee, present or missing) inline nickname editing
+(same `POST /api/nicknames` as the light cards) and a **Flash** button that hits
+`POST /api/identify` to locate it physically. `flashBody` is the payload
+(`{light_id}` for Hue, `{ip}` for Govee); pass `null` to hide Flash (unreachable/
+missing devices). `extra` injects per-row buttons (the missing-device Re-scan/Forget).
+
+## Full-screen mobile room-layout editor (room-map.js, v2.15.0)
+On a phone the inline fit-to-width map shrinks nodes to untappable size. When
+`isMobile && isEdit` (`fullScreen`), `RoomMap` wraps its whole body in a fixed overlay
+with a sticky header (room name + Done) and renders the SVG at a fixed on-screen cell
+size (`FS_CELL`/`fsScale`) inside a horizontally-pannable container — the viewBox stays
+in user units so all `getScreenCTM()` drag math is unchanged. `touchAction` becomes
+`pan-x pan-y` in full-screen edit (vs `none` inline) so the canvas can be finger-panned;
+an active node drag still wins via its non-passive `touchmove` `preventDefault`. Desktop
+and view-mode are untouched.
+
 ## app.js — orchestration
 State, routing, API calls. `controlHueLight` / `controlGoveeDevice` spread `cmd` into
 the POST body, so passing CT keys (`color_temp` mireds / `color_temp_kelvin`) works

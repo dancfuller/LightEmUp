@@ -212,7 +212,7 @@ GOVEE_SKU_NAMES = {
     "H6003": "Smart LED Bulb",
     "H6004": "Smart LED Bulb",
     "H6006": "Smart LED Bulb 1000LM",
-    "H6008": "Smart LED Bulb 2-Pack",
+    "H6008": "Smart LED Bulb 800LM",
     "H6009": "Smart LED Bulb RGBWW",
     "H600A": "Smart LED Night Light Bulb",
     "H600B": "Smart Bulb",

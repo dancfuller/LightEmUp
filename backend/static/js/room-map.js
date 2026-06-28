@@ -978,6 +978,16 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
   const svgW = (bw + 1) * gridSize;
   const svgH = (bh + 1) * gridSize;
 
+  // Full-screen editor: on a phone the inline fit-to-width map shrinks every
+  // node to an untappable size. When editing on mobile we pop the whole editor
+  // into a fixed full-screen overlay and render the SVG at a fixed on-screen
+  // cell size (FS_CELL px per grid unit) inside a pan/scroll area, so device
+  // pills are big enough to drag. The viewBox stays in user units, so all the
+  // getScreenCTM()-based click/drag math is unaffected by the display scale.
+  const fullScreen = isMobile && isEdit;
+  const FS_CELL = 58; // on-screen px per grid cell in the full-screen editor
+  const fsScale = FS_CELL / gridSize;
+
   // Placed & unplaced device keys
   const placedKeys = new Set(Object.keys(devices));
   const allKeys = allLights.map(l => l.type === "hue" ? `hue:${l.id}` : `govee:${l.ip}`);
@@ -1161,8 +1171,8 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
   const selectedLight = selectedDevice ? lightMap[selectedDevice] : null;
   const selectedColor = selectedLight ? getInitialColor(selectedLight) : null;
 
-  return (
-    <div style={{ marginBottom: 16 }}>
+  const body = (
+    <div style={{ marginBottom: 16, ...(fullScreen ? { marginBottom: 0 } : {}) }}>
       {/* Toolbar */}
       <div style={{
         display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginBottom: 12,
@@ -1304,20 +1314,29 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
           would be clipped silently — fit-to-width avoids that entirely. */}
       <div style={{
         borderRadius: 12, border: "1px solid #1e293b", background: "#0f172a",
-        width: "100%", maxWidth: "100%", overflow: "hidden",
+        width: "100%", maxWidth: "100%",
+        // Inline: clip to fit-width. Full-screen: the SVG is larger than the
+        // viewport — pan horizontally here; vertical scroll is owned by the
+        // overlay so we don't nest two vertical scrollers.
+        overflowX: fullScreen ? "auto" : "hidden",
+        overflowY: "hidden",
+        WebkitOverflowScrolling: "touch",
         boxSizing: "border-box",
       }}>
         <svg
-          width="100%"
-          height="auto"
+          width={fullScreen ? svgW * fsScale : "100%"}
+          height={fullScreen ? svgH * fsScale : "auto"}
           viewBox={`0 0 ${svgW} ${svgH}`}
           preserveAspectRatio="xMidYMid meet"
           style={{
             display: "block",
-            width: "100%",
-            height: "auto",
-            maxWidth: "100%",
-            touchAction: isEdit ? "none" : "auto",
+            width: fullScreen ? `${svgW * fsScale}px` : "100%",
+            height: fullScreen ? `${svgH * fsScale}px` : "auto",
+            maxWidth: fullScreen ? "none" : "100%",
+            // Full-screen edit: allow finger-panning the oversized canvas; an
+            // active node drag still wins because its non-passive touchmove
+            // preventDefaults. Inline edit blocks pan so drags aren't hijacked.
+            touchAction: isEdit ? (fullScreen ? "pan-x pan-y" : "none") : "auto",
             cursor: placingFurniture ? "crosshair" : undefined,
           }}
           onClick={handleSvgClick}
@@ -1828,6 +1847,38 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
           )}
         </div>
       )}
+    </div>
+  );
+
+  if (!fullScreen) return body;
+
+  // Full-screen mobile editor: a fixed overlay with a sticky header (room name
+  // + Done) above the scrollable editor body. Tapping Done flips isEdit off,
+  // which drops back to the normal inline map.
+  return (
+    <div style={{
+      position: "fixed", inset: 0, zIndex: 1000, background: "#0b1220",
+      display: "flex", flexDirection: "column",
+      paddingTop: "env(safe-area-inset-top)", paddingBottom: "env(safe-area-inset-bottom)",
+    }}>
+      <div style={{
+        display: "flex", alignItems: "center", gap: 10, padding: "10px 14px",
+        borderBottom: "1px solid #1e293b", background: "#0f172a", flexShrink: 0,
+      }}>
+        <span style={{ fontSize: 15, fontWeight: 700, color: "#e2e8f0", flex: "1 1 auto", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          Edit layout · {roomName}
+        </span>
+        <button
+          onClick={() => { setIsEdit(false); setPlacingDevice(null); setPlacingFurniture(null); setPlacingLandmark(false); setSelectedDeviceKeys([]); setSelectedFurniture(null); setHoverGrid(null); }}
+          style={{
+            padding: "8px 18px", borderRadius: 8, border: "none",
+            background: "#6366f1", color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer",
+          }}
+        >Done</button>
+      </div>
+      <div style={{ flex: "1 1 auto", minHeight: 0, overflowY: "auto", WebkitOverflowScrolling: "touch", padding: 12 }}>
+        {body}
+      </div>
     </div>
   );
 }
