@@ -648,6 +648,14 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
   });
 
   const hasLayout = placedColorLights.length > 0;
+  const hasColorLights = allLights.some(l => l?.capabilities?.has_color);
+
+  // The palette is a *pool*, not a per-light list: with more colors than lights,
+  // the assignment (computePalette) picks a distinct subset sized to the room
+  // and Shuffle re-rolls which colors are used. So we deliberately DON'T trim
+  // the palette down to the light/segment count — that would strand the rest of
+  // the palette and make Shuffle cycle the same two colors. The room only ever
+  // *shows* as many colors as it has lights; the extras stay in the shuffle pool.
 
   // ─── Adjacency graph (for palette mode) ─────────────────────────────
   // Two entries (lights or segments) are adjacent if any of:
@@ -1969,15 +1977,25 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
         </div>
       )}
 
-      {!hasLayout && (
+      {!hasColorLights && (
         <div style={{ fontSize: 12, color: "#64748b", padding: "12px 0" }}>
-          {allLights.some(l => l.capabilities?.has_color)
-            ? <>Place color lights on the room map first (Map &rarr; Edit Layout).</>
-            : <>This room has no color lights.</>}
+          This room has no color lights.
         </div>
       )}
 
-      {hasLayout && (
+      {/* Layout not finished: still let the user pick a palette/scene (it's
+          saved), but warn that color separation needs the room laid out. */}
+      {hasColorLights && !hasLayout && (
+        <div style={{
+          fontSize: 12, color: "#fbbf24", marginBottom: 12, padding: "8px 12px",
+          background: "rgba(251,191,36,0.1)", border: "1px solid rgba(251,191,36,0.3)",
+          borderRadius: 8, lineHeight: 1.4,
+        }}>
+          Finish setting up the room layout in Controls for better color separation in this room.
+        </div>
+      )}
+
+      {hasColorLights && (
         <>
           {/* ─── Gradient mode ───────────────────────────────────── */}
           {mode === "gradient" && (

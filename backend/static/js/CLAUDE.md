@@ -57,6 +57,19 @@ Assigns colors/temperatures across a room's devices and applies them.
   fallbacks resolve it. Each custom seed
   slot can be Color (hue) or White (a `kelvin` temperature); `applyMinSat` must not
   saturation-clamp `kelvin` entries.
+- **Palette is a shuffle pool, not a per-light list (v2.17.0):** do NOT trim the palette
+  down to the light/segment count. `computePalette` already picks a distinct, room-sized
+  subset from the full `paletteColors` and Shuffle (`shuffleSeed`) re-rolls which colors
+  are used — so a 2-light room with an 8-colour palette cycles through all 8 across
+  shuffles. Trimming to slot count strands the rest of the palette and makes Shuffle
+  repeat the same two colors — don't reintroduce it. The room only ever *shows* as many
+  colors as it has lights; the extras stay in the pool. (Stepper/seeds keep their plain
+  caps: palette ≤24, custom seeds ≤4.)
+- **Selectable before layout (v2.17.0):** the mode/palette UI is gated on
+  `hasColorLights`, not `hasLayout`, so a palette/scene can be chosen (and persisted)
+  before the room map is laid out — a warning banner ("Finish setting up the room layout
+  in Controls…") shows above it. Preview + Apply still require a layout (`generatePreview`
+  no-ops without one, and Apply is disabled while `preview` is null).
 - **Target vendor:** `targetVendor` (`"all"`/`"hue"`/`"govee"`) filters which devices
   apply (toggle only shown when both vendors are present). Persisted as `target_vendor`.
 - **Apply is backend-driven (v2.13.0).** `applyColors` resolves the preview into a
