@@ -158,12 +158,15 @@ The map was unusable crammed into the ~416px controls drawer (`ControlSurface`).
   drag); a line numbers by **position** (`sort` by x — reads 1..N, stable across the
   order-preserving compaction, changes only on a deliberate reorder). Do NOT sort the
   floor-plan legend by position — that renumbers/recolors dots every time you move one.
-- **Line compaction** (`compactLinearLayout`): a line is an *ordering*, so arbitrary
-  x-gaps (e.g. devices at x=1,12,33,50 on a length-52 strip) just push most dots off
-  screen. On opening the editor, line entries (placed devices + each segment of an
-  expanded device) are renumbered to consecutive positions `1..N` by order and the
-  boundary shrunk to fit — so every dot is visible and big. No-op once compact (doesn't
-  loop or fight drags). Start at 1, not 0, so the first dot isn't clipped at the edge.
+- **Fit-to-content on open** (keyed on `[expanded, layout?.mode]`): the map packs to its
+  content so it isn't huge/sparse. Both are no-ops once fit (don't loop or fight drags):
+  - `compactLinearLayout` (line): renumber entries (placed devices + each segment of an
+    expanded device) to consecutive positions `1..N` by order and shrink the boundary.
+    Start at 1, not 0, so the first dot isn't clipped at the edge.
+  - `fitFloorPlanLayout` (floor plan): collapse empty rows/columns — map every *used* x
+    and y coordinate (device/segment cells + every cell a furniture item covers) to a
+    consecutive slot, preserving relative order, and shrink the boundary. Devices pack
+    together; the legend comes back on-screen.
 
 ## app.js — orchestration
 State, routing, API calls. `controlHueLight` / `controlGoveeDevice` spread `cmd` into

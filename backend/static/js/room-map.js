@@ -598,6 +598,70 @@ function compactLinearLayout(layout) {
   };
 }
 
+// Floor-plan equivalent of line compaction: collapse empty rows/columns so the
+// map packs to its content instead of being huge and sparse. Every *used* x (and
+// y) coordinate is mapped to a consecutive slot (device/segment cells, plus every
+// cell a furniture item covers so furniture keeps its size), preserving relative
+// order (which device is left-of/above which). Positions are integer grid cells.
+// Returns a new layout, or null when already packed (so it doesn't loop).
+function fitFloorPlanLayout(layout) {
+  if (!layout || layout.mode === "linear") return null;
+  const devices = layout.devices || {};
+  const segments = layout.segments || {};
+  const furniture = layout.furniture || [];
+  const MARGIN = 1;
+
+  const xset = new Set(), yset = new Set();
+  Object.entries(devices).forEach(([key, pos]) => {
+    const seg = segments[key];
+    if (seg?.expanded && seg.positions) {
+      Object.values(seg.positions).forEach(sp => { xset.add(Math.round(sp.x)); yset.add(Math.round(sp.y)); });
+    } else {
+      xset.add(Math.round(pos.x)); yset.add(Math.round(pos.y));
+    }
+  });
+  if (xset.size === 0) return null;
+  furniture.forEach(f => {
+    for (let x = Math.floor(f.x); x < Math.ceil(f.x + (f.w || 1)); x++) xset.add(x);
+    for (let y = Math.floor(f.y); y < Math.ceil(f.y + (f.h || 1)); y++) yset.add(y);
+  });
+
+  const xs = [...xset].sort((a, b) => a - b);
+  const ys = [...yset].sort((a, b) => a - b);
+  const xmap = new Map(xs.map((v, i) => [v, i + MARGIN]));
+  const ymap = new Map(ys.map((v, i) => [v, i + MARGIN]));
+  const rx = (x) => xmap.get(Math.round(x)) ?? (x);
+  const ry = (y) => ymap.get(Math.round(y)) ?? (y);
+  const width = Math.max(xs.length + 2 * MARGIN, 6);
+  const height = Math.max(ys.length + 2 * MARGIN, 6);
+
+  // Already packed? (used coords are consecutive from MARGIN and boundary tight.)
+  const packed = xs.every((v, i) => v === i + MARGIN) && ys.every((v, i) => v === i + MARGIN);
+  if (packed && layout.boundary?.width === width && layout.boundary?.height === height) return null;
+
+  const newDevices = {};
+  Object.entries(devices).forEach(([key, pos]) => { newDevices[key] = { ...pos, x: rx(pos.x), y: ry(pos.y) }; });
+  const newSegments = {};
+  Object.entries(segments).forEach(([key, seg]) => {
+    if (seg?.expanded && seg.positions) {
+      const np = {};
+      Object.entries(seg.positions).forEach(([si, sp]) => { np[si] = { ...sp, x: rx(sp.x), y: ry(sp.y) }; });
+      newSegments[key] = { ...seg, positions: np };
+    } else {
+      newSegments[key] = seg;
+    }
+  });
+  const newFurniture = furniture.map(f => ({ ...f, x: rx(f.x), y: ry(f.y) }));
+
+  return {
+    ...layout,
+    devices: newDevices,
+    segments: newSegments,
+    furniture: newFurniture,
+    boundary: { ...(layout.boundary || {}), width, height },
+  };
+}
+
 function SegmentNode({ deviceKey, segIndex, pos, gridSize, light, nicknames, packLabel, colorOverride, isEdit, isSelected, onSelect, onDragEnd, compact, legendNum, dotColor }) {
   const [dragging, setDragging] = useState(false);
   const [dragPos, setDragPos] = useState(null);
@@ -885,14 +949,15 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
     });
   };
 
-  // On opening the editor, compact a sparse line so every dot fits on screen
-  // (arbitrary gaps in a line carry no meaning; order does). No-op if already
-  // compact, so it doesn't loop or fight the user's drags.
+  // On opening the editor, fit the layout to its content so the map isn't huge
+  // and sparse: a line compacts to consecutive positions; a floor plan crops
+  // empty margins and shifts to the origin. No-op if already fit, so it doesn't
+  // loop or fight the user's drags.
   useEffect(() => {
     if (!expanded) return;
-    const compacted = compactLinearLayout(layout);
-    if (compacted) updateLayout(() => compacted);
-  }, [expanded]);
+    const fixed = layout?.mode === "linear" ? compactLinearLayout(layout) : fitFloorPlanLayout(layout);
+    if (fixed) updateLayout(() => fixed);
+  }, [expanded, layout?.mode]);
 
   // ─── Furniture / landmark logic ────────────────────────────────────────
   const addFurniture = (type, x, y) => {
