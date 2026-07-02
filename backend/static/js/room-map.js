@@ -598,60 +598,58 @@ function compactLinearLayout(layout) {
   };
 }
 
-// Floor-plan equivalent of line compaction: collapse empty rows/columns so the
-// map packs to its content instead of being huge and sparse. Every *used* x (and
-// y) coordinate is mapped to a consecutive slot (device/segment cells, plus every
-// cell a furniture item covers so furniture keeps its size), preserving relative
-// order (which device is left-of/above which). Positions are integer grid cells.
-// Returns a new layout, or null when already packed (so it doesn't loop).
+// Floor-plan fit-to-content: crop wasted outer space. A 2D layout often sits in
+// a corner of an over-large grid (or with big margins), so the map is huge and
+// the legend gets pushed off-screen. Shift ALL content (devices, segments,
+// furniture) so its bounding box starts one cell from the origin, and shrink the
+// boundary to the content extent + a couple cells of drag room. This is a rigid
+// translate — it does NOT collapse the gaps between devices, so it preserves the
+// user's arrangement and leaves the open grid intact to drag into (packing would
+// fight placement and re-collapse on every reopen). Returns a new layout, or
+// null when already fit (so it doesn't loop).
 function fitFloorPlanLayout(layout) {
   if (!layout || layout.mode === "linear") return null;
   const devices = layout.devices || {};
   const segments = layout.segments || {};
   const furniture = layout.furniture || [];
-  const MARGIN = 1;
+  const MARGIN = 1;      // shift the top-left of content this far from the origin
+  const PAD = 3;         // extra empty cells beyond the content for drag room
 
-  const xset = new Set(), yset = new Set();
+  const pts = [];
   Object.entries(devices).forEach(([key, pos]) => {
     const seg = segments[key];
-    if (seg?.expanded && seg.positions) {
-      Object.values(seg.positions).forEach(sp => { xset.add(Math.round(sp.x)); yset.add(Math.round(sp.y)); });
-    } else {
-      xset.add(Math.round(pos.x)); yset.add(Math.round(pos.y));
-    }
+    if (seg?.expanded && seg.positions) Object.values(seg.positions).forEach(sp => pts.push([sp.x, sp.y]));
+    else pts.push([pos.x, pos.y]);
   });
-  if (xset.size === 0) return null;
-  furniture.forEach(f => {
-    for (let x = Math.floor(f.x); x < Math.ceil(f.x + (f.w || 1)); x++) xset.add(x);
-    for (let y = Math.floor(f.y); y < Math.ceil(f.y + (f.h || 1)); y++) yset.add(y);
-  });
+  furniture.forEach(f => { pts.push([f.x, f.y]); pts.push([f.x + (f.w || 1), f.y + (f.h || 1)]); });
+  if (pts.length === 0) return null;
 
-  const xs = [...xset].sort((a, b) => a - b);
-  const ys = [...yset].sort((a, b) => a - b);
-  const xmap = new Map(xs.map((v, i) => [v, i + MARGIN]));
-  const ymap = new Map(ys.map((v, i) => [v, i + MARGIN]));
-  const rx = (x) => xmap.get(Math.round(x)) ?? (x);
-  const ry = (y) => ymap.get(Math.round(y)) ?? (y);
-  const width = Math.max(xs.length + 2 * MARGIN, 6);
-  const height = Math.max(ys.length + 2 * MARGIN, 6);
+  const minX = Math.min(...pts.map(p => p[0]));
+  const minY = Math.min(...pts.map(p => p[1]));
+  const maxX = Math.max(...pts.map(p => p[0]));
+  const maxY = Math.max(...pts.map(p => p[1]));
+  const dx = MARGIN - Math.floor(minX);
+  const dy = MARGIN - Math.floor(minY);
+  const width = Math.max(Math.ceil(maxX - minX) + MARGIN + PAD, 8);
+  const height = Math.max(Math.ceil(maxY - minY) + MARGIN + PAD, 8);
 
-  // Already packed? (used coords are consecutive from MARGIN and boundary tight.)
-  const packed = xs.every((v, i) => v === i + MARGIN) && ys.every((v, i) => v === i + MARGIN);
-  if (packed && layout.boundary?.width === width && layout.boundary?.height === height) return null;
+  const curW = layout.boundary?.width, curH = layout.boundary?.height;
+  if (dx === 0 && dy === 0 && curW === width && curH === height) return null; // already fit
 
+  const shift = (p) => ({ ...p, x: p.x + dx, y: p.y + dy });
   const newDevices = {};
-  Object.entries(devices).forEach(([key, pos]) => { newDevices[key] = { ...pos, x: rx(pos.x), y: ry(pos.y) }; });
+  Object.entries(devices).forEach(([key, pos]) => { newDevices[key] = shift(pos); });
   const newSegments = {};
   Object.entries(segments).forEach(([key, seg]) => {
     if (seg?.expanded && seg.positions) {
       const np = {};
-      Object.entries(seg.positions).forEach(([si, sp]) => { np[si] = { ...sp, x: rx(sp.x), y: ry(sp.y) }; });
+      Object.entries(seg.positions).forEach(([si, sp]) => { np[si] = shift(sp); });
       newSegments[key] = { ...seg, positions: np };
     } else {
       newSegments[key] = seg;
     }
   });
-  const newFurniture = furniture.map(f => ({ ...f, x: rx(f.x), y: ry(f.y) }));
+  const newFurniture = furniture.map(f => ({ ...f, x: f.x + dx, y: f.y + dy }));
 
   return {
     ...layout,
@@ -2152,7 +2150,7 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
               : "This room has no color lights."}
           </div>
         )}
-        <button onClick={() => setExpanded(true)} style={{
+        <button onClick={() => { setExpanded(true); setIsEdit(true); }} style={{
           width: "100%", padding: "10px 14px", borderRadius: 10, border: "1px solid #334155",
           background: "rgba(99,102,241,0.15)", color: "#a5b4fc", fontSize: 13, fontWeight: 700, cursor: "pointer",
         }}>Open layout editor · {isLinear ? "Line" : "Floor Plan"}</button>

@@ -158,15 +158,21 @@ The map was unusable crammed into the ~416px controls drawer (`ControlSurface`).
   drag); a line numbers by **position** (`sort` by x — reads 1..N, stable across the
   order-preserving compaction, changes only on a deliberate reorder). Do NOT sort the
   floor-plan legend by position — that renumbers/recolors dots every time you move one.
-- **Fit-to-content on open** (keyed on `[expanded, layout?.mode]`): the map packs to its
-  content so it isn't huge/sparse. Both are no-ops once fit (don't loop or fight drags):
+- **Opens in edit mode** (v2.19.4): the "Open layout editor" launcher sets `isEdit`
+  true, because a full-window *editor* you can't drag in is useless (drag is gated on
+  `isEdit`; view mode only selects). Dragging is verified working — the gate was the
+  only reason it "didn't let you." The `touchAction: pan-x pan-y` still lets an active
+  node drag win via its non-passive `touchmove` `preventDefault`.
+- **Fit-to-content on open** (keyed on `[expanded, layout?.mode]`), no-op once fit:
   - `compactLinearLayout` (line): renumber entries (placed devices + each segment of an
     expanded device) to consecutive positions `1..N` by order and shrink the boundary.
     Start at 1, not 0, so the first dot isn't clipped at the edge.
-  - `fitFloorPlanLayout` (floor plan): collapse empty rows/columns — map every *used* x
-    and y coordinate (device/segment cells + every cell a furniture item covers) to a
-    consecutive slot, preserving relative order, and shrink the boundary. Devices pack
-    together; the legend comes back on-screen.
+  - `fitFloorPlanLayout` (floor plan): **crop, don't pack** — a rigid translate that
+    shifts content to the origin and shrinks the boundary to the content extent + a few
+    cells of drag room. It removes wasted outer margins but preserves the user's
+    arrangement AND the open grid to drag into. (An earlier version packed empty
+    rows/columns; that collapsed drag space and re-collapsed the layout on every reopen,
+    fighting placement — don't reintroduce it.)
 
 ## app.js — orchestration
 State, routing, API calls. `controlHueLight` / `controlGoveeDevice` spread `cmd` into
