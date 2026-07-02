@@ -403,7 +403,11 @@ function DeviceNode({ deviceKey, pos, gridSize, light, nicknames, colorOverride,
   // pill — names live in the legend below the strip so many devices fit on one
   // row. The number matches the legend entry.
   if (compact) {
-    const cdotR = 13;
+    // Size the dot as a fraction of a grid cell so it renders at a constant,
+    // readable on-screen size once the full-window editor scales cells up.
+    const cdotR = gridSize * 0.36;
+    const numFont = gridSize * 0.36;
+    const badgeR = gridSize * 0.2;
     const striped = liveSegmentColors && Object.keys(liveSegmentColors).length > 1;
     const clipId = `cdot-${deviceKey.replace(/[^a-z0-9]/gi, "_")}`;
     const segs = striped ? Object.keys(liveSegmentColors).map(k => parseInt(k)).sort((a, b) => a - b) : [];
@@ -439,17 +443,17 @@ function DeviceNode({ deviceKey, pos, gridSize, light, nicknames, colorOverride,
         )}
         {legendNum != null && (
           <text x={cx} y={cy} textAnchor="middle" dominantBaseline="central"
-            fill="#fff" stroke="rgba(0,0,0,0.65)" strokeWidth={3} paintOrder="stroke"
-            fontSize={12} fontFamily="sans-serif" fontWeight="800" pointerEvents="none"
+            fill="#fff" stroke="rgba(0,0,0,0.65)" strokeWidth={numFont * 0.25} paintOrder="stroke"
+            fontSize={numFont} fontFamily="sans-serif" fontWeight="800" pointerEvents="none"
           >{legendNum}</text>
         )}
         {canExpand && (
           <g onClick={(e) => { e.stopPropagation(); onToggleSegments(deviceKey); }} style={{ cursor: "pointer" }}>
             <title>{isExpanded ? "Collapse to one light" : `Split into ${segCount} segments`}</title>
-            <circle cx={cx + cdotR - 1} cy={cy - cdotR + 1} r={7}
+            <circle cx={cx + cdotR - badgeR * 0.3} cy={cy - cdotR + badgeR * 0.3} r={badgeR}
               fill={isExpanded ? "#6366f1" : "#334155"} stroke={isExpanded ? "#a5b4fc" : "#64748b"} strokeWidth={1} />
-            <text x={cx + cdotR - 1} y={cy - cdotR + 4.5} textAnchor="middle"
-              fill={isExpanded ? "#fff" : "#a5b4fc"} fontSize={8} fontFamily="sans-serif" fontWeight="bold" pointerEvents="none"
+            <text x={cx + cdotR - badgeR * 0.3} y={cy - cdotR + badgeR * 0.3} textAnchor="middle" dominantBaseline="central"
+              fill={isExpanded ? "#fff" : "#a5b4fc"} fontSize={badgeR * 1.1} fontFamily="sans-serif" fontWeight="bold" pointerEvents="none"
             >{isExpanded ? "−" : String(segCount)}</text>
           </g>
         )}
@@ -550,6 +554,52 @@ function DeviceNode({ deviceKey, pos, gridSize, light, nicknames, colorOverride,
 // Convert segment index to letter label: 0→A, 1→B, etc.
 function segLetter(idx) { return String.fromCharCode(65 + idx); }
 
+// A line is an *ordering* — arbitrary gaps between devices (e.g. x=1,12,33,50
+// over a length-52 strip) just make the map span far wider than the screen so
+// most dots fall off the edge. Compact every entry (a placed device, or each
+// segment of an expanded device) to consecutive positions 0,1,2… by their
+// current left-to-right order, and shrink the boundary to match. Returns a new
+// layout, or null when already compact (so it doesn't loop).
+function compactLinearLayout(layout) {
+  if (!layout || layout.mode !== "linear") return null;
+  const devices = layout.devices || {};
+  const segments = layout.segments || {};
+  const entries = [];
+  Object.entries(devices).forEach(([key, pos]) => {
+    const seg = segments[key];
+    if (seg?.expanded && seg.positions) {
+      Object.entries(seg.positions).forEach(([si, sp]) => entries.push({ kind: "seg", key, si, x: sp.x }));
+    } else {
+      entries.push({ kind: "device", key, x: pos.x });
+    }
+  });
+  if (entries.length === 0) return null;
+  const xs = entries.map(e => e.x);
+  // Compact target: positions 1..N (start at 1 so the first dot isn't clipped
+  // at the left edge, which sits at x=0).
+  const alreadyCompact = Math.min(...xs) === 1 && Math.max(...xs) === entries.length
+    && new Set(xs).size === entries.length;
+  if (alreadyCompact) return null;
+  entries.sort((a, b) => a.x - b.x);
+  const newDevices = { ...devices };
+  const newSegments = { ...segments };
+  entries.forEach((e, i) => {
+    const x = i + 1;
+    if (e.kind === "device") {
+      newDevices[e.key] = { ...devices[e.key], x, y: 0 };
+    } else {
+      const seg = newSegments[e.key];
+      newSegments[e.key] = { ...seg, positions: { ...seg.positions, [e.si]: { ...seg.positions[e.si], x, y: 0 } } };
+    }
+  });
+  return {
+    ...layout,
+    devices: newDevices,
+    segments: newSegments,
+    boundary: { ...(layout.boundary || {}), type: "line", length: Math.max(entries.length + 2, 6) },
+  };
+}
+
 function SegmentNode({ deviceKey, segIndex, pos, gridSize, light, nicknames, packLabel, colorOverride, isEdit, isSelected, onSelect, onDragEnd, compact, legendNum }) {
   const [dragging, setDragging] = useState(false);
   const [dragPos, setDragPos] = useState(null);
@@ -626,9 +676,10 @@ function SegmentNode({ deviceKey, segIndex, pos, gridSize, light, nicknames, pac
   const luminance = (parseInt(color.slice(1, 3), 16) * 0.299 + parseInt(color.slice(3, 5), 16) * 0.587 + parseInt(color.slice(5, 7), 16) * 0.114) / 255;
   const textColor = luminance > 0.55 ? "#1e293b" : "#f8fafc";
 
-  // Compact mode (linear layout): numbered dashed dot; name lives in the legend.
+  // Compact mode: numbered dashed dot; name lives in the legend.
   if (compact) {
-    const cdotR = 12;
+    const cdotR = gridSize * 0.32;
+    const numFont = gridSize * 0.34;
     return (
       <g style={{ cursor: isEdit ? "grab" : "pointer", transform: `translate(${dx - cx}px, ${dy - cy}px)`, transition }}
         onMouseDown={startDrag} onTouchStart={startDrag}
@@ -643,8 +694,8 @@ function SegmentNode({ deviceKey, segIndex, pos, gridSize, light, nicknames, pac
         />
         {legendNum != null && (
           <text x={cx} y={cy} textAnchor="middle" dominantBaseline="central"
-            fill="#fff" stroke="rgba(0,0,0,0.65)" strokeWidth={3} paintOrder="stroke"
-            fontSize={11} fontFamily="sans-serif" fontWeight="800" pointerEvents="none"
+            fill="#fff" stroke="rgba(0,0,0,0.65)" strokeWidth={numFont * 0.25} paintOrder="stroke"
+            fontSize={numFont} fontFamily="sans-serif" fontWeight="800" pointerEvents="none"
           >{legendNum}</text>
         )}
       </g>
@@ -702,6 +753,10 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
   const isMobile = useIsMobile();
   const [layout, setLayout] = useState(null);
   const [isEdit, setIsEdit] = useState(false);
+  // The layout map opens in a full-window overlay (all devices, view + edit)
+  // so it isn't crushed into the ~416px controls drawer. Collapsed, the drawer
+  // shows a readable numbered legend + an "Open" launcher instead.
+  const [expanded, setExpanded] = useState(false);
   // selectedDeviceKeys is the multi-select set of placed device keys (edit
   // mode allows shift/ctrl-click to add). The single-device action bar uses
   // selectedDeviceKeys[0] when length === 1.
@@ -832,6 +887,15 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
       return next;
     });
   };
+
+  // On opening the editor, compact a sparse line so every dot fits on screen
+  // (arbitrary gaps in a line carry no meaning; order does). No-op if already
+  // compact, so it doesn't loop or fight the user's drags.
+  useEffect(() => {
+    if (!expanded) return;
+    const compacted = compactLinearLayout(layout);
+    if (compacted) updateLayout(() => compacted);
+  }, [expanded]);
 
   // ─── Furniture / landmark logic ────────────────────────────────────────
   const addFurniture = (type, x, y) => {
@@ -1067,8 +1131,8 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
   // cell size (FS_CELL px per grid unit) inside a pan/scroll area, so device
   // pills are big enough to drag. The viewBox stays in user units, so all the
   // getScreenCTM()-based click/drag math is unaffected by the display scale.
-  const fullScreen = isMobile && isEdit;
-  const FS_CELL = 58; // on-screen px per grid cell in the full-screen editor
+  const fullScreen = expanded;
+  const FS_CELL = 66; // on-screen px per grid cell in the full-window editor
   const fsScale = FS_CELL / gridSize;
 
   // Placed & unplaced device keys
@@ -1254,38 +1318,38 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
   const selectedLight = selectedDevice ? lightMap[selectedDevice] : null;
   const selectedColor = selectedLight ? getInitialColor(selectedLight) : null;
 
-  // Linear layout renders compact numbered dots + a legend (named pills don't
-  // fit on a single row). Build the ordered legend (left-to-right) and a
-  // key→number map that the dots use so the numbers line up with the legend.
+  // Both layouts render as compact numbered colored dots + a legend that maps
+  // each number to a device name (named pills get unwieldy with long names).
+  // The number is the identifier; the color lets you glance-match a dot to its
+  // legend row. Order spatially (row-major: top→bottom, then left→right) so the
+  // numbers read naturally; for a line that collapses to left→right.
   const legend = [];
-  if (isLinear) {
-    Object.entries(devices).forEach(([key, pos]) => {
-      const light = lightMap[key];
-      if (!light) return;
-      const seg = segments[key];
-      if (seg?.expanded && seg.positions) {
-        Object.entries(seg.positions).forEach(([si, sp]) => {
-          const ov = segmentColorOverrides[`${key}:seg${si}`];
-          legend.push({
-            key: `${key}:seg${si}`, x: sp.x,
-            label: `${getDeviceLabel(light, nicknames)} ${segLetter(parseInt(si))}`,
-            color: ov ? `rgb(${ov.r},${ov.g},${ov.b})` : getDeviceColor(light),
-            on: light.state?.on,
-          });
-        });
-      } else {
-        const ov = deviceColorOverrides[key];
+  Object.entries(devices).forEach(([key, pos]) => {
+    const light = lightMap[key];
+    if (!light) return;
+    const seg = segments[key];
+    if (seg?.expanded && seg.positions) {
+      Object.entries(seg.positions).forEach(([si, sp]) => {
+        const ov = segmentColorOverrides[`${key}:seg${si}`];
         legend.push({
-          key, x: pos.x,
-          label: getDeviceLabel(light, nicknames),
+          key: `${key}:seg${si}`, x: sp.x, y: isLinear ? 0 : sp.y,
+          label: `${getDeviceLabel(light, nicknames)} ${segLetter(parseInt(si))}`,
           color: ov ? `rgb(${ov.r},${ov.g},${ov.b})` : getDeviceColor(light),
           on: light.state?.on,
         });
-      }
-    });
-    legend.sort((a, b) => a.x - b.x);
-    legend.forEach((e, i) => { e.num = i + 1; });
-  }
+      });
+    } else {
+      const ov = deviceColorOverrides[key];
+      legend.push({
+        key, x: pos.x, y: isLinear ? 0 : pos.y,
+        label: getDeviceLabel(light, nicknames),
+        color: ov ? `rgb(${ov.r},${ov.g},${ov.b})` : getDeviceColor(light),
+        on: light.state?.on,
+      });
+    }
+  });
+  legend.sort((a, b) => (a.y - b.y) || (a.x - b.x));
+  legend.forEach((e, i) => { e.num = i + 1; });
   const legendNumByKey = {};
   legend.forEach(e => { legendNumByKey[e.key] = e.num; });
 
@@ -1593,7 +1657,7 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
                     isSelected={selectedDeviceKeys.includes(key)}
                     onSelect={(dk) => handleDeviceSelect(dk, false)}
                     onDragEnd={handleSegDragEnd}
-                    compact={isLinear}
+                    compact
                     legendNum={legendNumByKey[`${key}:seg${si}`]}
                   />
                 );
@@ -1617,7 +1681,7 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
                 segmentInfo={segmentInfo}
                 segments={segData}
                 onToggleSegments={handleToggleSegments}
-                compact={isLinear}
+                compact
                 legendNum={legendNumByKey[key]}
               />
             );
@@ -1646,8 +1710,8 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
         </svg>
       </div>
 
-      {/* Legend (linear layout) — maps each numbered dot to its device name. */}
-      {isLinear && legend.length > 0 && (
+      {/* Legend — maps each numbered dot to its device name (both layouts). */}
+      {legend.length > 0 && (
         <div style={{
           display: "flex", flexWrap: "wrap", gap: isMobile ? 6 : 10,
           marginTop: 10, padding: "8px 10px",
@@ -1997,11 +2061,40 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
     </div>
   );
 
-  if (!fullScreen) return body;
+  if (!expanded) {
+    // Collapsed drawer view: a readable numbered legend + a launcher button.
+    // The actual (large) map and editing happen in the full-window overlay so
+    // they aren't crushed into the ~416px controls drawer.
+    return (
+      <div style={{ marginBottom: 4 }}>
+        {legend.length > 0 ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 10 }}>
+            {legend.map(e => (
+              <div key={e.key} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "#cbd5e1", opacity: e.on === false ? 0.55 : 1 }}>
+                <span style={{ width: 20, height: 20, borderRadius: "50%", background: e.color, border: "1px solid rgba(255,255,255,0.25)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                  <span style={{ fontSize: 10, fontWeight: 800, color: "#fff", textShadow: "0 0 2px rgba(0,0,0,0.85)" }}>{e.num}</span>
+                </span>
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.label}</span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div style={{ fontSize: 12, color: "#64748b", marginBottom: 10 }}>
+            {allLights.some(l => l.capabilities?.has_color)
+              ? "No layout yet — open the editor to place your lights."
+              : "This room has no color lights."}
+          </div>
+        )}
+        <button onClick={() => setExpanded(true)} style={{
+          width: "100%", padding: "10px 14px", borderRadius: 10, border: "1px solid #334155",
+          background: "rgba(99,102,241,0.15)", color: "#a5b4fc", fontSize: 13, fontWeight: 700, cursor: "pointer",
+        }}>Open layout editor · {isLinear ? "Line" : "Floor Plan"}</button>
+      </div>
+    );
+  }
 
-  // Full-screen mobile editor: a fixed overlay with a sticky header (room name
-  // + Done) above the scrollable editor body. Tapping Done flips isEdit off,
-  // which drops back to the normal inline map.
+  // Full-window layout editor (all devices): a fixed overlay with a sticky
+  // header (room name + Done) above the scrollable map/legend/edit tools.
   return (
     <div style={{
       position: "fixed", inset: 0, zIndex: 1000, background: "#0b1220",
@@ -2013,17 +2106,17 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
         borderBottom: "1px solid #1e293b", background: "#0f172a", flexShrink: 0,
       }}>
         <span style={{ fontSize: 15, fontWeight: 700, color: "#e2e8f0", flex: "1 1 auto", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          Edit layout · {roomName}
+          {roomName} · {isLinear ? "Line" : "Floor Plan"} layout
         </span>
         <button
-          onClick={() => { setIsEdit(false); setPlacingDevice(null); setPlacingFurniture(null); setPlacingLandmark(false); setSelectedDeviceKeys([]); setSelectedFurniture(null); setHoverGrid(null); }}
+          onClick={() => { setExpanded(false); setPlacingDevice(null); setPlacingFurniture(null); setPlacingLandmark(false); setSelectedDeviceKeys([]); setSelectedFurniture(null); setHoverGrid(null); }}
           style={{
             padding: "8px 18px", borderRadius: 8, border: "none",
             background: "#6366f1", color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer",
           }}
         >Done</button>
       </div>
-      <div style={{ flex: "1 1 auto", minHeight: 0, overflowY: "auto", WebkitOverflowScrolling: "touch", padding: 12 }}>
+      <div style={{ flex: "1 1 auto", minHeight: 0, overflowY: "auto", WebkitOverflowScrolling: "touch", padding: isMobile ? 12 : 20 }}>
         {body}
       </div>
     </div>

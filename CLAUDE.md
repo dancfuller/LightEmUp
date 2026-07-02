@@ -46,6 +46,18 @@ instead of spelunking, and **update them when you change how something works.**
   it should run in. (Dan works in the living room at night; a stray test once lit the
   bedroom/study/stairs and woke the house.)
 
+### Verifying UI changes (screenshot before you ship)
+- **Don't declare a frontend/UI change done without looking at it.** There is no build
+  step, so a change can transpile fine and still render wrong (this repo's room-map UI
+  took several blind iterations before this was set up). Use `tools/preview/`:
+  it serves the working-tree frontend and proxies `/api` to the Pi (read-only — it never
+  writes to the Pi), so you render **your uncommitted changes against real data** and
+  screenshot them headlessly (Edge via Playwright). Read the PNG, iterate, *then* hand
+  it off to deploy. See `tools/preview/README.md`. Verify both desktop (~1440) and
+  mobile (~390) widths for layout changes.
+- The Pi stays the single server of record; the preview harness is a stateless local
+  dev tool. Don't run the real backend on Windows just to look at the UI.
+
 ## Architecture
 
 - **Backend**: Python FastAPI in `backend/main.py`, device layer in `backend/discovery.py`, scene engine in `backend/scenes.py`
@@ -81,6 +93,11 @@ backend/
       ct-calibration.js   # CTCalibrationPanel — RGB-space white calibration UI
       app.js              # App component — state, routing, SSE client, API orchestration
     sounds/farts/       # 20 MP3 files for "funny mode" thunder replacement
+tools/
+  preview/             # Read-only harness to SEE the web UI without deploying:
+                       # serves the working-tree frontend + proxies /api to the Pi,
+                       # then screenshots it headlessly (Edge via Playwright). See
+                       # tools/preview/README.md.
 ```
 
 ## Frontend Conventions
@@ -162,13 +179,17 @@ All endpoints are under `/api/`. Key groups:
 
 The room map (`room-map.js`) is the most complex frontend component:
 - **Two modes**: "Floor Plan" (2D grid) and "Line" (linear strip). Each mode's layout is preserved independently when toggling.
-- **SVG rendering**: Devices are pill-shaped nodes with color dots, draggable in edit mode with grid snapping.
-- **Line mode = compact dots + legend (v2.18.0)**: named pills don't fit on a single row, so in linear layout `DeviceNode`/`SegmentNode` render a small numbered colored dot (`compact` prop) and a numbered legend below the strip (built in `RoomMap`, ordered left-to-right) maps each number to its device name. Floor Plan keeps the named pills.
-- **Full-screen mobile editor (v2.15.0)**: on a phone, entering edit (`isMobile && isEdit`)
-  pops the whole editor into a fixed overlay and renders the SVG at a fixed on-screen
-  cell size (`FS_CELL` px/cell) inside a pannable area, so device pills are big enough
-  to tap/drag. The viewBox stays in user units, so the `getScreenCTM()` click/drag math
-  is unchanged. Desktop keeps the inline fit-to-width map.
+- **Full-window editor + numbered dots + legend (v2.19.0)**: the map no longer lives
+  crushed inside the ~416px controls drawer. `RoomMap` has an `expanded` state:
+  collapsed, the drawer shows a readable numbered **legend** (color swatch + number +
+  name) and an "Open layout editor" launcher; expanded, the whole editor renders in a
+  fixed full-window overlay (all devices, view + edit) with a sticky header + Done. On
+  the canvas, every device/segment is a **numbered colored dot** (`compact` prop on
+  `DeviceNode`/`SegmentNode`) sized as a fraction of the grid cell (`gridSize*0.36`) so
+  it renders large under the overlay's fixed on-screen cell size (`FS_CELL`/`fsScale`);
+  the number is the identifier, the color lets you glance-match a dot to its legend row.
+  Both Line and Floor Plan use this (named pills got unwieldy with long names). The
+  viewBox stays in user units so `getScreenCTM()` drag math is unaffected by scale.
 - **Auto-save**: Layouts save to backend 600ms after any change (debounced).
 - **Reference items**: Furniture/landmark items can be placed on the map for spatial context.
 - **Tonal mode**: Generates harmonious color schemes across devices using HSL manipulation — supports random shade variation and spatial gradient modes.

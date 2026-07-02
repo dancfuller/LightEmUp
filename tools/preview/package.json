@@ -1,0 +1,13 @@
+{
+  "name": "lightemup-preview",
+  "private": true,
+  "type": "module",
+  "description": "Read-only preview harness: render the working-tree frontend against the Pi and screenshot it headlessly.",
+  "scripts": {
+    "serve": "node serve.mjs",
+    "shoot": "node shoot.mjs"
+  },
+  "dependencies": {
+    "playwright": "^1.40.0"
+  }
+}

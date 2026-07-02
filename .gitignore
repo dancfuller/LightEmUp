@@ -24,3 +24,8 @@ backend/test_*.py
 
 # Rotating server logs (48h retention, written at runtime)
 backend/logs/
+
+# Preview harness deps + screenshots (tools/preview)
+tools/preview/node_modules/
+tools/preview/package-lock.json
+tools/preview/*.png

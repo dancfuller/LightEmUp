@@ -130,15 +130,29 @@ which gives every device (Hue or Govee, present or missing) inline nickname edit
 (`{light_id}` for Hue, `{ip}` for Govee); pass `null` to hide Flash (unreachable/
 missing devices). `extra` injects per-row buttons (the missing-device Re-scan/Forget).
 
-## Full-screen mobile room-layout editor (room-map.js, v2.15.0)
-On a phone the inline fit-to-width map shrinks nodes to untappable size. When
-`isMobile && isEdit` (`fullScreen`), `RoomMap` wraps its whole body in a fixed overlay
-with a sticky header (room name + Done) and renders the SVG at a fixed on-screen cell
-size (`FS_CELL`/`fsScale`) inside a horizontally-pannable container — the viewBox stays
-in user units so all `getScreenCTM()` drag math is unchanged. `touchAction` becomes
-`pan-x pan-y` in full-screen edit (vs `none` inline) so the canvas can be finger-panned;
-an active node drag still wins via its non-passive `touchmove` `preventDefault`. Desktop
-and view-mode are untouched.
+## Full-window room-layout editor + numbered dots/legend (room-map.js, v2.19.0)
+The map was unusable crammed into the ~416px controls drawer (`ControlSurface`). Now
+`RoomMap` has an `expanded` state (`fullScreen = expanded`, all devices — the old
+`isMobile && isEdit` trigger is gone):
+- **Collapsed** (in the drawer): renders a compact **legend** (color swatch + number +
+  name, ordered row-major) + an "Open layout editor" launcher button. No cramped map.
+- **Expanded**: the whole editor renders in a fixed full-window overlay (`zIndex 1000`,
+  above the drawer) with a sticky header (room + Done→`setExpanded(false)`). The SVG
+  renders at a fixed on-screen cell size (`FS_CELL`=66 px, `fsScale = FS_CELL/gridSize`)
+  in a pannable container; viewBox stays in user units so `getScreenCTM()` drag math is
+  unaffected. `touchAction` is `pan-x pan-y` here (canvas finger-pan; an active node drag
+  still wins via its non-passive `touchmove` `preventDefault`).
+- **Nodes are numbered colored dots** (`compact` prop, both layouts). `DeviceNode`/
+  `SegmentNode` size the dot/number as a fraction of the cell (`gridSize*0.36`) so it
+  renders at a constant readable px size under `fsScale`. The number is the identifier;
+  color is a glance-match aid to the legend (many lights share colors). Named pills were
+  dropped — long device names made them unwieldy. The legend renders below the map too.
+- **Line compaction** (`compactLinearLayout`): a line is an *ordering*, so arbitrary
+  x-gaps (e.g. devices at x=1,12,33,50 on a length-52 strip) just push most dots off
+  screen. On opening the editor, line entries (placed devices + each segment of an
+  expanded device) are renumbered to consecutive positions `1..N` by order and the
+  boundary shrunk to fit — so every dot is visible and big. No-op once compact (doesn't
+  loop or fight drags). Start at 1, not 0, so the first dot isn't clipped at the edge.
 
 ## app.js — orchestration
 State, routing, API calls. `controlHueLight` / `controlGoveeDevice` spread `cmd` into
