@@ -150,8 +150,14 @@ The map was unusable crammed into the ~416px controls drawer (`ControlSurface`).
   Real light colors repeat (two green spotlights, all segments of one strip the same),
   which is useless for telling entries apart. `distinctColor(i)` assigns each legend
   entry (every device AND every segment) a color from a curated max-contrast palette
-  (`DISTINCT_COLORS`), by final legend order, used for BOTH the dot and its legend swatch
-  so they glance-match. Don't revert dots to `getDeviceColor` here.
+  (`DISTINCT_COLORS`), used for BOTH the dot and its legend swatch so they glance-match.
+  Don't revert dots to `getDeviceColor` here.
+- **Numbering/coloring must be STABLE (v2.19.2)** — number and color derive from the
+  legend index, so the ordering of `legend` determines them. Floor Plan numbers by
+  **device insertion order** (no `sort` — a fixed ID per light that never changes on
+  drag); a line numbers by **position** (`sort` by x — reads 1..N, stable across the
+  order-preserving compaction, changes only on a deliberate reorder). Do NOT sort the
+  floor-plan legend by position — that renumbers/recolors dots every time you move one.
 - **Line compaction** (`compactLinearLayout`): a line is an *ordering*, so arbitrary
   x-gaps (e.g. devices at x=1,12,33,50 on a length-52 strip) just push most dots off
   screen. On opening the editor, line entries (placed devices + each segment of an

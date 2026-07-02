@@ -1341,8 +1341,13 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
       });
     }
   });
-  legend.sort((a, b) => (a.y - b.y) || (a.x - b.x));
-  // Number and color by final order — each entry a distinct identification hue.
+  // Numbering must be stable so dragging doesn't renumber/recolor a dot.
+  //  - Floor Plan has no canonical order → number by device insertion order
+  //    (+ segment index), a fixed ID per light that never changes on drag.
+  //  - A line IS an ordering → number left-to-right by position, which reads 1..N
+  //    and is stable across the on-open compaction (order-preserving); only a
+  //    deliberate reorder (dragging a dot past another) changes it.
+  if (isLinear) legend.sort((a, b) => a.x - b.x);
   legend.forEach((e, i) => { e.num = i + 1; e.color = distinctColor(i); });
   const legendNumByKey = {};
   const legendColorByKey = {};
