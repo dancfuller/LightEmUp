@@ -144,9 +144,14 @@ The map was unusable crammed into the ~416px controls drawer (`ControlSurface`).
   still wins via its non-passive `touchmove` `preventDefault`).
 - **Nodes are numbered colored dots** (`compact` prop, both layouts). `DeviceNode`/
   `SegmentNode` size the dot/number as a fraction of the cell (`gridSize*0.36`) so it
-  renders at a constant readable px size under `fsScale`. The number is the identifier;
-  color is a glance-match aid to the legend (many lights share colors). Named pills were
-  dropped — long device names made them unwieldy. The legend renders below the map too.
+  renders at a constant readable px size under `fsScale`. Named pills were dropped — long
+  device names made them unwieldy. The legend renders below the map too.
+- **Dot color is a DISTINCT identification color, not the light's real color** (v2.19.1).
+  Real light colors repeat (two green spotlights, all segments of one strip the same),
+  which is useless for telling entries apart. `distinctColor(i)` assigns each legend
+  entry (every device AND every segment) a color from a curated max-contrast palette
+  (`DISTINCT_COLORS`), by final legend order, used for BOTH the dot and its legend swatch
+  so they glance-match. Don't revert dots to `getDeviceColor` here.
 - **Line compaction** (`compactLinearLayout`): a line is an *ordering*, so arbitrary
   x-gaps (e.g. devices at x=1,12,33,50 on a length-52 strip) just push most dots off
   screen. On opening the editor, line entries (placed devices + each segment of an

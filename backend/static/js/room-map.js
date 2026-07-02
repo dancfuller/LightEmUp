@@ -299,7 +299,7 @@ function wrapText(text, maxCharsPerLine) {
   return lines;
 }
 
-function DeviceNode({ deviceKey, pos, gridSize, light, nicknames, colorOverride, liveSegmentColors, isEdit, isSelected, onSelect, onDragEnd, segmentInfo, segments, onToggleSegments, compact, legendNum }) {
+function DeviceNode({ deviceKey, pos, gridSize, light, nicknames, colorOverride, liveSegmentColors, isEdit, isSelected, onSelect, onDragEnd, segmentInfo, segments, onToggleSegments, compact, legendNum, dotColor }) {
   const [dragging, setDragging] = useState(false);
   const [dragPos, setDragPos] = useState(null);
   const dragPosRef = useRef(null);
@@ -408,9 +408,9 @@ function DeviceNode({ deviceKey, pos, gridSize, light, nicknames, colorOverride,
     const cdotR = gridSize * 0.36;
     const numFont = gridSize * 0.36;
     const badgeR = gridSize * 0.2;
-    const striped = liveSegmentColors && Object.keys(liveSegmentColors).length > 1;
-    const clipId = `cdot-${deviceKey.replace(/[^a-z0-9]/gi, "_")}`;
-    const segs = striped ? Object.keys(liveSegmentColors).map(k => parseInt(k)).sort((a, b) => a - b) : [];
+    // Identification color (distinct per legend entry), not the light's real
+    // color — many lights share a color, which is useless for telling them apart.
+    const fill = dotColor || color;
     return (
       <g style={{ cursor: isEdit ? "grab" : "pointer", transition, userSelect: "none", WebkitUserSelect: "none" }}
         transform={`translate(${displayX - cx},${displayY - cy})`}
@@ -419,28 +419,11 @@ function DeviceNode({ deviceKey, pos, gridSize, light, nicknames, colorOverride,
         onClick={(e) => { e.stopPropagation(); if (!didDragRef.current) onSelect(deviceKey, e.shiftKey || e.ctrlKey || e.metaKey); }}
       >
         <title>{tooltip}</title>
-        {striped ? (
-          <g opacity={isOn ? 1 : 0.35}>
-            <defs><clipPath id={clipId}><circle cx={cx} cy={cy} r={cdotR} /></clipPath></defs>
-            <g clipPath={`url(#${clipId})`}>
-              {segs.map((segIdx, i) => {
-                const c = liveSegmentColors[segIdx];
-                const stripeH = (cdotR * 2) / segs.length;
-                return <rect key={segIdx} x={cx - cdotR} y={cy - cdotR + i * stripeH}
-                  width={cdotR * 2} height={stripeH + 0.5} fill={`rgb(${c.r},${c.g},${c.b})`} />;
-              })}
-            </g>
-            <circle cx={cx} cy={cy} r={cdotR} fill="none"
-              stroke={isSelected ? "#a5b4fc" : "rgba(255,255,255,0.35)"} strokeWidth={isSelected ? 2.5 : 1.5} />
-          </g>
-        ) : (
-          <circle cx={cx} cy={cy} r={cdotR}
-            fill={color} opacity={isOn ? 1 : 0.35}
-            stroke={isSelected ? "#a5b4fc" : (isOn ? "rgba(255,255,255,0.35)" : "rgba(255,255,255,0.12)")}
-            strokeWidth={isSelected ? 2.5 : 1.5}
-            style={{ filter: isOn ? `drop-shadow(0 0 5px ${color})` : "none" }}
-          />
-        )}
+        <circle cx={cx} cy={cy} r={cdotR}
+          fill={fill} opacity={isOn ? 1 : 0.5}
+          stroke={isSelected ? "#a5b4fc" : "rgba(255,255,255,0.35)"}
+          strokeWidth={isSelected ? 2.5 : 1.5}
+        />
         {legendNum != null && (
           <text x={cx} y={cy} textAnchor="middle" dominantBaseline="central"
             fill="#fff" stroke="rgba(0,0,0,0.65)" strokeWidth={numFont * 0.25} paintOrder="stroke"
@@ -554,6 +537,21 @@ function DeviceNode({ deviceKey, pos, gridSize, light, nicknames, colorOverride,
 // Convert segment index to letter label: 0→A, 1→B, etc.
 function segLetter(idx) { return String.fromCharCode(65 + idx); }
 
+// Distinct identification color for legend entry i. The map/legend colors are
+// NOT the lights' real colors (many lights share a color — two green spotlights,
+// etc., which is useless for telling them apart). Each entry (every device AND
+// every segment) gets its own color from a curated max-contrast palette so
+// neighbours are unmistakably different and the dot always matches its legend
+// row. Ordered so consecutive entries jump across the wheel; all are dark
+// enough for white number text. Cycles past its length (rare, and repeats land
+// far apart on the strip).
+const DISTINCT_COLORS = [
+  "#e6194b", "#3cb44b", "#4363d8", "#f58231", "#911eb4", "#008d8d",
+  "#f032e6", "#9a6324", "#808000", "#000075", "#d2691e", "#2e8b57",
+  "#8b0000", "#483d8b", "#b8860b", "#005f73",
+];
+function distinctColor(i) { return DISTINCT_COLORS[((i % DISTINCT_COLORS.length) + DISTINCT_COLORS.length) % DISTINCT_COLORS.length]; }
+
 // A line is an *ordering* — arbitrary gaps between devices (e.g. x=1,12,33,50
 // over a length-52 strip) just make the map span far wider than the screen so
 // most dots fall off the edge. Compact every entry (a placed device, or each
@@ -600,7 +598,7 @@ function compactLinearLayout(layout) {
   };
 }
 
-function SegmentNode({ deviceKey, segIndex, pos, gridSize, light, nicknames, packLabel, colorOverride, isEdit, isSelected, onSelect, onDragEnd, compact, legendNum }) {
+function SegmentNode({ deviceKey, segIndex, pos, gridSize, light, nicknames, packLabel, colorOverride, isEdit, isSelected, onSelect, onDragEnd, compact, legendNum, dotColor }) {
   const [dragging, setDragging] = useState(false);
   const [dragPos, setDragPos] = useState(null);
   const dragPosRef = useRef(null);
@@ -687,10 +685,9 @@ function SegmentNode({ deviceKey, segIndex, pos, gridSize, light, nicknames, pac
       >
         <title>{`${parentName}${packLabel ? " " + packLabel : ""} — Segment ${letter}`}</title>
         <circle cx={cx} cy={cy} r={cdotR}
-          fill={color} opacity={isOn ? 1 : 0.4}
-          stroke={isSelected ? "#a5b4fc" : "#475569"} strokeWidth={isSelected ? 2.5 : 1.5}
+          fill={dotColor || color} opacity={isOn ? 1 : 0.5}
+          stroke={isSelected ? "#a5b4fc" : "rgba(255,255,255,0.35)"} strokeWidth={isSelected ? 2.5 : 1.5}
           strokeDasharray="3,2"
-          style={{ filter: isOn ? `drop-shadow(0 0 3px ${color})` : "none" }}
         />
         {legendNum != null && (
           <text x={cx} y={cy} textAnchor="middle" dominantBaseline="central"
@@ -1330,28 +1327,26 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
     const seg = segments[key];
     if (seg?.expanded && seg.positions) {
       Object.entries(seg.positions).forEach(([si, sp]) => {
-        const ov = segmentColorOverrides[`${key}:seg${si}`];
         legend.push({
           key: `${key}:seg${si}`, x: sp.x, y: isLinear ? 0 : sp.y,
           label: `${getDeviceLabel(light, nicknames)} ${segLetter(parseInt(si))}`,
-          color: ov ? `rgb(${ov.r},${ov.g},${ov.b})` : getDeviceColor(light),
           on: light.state?.on,
         });
       });
     } else {
-      const ov = deviceColorOverrides[key];
       legend.push({
         key, x: pos.x, y: isLinear ? 0 : pos.y,
         label: getDeviceLabel(light, nicknames),
-        color: ov ? `rgb(${ov.r},${ov.g},${ov.b})` : getDeviceColor(light),
         on: light.state?.on,
       });
     }
   });
   legend.sort((a, b) => (a.y - b.y) || (a.x - b.x));
-  legend.forEach((e, i) => { e.num = i + 1; });
+  // Number and color by final order — each entry a distinct identification hue.
+  legend.forEach((e, i) => { e.num = i + 1; e.color = distinctColor(i); });
   const legendNumByKey = {};
-  legend.forEach(e => { legendNumByKey[e.key] = e.num; });
+  const legendColorByKey = {};
+  legend.forEach(e => { legendNumByKey[e.key] = e.num; legendColorByKey[e.key] = e.color; });
 
   const body = (
     <div style={{ marginBottom: 16, ...(fullScreen ? { marginBottom: 0 } : {}) }}>
@@ -1659,6 +1654,7 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
                     onDragEnd={handleSegDragEnd}
                     compact
                     legendNum={legendNumByKey[`${key}:seg${si}`]}
+                    dotColor={legendColorByKey[`${key}:seg${si}`]}
                   />
                 );
               });
@@ -1683,6 +1679,7 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
                 onToggleSegments={handleToggleSegments}
                 compact
                 legendNum={legendNumByKey[key]}
+                dotColor={legendColorByKey[key]}
               />
             );
           })}
