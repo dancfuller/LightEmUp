@@ -163,6 +163,7 @@ All endpoints are under `/api/`. Key groups:
 The room map (`room-map.js`) is the most complex frontend component:
 - **Two modes**: "Floor Plan" (2D grid) and "Line" (linear strip). Each mode's layout is preserved independently when toggling.
 - **SVG rendering**: Devices are pill-shaped nodes with color dots, draggable in edit mode with grid snapping.
+- **Line mode = compact dots + legend (v2.18.0)**: named pills don't fit on a single row, so in linear layout `DeviceNode`/`SegmentNode` render a small numbered colored dot (`compact` prop) and a numbered legend below the strip (built in `RoomMap`, ordered left-to-right) maps each number to its device name. Floor Plan keeps the named pills.
 - **Full-screen mobile editor (v2.15.0)**: on a phone, entering edit (`isMobile && isEdit`)
   pops the whole editor into a fixed overlay and renders the SVG at a fixed on-screen
   cell size (`FS_CELL` px/cell) inside a pannable area, so device pills are big enough

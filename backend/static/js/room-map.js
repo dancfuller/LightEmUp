@@ -299,7 +299,7 @@ function wrapText(text, maxCharsPerLine) {
   return lines;
 }
 
-function DeviceNode({ deviceKey, pos, gridSize, light, nicknames, colorOverride, liveSegmentColors, isEdit, isSelected, onSelect, onDragEnd, segmentInfo, segments, onToggleSegments }) {
+function DeviceNode({ deviceKey, pos, gridSize, light, nicknames, colorOverride, liveSegmentColors, isEdit, isSelected, onSelect, onDragEnd, segmentInfo, segments, onToggleSegments, compact, legendNum }) {
   const [dragging, setDragging] = useState(false);
   const [dragPos, setDragPos] = useState(null);
   const dragPosRef = useRef(null);
@@ -399,6 +399,64 @@ function DeviceNode({ deviceKey, pos, gridSize, light, nicknames, colorOverride,
   if (col) tipLines.push(`Color: R${col.r} G${col.g} B${col.b}`);
   const tooltip = tipLines.join("\n");
 
+  // Compact mode (linear layout): a numbered colored dot instead of a named
+  // pill — names live in the legend below the strip so many devices fit on one
+  // row. The number matches the legend entry.
+  if (compact) {
+    const cdotR = 13;
+    const striped = liveSegmentColors && Object.keys(liveSegmentColors).length > 1;
+    const clipId = `cdot-${deviceKey.replace(/[^a-z0-9]/gi, "_")}`;
+    const segs = striped ? Object.keys(liveSegmentColors).map(k => parseInt(k)).sort((a, b) => a - b) : [];
+    return (
+      <g style={{ cursor: isEdit ? "grab" : "pointer", transition, userSelect: "none", WebkitUserSelect: "none" }}
+        transform={`translate(${displayX - cx},${displayY - cy})`}
+        onMouseDown={startDrag} onTouchStart={startDrag}
+        onDragStart={(e) => e.preventDefault()}
+        onClick={(e) => { e.stopPropagation(); if (!didDragRef.current) onSelect(deviceKey, e.shiftKey || e.ctrlKey || e.metaKey); }}
+      >
+        <title>{tooltip}</title>
+        {striped ? (
+          <g opacity={isOn ? 1 : 0.35}>
+            <defs><clipPath id={clipId}><circle cx={cx} cy={cy} r={cdotR} /></clipPath></defs>
+            <g clipPath={`url(#${clipId})`}>
+              {segs.map((segIdx, i) => {
+                const c = liveSegmentColors[segIdx];
+                const stripeH = (cdotR * 2) / segs.length;
+                return <rect key={segIdx} x={cx - cdotR} y={cy - cdotR + i * stripeH}
+                  width={cdotR * 2} height={stripeH + 0.5} fill={`rgb(${c.r},${c.g},${c.b})`} />;
+              })}
+            </g>
+            <circle cx={cx} cy={cy} r={cdotR} fill="none"
+              stroke={isSelected ? "#a5b4fc" : "rgba(255,255,255,0.35)"} strokeWidth={isSelected ? 2.5 : 1.5} />
+          </g>
+        ) : (
+          <circle cx={cx} cy={cy} r={cdotR}
+            fill={color} opacity={isOn ? 1 : 0.35}
+            stroke={isSelected ? "#a5b4fc" : (isOn ? "rgba(255,255,255,0.35)" : "rgba(255,255,255,0.12)")}
+            strokeWidth={isSelected ? 2.5 : 1.5}
+            style={{ filter: isOn ? `drop-shadow(0 0 5px ${color})` : "none" }}
+          />
+        )}
+        {legendNum != null && (
+          <text x={cx} y={cy} textAnchor="middle" dominantBaseline="central"
+            fill="#fff" stroke="rgba(0,0,0,0.65)" strokeWidth={3} paintOrder="stroke"
+            fontSize={12} fontFamily="sans-serif" fontWeight="800" pointerEvents="none"
+          >{legendNum}</text>
+        )}
+        {canExpand && (
+          <g onClick={(e) => { e.stopPropagation(); onToggleSegments(deviceKey); }} style={{ cursor: "pointer" }}>
+            <title>{isExpanded ? "Collapse to one light" : `Split into ${segCount} segments`}</title>
+            <circle cx={cx + cdotR - 1} cy={cy - cdotR + 1} r={7}
+              fill={isExpanded ? "#6366f1" : "#334155"} stroke={isExpanded ? "#a5b4fc" : "#64748b"} strokeWidth={1} />
+            <text x={cx + cdotR - 1} y={cy - cdotR + 4.5} textAnchor="middle"
+              fill={isExpanded ? "#fff" : "#a5b4fc"} fontSize={8} fontFamily="sans-serif" fontWeight="bold" pointerEvents="none"
+            >{isExpanded ? "−" : String(segCount)}</text>
+          </g>
+        )}
+      </g>
+    );
+  }
+
   return (
     <g style={{ cursor: isEdit ? "grab" : "pointer", transition, userSelect: "none", WebkitUserSelect: "none" }}
       transform={`translate(${displayX - cx},${displayY - cy})`}
@@ -492,7 +550,7 @@ function DeviceNode({ deviceKey, pos, gridSize, light, nicknames, colorOverride,
 // Convert segment index to letter label: 0→A, 1→B, etc.
 function segLetter(idx) { return String.fromCharCode(65 + idx); }
 
-function SegmentNode({ deviceKey, segIndex, pos, gridSize, light, nicknames, packLabel, colorOverride, isEdit, isSelected, onSelect, onDragEnd }) {
+function SegmentNode({ deviceKey, segIndex, pos, gridSize, light, nicknames, packLabel, colorOverride, isEdit, isSelected, onSelect, onDragEnd, compact, legendNum }) {
   const [dragging, setDragging] = useState(false);
   const [dragPos, setDragPos] = useState(null);
   const dragPosRef = useRef(null);
@@ -567,6 +625,31 @@ function SegmentNode({ deviceKey, segIndex, pos, gridSize, light, nicknames, pac
   // Contrast text color against the color dot
   const luminance = (parseInt(color.slice(1, 3), 16) * 0.299 + parseInt(color.slice(3, 5), 16) * 0.587 + parseInt(color.slice(5, 7), 16) * 0.114) / 255;
   const textColor = luminance > 0.55 ? "#1e293b" : "#f8fafc";
+
+  // Compact mode (linear layout): numbered dashed dot; name lives in the legend.
+  if (compact) {
+    const cdotR = 12;
+    return (
+      <g style={{ cursor: isEdit ? "grab" : "pointer", transform: `translate(${dx - cx}px, ${dy - cy}px)`, transition }}
+        onMouseDown={startDrag} onTouchStart={startDrag}
+        onClick={(e) => { e.stopPropagation(); if (!didDragRef.current) onSelect(deviceKey, segIndex); }}
+      >
+        <title>{`${parentName}${packLabel ? " " + packLabel : ""} — Segment ${letter}`}</title>
+        <circle cx={cx} cy={cy} r={cdotR}
+          fill={color} opacity={isOn ? 1 : 0.4}
+          stroke={isSelected ? "#a5b4fc" : "#475569"} strokeWidth={isSelected ? 2.5 : 1.5}
+          strokeDasharray="3,2"
+          style={{ filter: isOn ? `drop-shadow(0 0 3px ${color})` : "none" }}
+        />
+        {legendNum != null && (
+          <text x={cx} y={cy} textAnchor="middle" dominantBaseline="central"
+            fill="#fff" stroke="rgba(0,0,0,0.65)" strokeWidth={3} paintOrder="stroke"
+            fontSize={11} fontFamily="sans-serif" fontWeight="800" pointerEvents="none"
+          >{legendNum}</text>
+        )}
+      </g>
+    );
+  }
 
   return (
     <g style={{ cursor: isEdit ? "grab" : "pointer", transform: `translate(${dx - cx}px, ${dy - cy}px)`, transition }}
@@ -1171,6 +1254,41 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
   const selectedLight = selectedDevice ? lightMap[selectedDevice] : null;
   const selectedColor = selectedLight ? getInitialColor(selectedLight) : null;
 
+  // Linear layout renders compact numbered dots + a legend (named pills don't
+  // fit on a single row). Build the ordered legend (left-to-right) and a
+  // key→number map that the dots use so the numbers line up with the legend.
+  const legend = [];
+  if (isLinear) {
+    Object.entries(devices).forEach(([key, pos]) => {
+      const light = lightMap[key];
+      if (!light) return;
+      const seg = segments[key];
+      if (seg?.expanded && seg.positions) {
+        Object.entries(seg.positions).forEach(([si, sp]) => {
+          const ov = segmentColorOverrides[`${key}:seg${si}`];
+          legend.push({
+            key: `${key}:seg${si}`, x: sp.x,
+            label: `${getDeviceLabel(light, nicknames)} ${segLetter(parseInt(si))}`,
+            color: ov ? `rgb(${ov.r},${ov.g},${ov.b})` : getDeviceColor(light),
+            on: light.state?.on,
+          });
+        });
+      } else {
+        const ov = deviceColorOverrides[key];
+        legend.push({
+          key, x: pos.x,
+          label: getDeviceLabel(light, nicknames),
+          color: ov ? `rgb(${ov.r},${ov.g},${ov.b})` : getDeviceColor(light),
+          on: light.state?.on,
+        });
+      }
+    });
+    legend.sort((a, b) => a.x - b.x);
+    legend.forEach((e, i) => { e.num = i + 1; });
+  }
+  const legendNumByKey = {};
+  legend.forEach(e => { legendNumByKey[e.key] = e.num; });
+
   const body = (
     <div style={{ marginBottom: 16, ...(fullScreen ? { marginBottom: 0 } : {}) }}>
       {/* Toolbar */}
@@ -1475,6 +1593,8 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
                     isSelected={selectedDeviceKeys.includes(key)}
                     onSelect={(dk) => handleDeviceSelect(dk, false)}
                     onDragEnd={handleSegDragEnd}
+                    compact={isLinear}
+                    legendNum={legendNumByKey[`${key}:seg${si}`]}
                   />
                 );
               });
@@ -1497,6 +1617,8 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
                 segmentInfo={segmentInfo}
                 segments={segData}
                 onToggleSegments={handleToggleSegments}
+                compact={isLinear}
+                legendNum={legendNumByKey[key]}
               />
             );
           })}
@@ -1523,6 +1645,31 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
           })()}
         </svg>
       </div>
+
+      {/* Legend (linear layout) — maps each numbered dot to its device name. */}
+      {isLinear && legend.length > 0 && (
+        <div style={{
+          display: "flex", flexWrap: "wrap", gap: isMobile ? 6 : 10,
+          marginTop: 10, padding: "8px 10px",
+          background: "rgba(15,23,42,0.5)", border: "1px solid #1e293b", borderRadius: 8,
+        }}>
+          {legend.map(e => (
+            <div key={e.key} style={{
+              display: "flex", alignItems: "center", gap: 6, fontSize: 11,
+              color: "#cbd5e1", opacity: e.on === false ? 0.5 : 1,
+            }}>
+              <span style={{
+                position: "relative", width: 18, height: 18, borderRadius: "50%",
+                background: e.color, border: "1px solid rgba(255,255,255,0.25)", flexShrink: 0,
+                display: "flex", alignItems: "center", justifyContent: "center",
+              }}>
+                <span style={{ fontSize: 9, fontWeight: 800, color: "#fff", textShadow: "0 0 2px rgba(0,0,0,0.85)" }}>{e.num}</span>
+              </span>
+              <span style={{ whiteSpace: "nowrap" }}>{e.label}</span>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Device Controls (view mode) */}
       {selectedLight && !isEdit && (
