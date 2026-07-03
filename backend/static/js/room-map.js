@@ -299,7 +299,7 @@ function wrapText(text, maxCharsPerLine) {
   return lines;
 }
 
-function DeviceNode({ deviceKey, pos, gridSize, light, nicknames, colorOverride, liveSegmentColors, isEdit, isSelected, onSelect, onDragEnd, segmentInfo, segments, onToggleSegments, compact, legendNum, dotColor }) {
+function DeviceNode({ deviceKey, pos, gridSize, light, nicknames, colorOverride, liveSegmentColors, isEdit, isSelected, onSelect, onDragEnd, segmentInfo, segments, onToggleSegments, compact, legendNum, dotColor, isLinear }) {
   const [dragging, setDragging] = useState(false);
   const [dragPos, setDragPos] = useState(null);
   const dragPosRef = useRef(null);
@@ -353,10 +353,15 @@ function DeviceNode({ deviceKey, pos, gridSize, light, nicknames, colorOverride,
       const src = e.touches ? e.touches[0] : e;
       pt.x = src.clientX; pt.y = src.clientY;
       const svgP = pt.matrixTransform(svg.getScreenCTM().inverse());
-      const newPos = { x: Math.round(svgP.x / gridSize), y: Math.round(svgP.y / gridSize) };
-      dragPosRef.current = newPos;
+      // Floor-plan devices render at cell CENTERS ((cell+0.5)*gridSize, where the
+      // grid nodes are), so the stored cell is round(user - 0.5); linear devices
+      // render at cell*gridSize. Store the cell, display at the node it maps to
+      // (same units as `pos`) so the dot snaps under the cursor with no jump on drop.
+      const gx = isLinear ? Math.round(svgP.x / gridSize) : Math.round(svgP.x / gridSize - 0.5);
+      const gy = isLinear ? 0 : Math.round(svgP.y / gridSize - 0.5);
+      dragPosRef.current = { x: gx, y: gy };
       didDragRef.current = true;
-      setDragPos(newPos);
+      setDragPos({ x: isLinear ? gx : gx + 0.5, y: isLinear ? 1.5 : gy + 0.5 });
     };
     const onUp = () => {
       const finalPos = dragPosRef.current;
@@ -660,7 +665,7 @@ function fitFloorPlanLayout(layout) {
   };
 }
 
-function SegmentNode({ deviceKey, segIndex, pos, gridSize, light, nicknames, packLabel, colorOverride, isEdit, isSelected, onSelect, onDragEnd, compact, legendNum, dotColor }) {
+function SegmentNode({ deviceKey, segIndex, pos, gridSize, light, nicknames, packLabel, colorOverride, isEdit, isSelected, onSelect, onDragEnd, compact, legendNum, dotColor, isLinear }) {
   const [dragging, setDragging] = useState(false);
   const [dragPos, setDragPos] = useState(null);
   const dragPosRef = useRef(null);
@@ -699,14 +704,17 @@ function SegmentNode({ deviceKey, segIndex, pos, gridSize, light, nicknames, pac
     const svg = svgRef.current;
     if (!svg) return;
     const onMove = (e) => {
+      e.preventDefault();
       const pt = svg.createSVGPoint();
       const src = e.touches ? e.touches[0] : e;
       pt.x = src.clientX; pt.y = src.clientY;
       const svgP = pt.matrixTransform(svg.getScreenCTM().inverse());
-      const newPos = { x: Math.round(svgP.x / gridSize), y: Math.round(svgP.y / gridSize) };
-      dragPosRef.current = newPos;
+      // Cell centers are at (cell+0.5)*gridSize in floor plan (see DeviceNode).
+      const gx = isLinear ? Math.round(svgP.x / gridSize) : Math.round(svgP.x / gridSize - 0.5);
+      const gy = isLinear ? 0 : Math.round(svgP.y / gridSize - 0.5);
+      dragPosRef.current = { x: gx, y: gy };
       didDragRef.current = true;
-      setDragPos(newPos);
+      setDragPos({ x: isLinear ? gx : gx + 0.5, y: isLinear ? 1.5 : gy + 0.5 });
     };
     const onUp = () => {
       const finalPos = dragPosRef.current;
@@ -1720,7 +1728,7 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
                     isSelected={selectedDeviceKeys.includes(key)}
                     onSelect={(dk) => handleDeviceSelect(dk, false)}
                     onDragEnd={handleSegDragEnd}
-                    compact
+                    compact isLinear={isLinear}
                     legendNum={legendNumByKey[`${key}:seg${si}`]}
                     dotColor={legendColorByKey[`${key}:seg${si}`]}
                   />
@@ -1745,7 +1753,7 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
                 segmentInfo={segmentInfo}
                 segments={segData}
                 onToggleSegments={handleToggleSegments}
-                compact
+                compact isLinear={isLinear}
                 legendNum={legendNumByKey[key]}
                 dotColor={legendColorByKey[key]}
               />

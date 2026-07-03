@@ -158,6 +158,13 @@ The map was unusable crammed into the ~416px controls drawer (`ControlSurface`).
   drag); a line numbers by **position** (`sort` by x — reads 1..N, stable across the
   order-preserving compaction, changes only on a deliberate reorder). Do NOT sort the
   floor-plan legend by position — that renumbers/recolors dots every time you move one.
+- **Drag snapping honors the cell-center offset (v2.19.5).** Floor-plan devices render
+  at cell *centers* — `displayPos = {x: gridX+0.5, y: gridY+0.5}`, i.e. `(cell+0.5)*gridSize`,
+  which is where the grid nodes are. So the drag stores `round(svgP/gridSize - 0.5)` (the
+  cell whose center is under the cursor) and displays at `cell+0.5` (same units as `pos`);
+  storing plain `round(svgP/gridSize)` put the dot half a cell off and made it snap
+  between nodes. Linear devices render at `cell*gridSize` (no offset) so they store plain
+  `round`. `DeviceNode`/`SegmentNode` take `isLinear` to pick the right snap.
 - **Opens in edit mode** (v2.19.4): the "Open layout editor" launcher sets `isEdit`
   true, because a full-window *editor* you can't drag in is useless (drag is gated on
   `isEdit`; view mode only selects). Dragging is verified working — the gate was the
