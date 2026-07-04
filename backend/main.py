@@ -68,9 +68,12 @@ DEFAULT_CONFIG = {
                           # { on, brightness, r, g, b, color_temp_kelvin, updated_at }
                           # Display-only: lets a second browser show accurate Govee
                           # status (Govee LAN devStatus reports color unreliably).
-    "room_color_state": {},  # room name → last color-tool selection applied:
-                              # { mode, colorSpace, paletteColors, baseColor,
-                              #   brightness, direction, addressSegments, updated_at }
+    "room_color_state": {},  # room name → last color-tool selection applied, so
+                              # every scene MODE rehydrates a fresh UI (not just
+                              # palette). See RoomColorStateRequest for the full
+                              # field set (mode/palette/base_color + per-mode:
+                              # custom_colors, custom_shade_mode, beacon_source_key,
+                              # max_kelvin, ct_preset, selected_team/ncaa/flag, …).
     "segment_state": {},  # "govee:<ip>" → { colors: {idx:[r,g,b]}, brightness }
                            # config-backed mirror of segment_state.py for restart
                            # durability (in-memory module is the live source).
@@ -1602,6 +1605,12 @@ class RoomColorStateRequest(BaseModel):
     selected_team: Optional[str] = None
     selected_ncaa: Optional[str] = None
     selected_flag: Optional[str] = None
+    # Per-mode settings so every scene mode (not just palette) rehydrates.
+    custom_colors: Optional[list] = None
+    custom_shade_mode: Optional[str] = None
+    beacon_source_key: Optional[str] = None
+    max_kelvin: Optional[int] = None
+    ct_preset: Optional[int] = None
 
 
 @app.post("/api/room-color-state")

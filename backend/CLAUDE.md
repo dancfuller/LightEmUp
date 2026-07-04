@@ -82,8 +82,13 @@ not in the browser (v2.14.0):
   `DEFAULT_FAVORITES`; `POST /api/favorites` to save) instead of browser
   localStorage, so they sync across sessions/devices.
 - `GET /api/config` also returns `device_modes`, `segment_fill_modes`, `ui_prefs`
-  (the frontend reads them on load). `room_color_state` persists the preset-mode
-  selections too (`selected_team/ncaa/flag`).
+  (the frontend reads them on load). `room_color_state` persists the **full** per-mode
+  color-tool selection so a fresh UI session rehydrates *every* scene mode, not just
+  palette — `RoomColorStateRequest` carries `custom_colors`, `custom_shade_mode`,
+  `beacon_source_key`, `max_kelvin`, `ct_preset`, `selected_team/ncaa/flag`, etc. **When
+  you add a color-tool setting, add it to all three: the frontend snapshot (`applyColors`),
+  `RoomColorStateRequest`, and the hydration effect (`seededRoom`) in color-mode.js** —
+  or that mode won't restore.
 
 ## Backend-driven room scene apply
 - `POST /api/scenes/room-apply` accepts a fully-resolved scene (base seeds, hue,

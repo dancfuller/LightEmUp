@@ -526,6 +526,11 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     if (s.selected_team) setSelectedTeam(s.selected_team);
     if (s.selected_ncaa) setSelectedNcaa(s.selected_ncaa);
     if (s.selected_flag) setSelectedFlag(s.selected_flag);
+    if (Array.isArray(s.custom_colors) && s.custom_colors.length) setCustomColors(s.custom_colors);
+    if (s.custom_shade_mode) setCustomShadeMode(s.custom_shade_mode);
+    if (s.beacon_source_key) setBeaconSourceKey(s.beacon_source_key);
+    if (typeof s.max_kelvin === "number") setMaxKelvin(s.max_kelvin);
+    if (typeof s.ct_preset === "number") setCtPreset(s.ct_preset);
   }, [roomName, savedColorState]);
 
   // Apply progress state
@@ -1578,6 +1583,12 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
       selected_team: selectedTeam,
       selected_ncaa: selectedNcaa,
       selected_flag: selectedFlag,
+      // Per-mode settings so custom/beacon/white/shade toggle rehydrate too.
+      custom_colors: customColors,
+      custom_shade_mode: customShadeMode,
+      beacon_source_key: beaconSourceKey,
+      max_kelvin: maxKelvin,
+      ct_preset: ctPreset,
     };
     if (onApply) onApply(preview, addressSegments, colorStateSnapshot);
   };
