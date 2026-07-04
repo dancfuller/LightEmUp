@@ -45,8 +45,11 @@ Assigns colors/temperatures across a room's devices and applies them.
 - **Custom mode assignment is a positional cycle, not an adjacency graph.**
   `computeCustom` sorts devices spatially (linear → left-to-right; floor plan →
   row-major) and colors them `A,B,C,A,B,C…` along that order, shifting each row by one
-  so neighbors differ (clean `ABAB` instead of clumped `AABB`). Shuffle rotates the
-  start color; "shades" mode advances a shade on each wrap. `buildAdjacency` is still
+  so neighbors differ (clean `ABAB` instead of clumped `AABB`). **In a LINEAR layout the
+  cycle starts on color 0 with no rotation (v2.19.7)** — the custom colors map in order
+  to lights left-to-right (color 1 → leftmost light/segment), which is what people
+  expect from a strip; Shuffle does not reorder a line. Floor plans still use a
+  shuffle-seeded `offset` + per-row shift. "shades" mode advances a shade on each wrap. `buildAdjacency` is still
   used by Palette/Gradient/Beacon/CT-pool modes — don't delete it. **Segments now
   spatially constrain neighbors (v2.14.2):** the old relaxation skipped every spatial
   edge that touched a segment of a different device, so two side-by-side strips (and a

@@ -1184,8 +1184,11 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
       return a.y - b.y;
     });
 
-    // Shuffle just rotates which color the cycle starts on.
-    const offset = Math.floor(seededRng(`${roomName}|custom|${shuffleSeed}`)() * M);
+    // Shuffle rotates which color the cycle starts on — EXCEPT in a linear
+    // layout, where custom colors map in order to the lights left-to-right
+    // (color 1 → leftmost light/segment, color 2 → second, …). So the line
+    // starts on color 0 with no rotation; Shuffle doesn't reorder it.
+    const offset = isLinear ? 0 : Math.floor(seededRng(`${roomName}|custom|${shuffleSeed}`)() * M);
 
     const result = {};
     let rowKey = null, rowNum = 0, col = 0;
