@@ -17,7 +17,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse, HTMLResponse
 from pydantic import BaseModel
 from typing import Optional
 
@@ -2014,9 +2014,19 @@ STATIC_DIR = Path(__file__).parent / "static"
 @app.get("/")
 async def serve_frontend():
     index = STATIC_DIR / "index.html"
-    if index.exists():
-        return FileResponse(str(index))
-    return {"message": "Frontend not found. Place index.html in /static/"}
+    if not index.exists():
+        return {"message": "Frontend not found. Place index.html in /static/"}
+    html = index.read_text(encoding="utf-8")
+    # Cache-bust the in-browser JS. The js/*.js files have no content hash and
+    # browsers cache them aggressively, so after a deploy the UI would keep
+    # running stale scripts until a manual hard-refresh (and the footer version
+    # comes from the API, so it looks updated while the JS isn't). Tag each local
+    # script src with the build hash so a new build loads fresh automatically.
+    ver = GIT_HASH or APP_VERSION
+    import re
+    html = re.sub(r'(src=")(js/[^"?]+\.js)(")', rf'\1\2?v={ver}\3', html)
+    # Never cache the shell itself, so the updated ?v= tags are always seen.
+    return HTMLResponse(html, headers={"Cache-Control": "no-cache, must-revalidate"})
 
 app.mount("/sounds", StaticFiles(directory=str(STATIC_DIR / "sounds")), name="sounds")
 app.mount("/js", StaticFiles(directory=str(STATIC_DIR / "js")), name="js")

@@ -38,8 +38,12 @@ instead of spelunking, and **update them when you change how something works.**
   `ssh -t pi@lightemup '~/lightemup/deploy/update.sh'`
   (git pull --ff-only → pip install → reinstall unit if changed → restart service).
 - **After every code change, state the deploy impact:** frontend `static/js/*` change
-  = browser hard-refresh only; any backend `*.py` change = server restart required.
-  Emit the ssh command only when a restart is needed, and only after pushing.
+  = the running deploy just needs a normal page load; any backend `*.py` change = server
+  restart required. Emit the ssh command only when a restart is needed, and only after
+  pushing. (v2.19.8+: `GET /` cache-busts the `js/*.js` script tags with the build hash,
+  so after a deploy — which restarts and bumps the hash — browsers auto-load fresh JS.
+  No more manual hard-refresh. The one exception is the *first* load after upgrading
+  from a pre-2.19.8 build, where the old cached shell must be hard-refreshed once.)
 
 ### Testing with physical lights
 - Before running any debug/diagnostic test that drives real lights, **ask which room**

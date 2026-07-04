@@ -4,6 +4,15 @@ FastAPI app. Entry: `main.py` (all endpoints). Device I/O: `discovery.py`. Scene
 engine: `scenes.py`. Version: `version.py`. See the root `CLAUDE.md` for workflow
 rules (versioning, commits, deploy). **Keep this file current when behavior changes.**
 
+## Frontend cache-busting (v2.19.8)
+`GET /` (`serve_frontend`) doesn't just `FileResponse` index.html — it reads it and
+rewrites every local `src="js/*.js"` to `src="js/*.js?v=<GIT_HASH>"`, and serves the
+shell with `Cache-Control: no-cache`. The `js/*.js` files have no content hash and
+browsers cache them hard, so before this a deploy kept running stale scripts until a
+manual hard-refresh (and the footer version comes from the API, so it *looked* updated).
+`GIT_HASH` is resolved at import, so it changes when the service restarts — which every
+deploy does — auto-busting the cache. CDN `<script src="https://…">` tags are left alone.
+
 ## Config persistence
 - `config.json` (gitignored; template `config.json.example`) is read at startup and
   rewritten on every mutation. Use the existing save helper in `main.py` — don't
