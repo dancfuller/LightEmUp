@@ -18,9 +18,12 @@ function hexToRgb(hex) {
   return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
 }
 // Near-black guard: these modes skip black so a "team color" of black doesn't
-// just leave a light off-looking. Luminance threshold ~ very dark.
+// just leave a light off-looking. Judge by the BRIGHTEST channel, not luminance:
+// blue contributes almost nothing to luminance, so a luminance test wrongly
+// dropped dark-but-vivid colors like navy (#041E42, Penn State) — which a light
+// renders fine. Only true black (every channel dark) is unshowable.
 function isNearBlack(c) {
-  return c && (0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b) < 28;
+  return c && Math.max(c.r, c.g, c.b) < 40;
 }
 // Convert a preset's hex list into usable RGB entries, dropping near-black.
 // Falls back to the raw set if everything was filtered (e.g. an all-black flag).

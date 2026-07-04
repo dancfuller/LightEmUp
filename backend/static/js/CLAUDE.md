@@ -37,7 +37,8 @@ Assigns colors/temperatures across a room's devices and applies them.
 - **Teams / NCAA / Flags modes** are preset-color modes backed by `palette-data.js`
   (`PRESET_TEAMS` NFL/NBA/MLB/NHL, `PRESET_NCAA` Power 5, `PRESET_FLAGS` ~195
   countries). A searchable `PresetPicker` selects one entity by name; its hex colors
-  (near-black filtered via `isNearBlack`) are assigned with the shared `cycleAssign`
+  (true black filtered via `isNearBlack` — brightest-channel test, so dark-but-vivid
+  colors like navy `#041E42` are kept) are assigned with the shared `cycleAssign`
   — the same positional cycle as Custom mode — and honor the shared `ShadeToggle`
   (`customShadeMode`: exact colors, or tonal shades per color). These modes are
   color-only: they ignore the Color/White space (the toggle is hidden via
