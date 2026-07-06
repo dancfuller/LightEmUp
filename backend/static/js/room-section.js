@@ -93,7 +93,7 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
   const anyOn = allLights.some(l => l.state?.on);
   const anyColor = allLights.some(l => l.capabilities?.has_color);
   const segmentCountFor = (d) => {
-    const configured = segmentInfo?.configured_counts?.[d.ip];
+    const configured = segmentInfo?.configured_counts?.[goveeSlug(d)];
     const skuCount = segmentInfo?.sku_table?.[d.sku]?.count;
     return configured || skuCount || 1;
   };
@@ -254,7 +254,7 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
             const updates = {};
             goveeDevices.forEach(d => {
               const segCount = segmentInfo?.sku_table?.[d.sku]?.count || 0;
-              if (segCount > 1) updates[`govee:${d.ip}`] = targetMode;
+              if (segCount > 1) updates[`govee:${goveeSlug(d)}`] = targetMode;
             });
             if (Object.keys(updates).length > 0) {
               onDeviceModesBulkChange(updates);
@@ -318,7 +318,7 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
       {!collapsed && (
         <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fill, minmax(260px, 1fr))", gap: 12, marginTop: 18 }}>
           {allLights.map((light, i) => {
-            const devKey = light.type === "hue" ? `hue:${light.id}` : `govee:${light.ip}`;
+            const devKey = light.type === "hue" ? `hue:${light.id}` : `govee:${goveeSlug(light)}`;
             const segColors = {};
             const persistedEntry = light.ip && segmentState ? segmentState[light.ip] : null;
             if (persistedEntry?.colors) {

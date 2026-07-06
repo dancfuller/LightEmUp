@@ -590,7 +590,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
 
   const lightMap = {};
   allLights.forEach(l => {
-    const key = l.type === "hue" ? `hue:${l.id}` : `govee:${l.ip}`;
+    const key = l.type === "hue" ? `hue:${l.id}` : `govee:${goveeSlug(l)}`;
     lightMap[key] = l;
   });
 

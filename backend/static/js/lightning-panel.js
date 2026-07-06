@@ -396,7 +396,7 @@ function LightningPanel({ roomName, isActive, onStart, onStop, goveeDevices, seg
               </div>
               {segmentCapableDevices.map(d => {
                 const info = segmentInfo?.sku_table?.[d.sku];
-                const isSegmentMode = segmentInfo?.segment_mode?.[d.ip] || false;
+                const isSegmentMode = segmentInfo?.segment_mode?.[goveeSlug(d)] || false;
                 const displayName = GOVEE_SKU_NAMES[d.sku] || d.name || d.sku;
                 return (
                   <div key={d.ip} style={{
@@ -416,12 +416,12 @@ function LightningPanel({ roomName, isActive, onStart, onStop, goveeDevices, seg
                         try {
                           await api("/govee/segment-mode", {
                             method: "POST",
-                            body: JSON.stringify({ room_name: roomName, ip: d.ip, enabled: newMode }),
+                            body: JSON.stringify({ room_name: roomName, ip: d.ip, mac: d.mac, enabled: newMode }),
                           });
                           if (newMode && info?.count) {
                             await api("/govee/segment-count", {
                               method: "POST",
-                              body: JSON.stringify({ ip: d.ip, count: info.count }),
+                              body: JSON.stringify({ ip: d.ip, mac: d.mac, count: info.count }),
                             });
                           }
                           // Reload segment info in parent via event

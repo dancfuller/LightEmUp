@@ -19,6 +19,15 @@ A new file must be added to index.html in the correct slot (after its dependenci
 - Color math: `hueXYToRGB`, `kelvinToRGB`, `kelvinToMired`, `spreadKelvin`, `hslToRgb`.
 - `useIsMobile()` — 640px breakpoint. Required for all responsive forks.
 - `hashStr` / `seededRng` (mulberry32) — deterministic PRNG for palette assignment.
+- **Device identity keys (v3.0.0):** `deviceKey(device)` → `hue:<id>` or
+  `govee:<slug>`, where `goveeSlug(device)` = `normMac(device.mac)` (colon-free, lower;
+  falls back to the IP for a device with no mac). A Govee device's identity is its stable
+  **mac**, NOT its DHCP IP — so ALL association lookups (nicknames, room membership,
+  layouts, `device_modes`, `segment_fill_modes`, `configured_counts`/`segment_mode`,
+  `ct_rgb`) key by the slug, and `rooms[*].govee_devices` stores slugs. Mirrors backend
+  `gv_slug`/`gv_key`. **Never build a Govee key from `.ip` again — use `deviceKey`/
+  `goveeSlug`.** The live UDP address is still `device.ip`: control POSTs send both
+  (`{ ip, mac }`), and the transient `segmentState`/`segment-state` map stays IP-keyed.
 - `useThrottledControl(value, onCommit, ms=180)` — instant local thumb/label +
   trailing-throttled commit + drag guard so external updates don't yank the thumb back.
   Every slider that drives a light routes through it (wired into the shared Slider /

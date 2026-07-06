@@ -56,12 +56,12 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
   // The SKU table is authoritative when the device is known; the per-device
   // configured count is only a fallback for devices not in the table (and
   // avoids a stale override pinning a known device to the wrong count).
-  const configuredSegCount = light.ip && segmentInfo?.configured_counts?.[light.ip];
+  const configuredSegCount = light.ip && segmentInfo?.configured_counts?.[goveeSlug(light)];
   const skuSegCount = light.sku && segmentInfo?.sku_table?.[light.sku]?.count;
   const segCount = skuSegCount || configuredSegCount || 0;
   const hasSegmentColors = segCount > 0 && segmentColors && Object.keys(segmentColors).length > 0;
 
-  const deviceKey = light.type === "hue" ? `hue:${light.id}` : `govee:${light.ip}`;
+  const deviceKey = light.type === "hue" ? `hue:${light.id}` : `govee:${goveeSlug(light)}`;
   const nickname = nicknames?.[deviceKey] || "";
   const friendlyName = light.type === "hue"
     ? (light.product_name || light.name || light.model || `Light ${light.id}`)

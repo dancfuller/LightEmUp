@@ -64,15 +64,31 @@ is built to tolerate that, and to treat IP as ephemeral:
   (last-known color/on/brightness, `state.reachable = False`). Control is fire-and-
   forget UDP to the stored IP, so absent devices stay fully controllable — the UI just
   badges them offline. `missing` is still returned for the Settings forget affordance.
-- **Identity is the device id, IP is DHCP** — but today every stored structure is still
-  *keyed by IP* (`govee:<ip>` maps + bare-IP lists), so a DHCP IP change currently
-  orphans associations. **Planned next (the proper fix):** re-key everything by the
-  device id (`govee:<mac>`), keep `known_devices` as the MAC→current-IP map, and resolve
-  the IP at send time (control is UDP to an IP). That's a breaking config-schema
-  migration (major version) and threads through the whole frontend device key, so it's
-  scoped as its own effort. An IP-remap-on-change workaround was intentionally **not**
-  shipped (it'd be dead code once MAC-keying lands). Until then, a DHCP reservation per
-  Govee light avoids the issue entirely.
+- **Identity is the device id (mac), IP is DHCP — now MAC-keyed (v3.0.0).** Every stored
+  Govee association keys by a **colon-free slug of the mac** (`gv_slug` = mac lowercased,
+  `:`/`-` stripped); `known_devices.govee` (keyed by pretty mac → current IP) is the
+  registry, and the **IP is resolved at send time**, not stored as identity. A DHCP IP
+  change no longer orphans anything.
+  - **Helpers (main.py):** `gv_slug(mac)`, `gv_key(mac)` → `"govee:<slug>"`,
+    `gv_mac_for_ip(ip)` (reverse lookup via known_devices), `gv_key_for_ip(ip, mac=None)`
+    and `gv_slug_for_ip(...)` (prefixed / bare key for a device addressed by IP), and
+    `gv_ip_for_slug(slug)` (stored slug → current IP; a slug that *is* an IP resolves to
+    itself). Persistence helpers (`record_govee_state`, `correct_kelvin`, `ct_rgb_color`,
+    `persist_segments`) key by mac via these; `record_govee_state`/segment/identify
+    requests carry an optional `mac` (falls back to IP reverse-lookup).
+  - **Identity vs address at the boundary:** `control_room` and `start_lightning` resolve
+    each room member slug → current IP before driving the device, and `start_lightning`
+    also resolves fixtures' govee members slug→IP — so **`scenes.py` stays identity-
+    agnostic** (still works in IPs). The in-memory `segment_state` is IP-keyed (the live
+    address); it's mapped slug↔IP on `load`/`persist_segments`.
+  - **One-time migration:** `migrate_govee_to_mac(cfg)` runs once at load (guarded by
+    `schema_version` → 2), backs up to `config.json.pre-mac-migration.bak`, re-keys every
+    IP-based structure (rooms lists, `govee:<ip>` dicts, segment mode/counts, room-layout
+    device/segment keys, fixture members) to slugs via known_devices, and **drops +
+    logs** any IP it can't resolve (device offline / IP changed at migration time). So
+    power on all Govee lights + assign them to rooms *before* the migrating deploy, or
+    those orphaned references are lost. A DHCP reservation per light is still nice-to-have
+    but no longer required.
 
 ## White-temperature calibration (Govee renders CT bluer than Hue)
 Two mechanisms; `ct_rgb` takes precedence over legacy `ct_correction`:

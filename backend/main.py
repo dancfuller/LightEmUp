@@ -175,7 +175,166 @@ def save_config(config: dict):
                 pass
 
 
+# ─── Govee identity: MAC-keyed associations, IP resolved at send time ─────────
+# Govee's LAN "device id" (stored as `mac`) is the stable identity; the IP is a
+# DHCP lease that a router reboot can reassign. So every association (rooms,
+# nicknames, layouts, segment config, calibration, last-known state) is keyed by a
+# colon-free *slug* of the mac, and the current IP is resolved from
+# known_devices.govee at send time. See backend/CLAUDE.md.
+
+def gv_slug(mac: str) -> str:
+    """Colon/dash-free lowercase device identity — safe as a JSON key / URL seg
+    (no ':' to collide with key.split(':') or the seg regex)."""
+    return (mac or "").replace(":", "").replace("-", "").lower()
+
+
+def gv_key(mac: str) -> str:
+    """Canonical prefixed association key, e.g. 'govee:2d3acc323233095a'."""
+    return "govee:" + gv_slug(mac)
+
+
+def _known_govee() -> dict:
+    return config.get("known_devices", {}).get("govee", {})
+
+
+def gv_mac_for_ip(ip: str):
+    """Reverse-lookup a live IP to its stored mac via known_devices (or None)."""
+    if not ip:
+        return None
+    for m, info in _known_govee().items():
+        if info.get("ip") == ip:
+            return m
+    return None
+
+
+def gv_key_for_ip(ip: str, mac: str = None) -> str:
+    """Prefixed key for a device we're addressing by IP. Prefer an explicit mac;
+    else reverse-lookup the IP; else fall back to the raw IP (unknown device)."""
+    mac = mac or gv_mac_for_ip(ip)
+    return gv_key(mac) if mac else f"govee:{ip}"
+
+
+def gv_slug_for_ip(ip: str, mac: str = None) -> str:
+    """Bare slug (no 'govee:' prefix) for a device addressed by IP — for the
+    bare-keyed maps (room membership, segment mode/counts)."""
+    mac = mac or gv_mac_for_ip(ip)
+    return gv_slug(mac) if mac else ip
+
+
+def gv_ip_for_slug(slug: str):
+    """Current IP for a stored device slug (room membership / segment config).
+    Resolves via known_devices; a slug that is itself an IP (legacy/unknown)
+    resolves to itself. Returns None when unresolvable (device never seen)."""
+    if not slug:
+        return None
+    for m, info in _known_govee().items():
+        if gv_slug(m) == slug:
+            return info.get("ip")
+    return slug if slug.count(".") == 3 else None
+
+
+def migrate_govee_to_mac(cfg: dict) -> bool:
+    """One-time: re-key every Govee association from IP to the stable mac slug.
+
+    Guarded by `schema_version` so it runs exactly once. Resolves each IP via
+    known_devices.govee (mac→last-seen-IP); associations whose IP can't be
+    resolved (device offline / IP changed at migration time) are dropped and
+    logged — so power on all Govee lights + rescan before deploying. Returns True
+    if it migrated (caller persists)."""
+    if cfg.get("schema_version", 1) >= 2:
+        return False
+
+    known = cfg.get("known_devices", {}).get("govee", {})
+    ip_to_slug = {info.get("ip"): gv_slug(m) for m, info in known.items() if info.get("ip")}
+    dropped = set()
+
+    # Safety: if we have no IP→mac map at all but the config clearly holds IP-keyed
+    # Govee associations, migrating now would drop ALL of them. Defer (don't set
+    # schema_version) so a later boot — after a scan repopulates known_devices —
+    # migrates for real, instead of wiping the user's rooms/nicknames.
+    has_assoc = any(r.get("govee_devices") for r in cfg.get("rooms", {}).values()) or \
+        any(str(k).startswith("govee:") for k in cfg.get("nicknames", {}))
+    if not ip_to_slug and has_assoc:
+        log.warning("Govee MAC migration deferred: known_devices is empty but IP-keyed "
+                    "associations exist. Run a Govee scan, then restart to migrate.")
+        return False
+
+    def slug_for_ip(ip):
+        s = ip_to_slug.get(ip)
+        if not s:
+            dropped.add(ip)
+        return s
+
+    def rekey_prefixed(d):
+        """Re-key a { 'govee:<ip>'|'hue:<id>': v } dict to mac slugs."""
+        if not isinstance(d, dict):
+            return d
+        out = {}
+        for k, v in d.items():
+            if k.startswith("govee:"):
+                s = slug_for_ip(k[len("govee:"):])
+                if s:
+                    out["govee:" + s] = v
+            else:
+                out[k] = v  # hue: keys untouched
+        return out
+
+    def rekey_member(k):
+        if not isinstance(k, str) or not k.startswith("govee:"):
+            return k
+        s = slug_for_ip(k[len("govee:"):])
+        return "govee:" + s if s else None
+
+    # Back up the pre-migration file (belt-and-suspenders on top of the .bak the
+    # atomic save keeps) so a bad migration is fully recoverable.
+    try:
+        if CONFIG_PATH.exists():
+            import shutil
+            shutil.copy2(CONFIG_PATH, CONFIG_PATH.parent / (CONFIG_PATH.name + ".pre-mac-migration.bak"))
+    except Exception:
+        log.exception("Could not write pre-migration backup")
+
+    # 1) Prefixed 'govee:<ip>' dicts
+    for key in ("nicknames", "device_state", "segment_state", "ct_correction",
+                "ct_rgb", "device_modes", "segment_fill_modes"):
+        if key in cfg:
+            cfg[key] = rekey_prefixed(cfg[key])
+
+    # 2) Bare-IP lists (room membership)
+    for room in cfg.get("rooms", {}).values():
+        gd = room.get("govee_devices")
+        if isinstance(gd, list):
+            room["govee_devices"] = [s for ip in gd for s in (slug_for_ip(ip),) if s]
+
+    # 3) Bare-IP dicts (segment mode / counts)
+    for key in ("govee_segment_mode", "govee_segment_counts"):
+        d = cfg.get(key)
+        if isinstance(d, dict):
+            cfg[key] = {s: v for ip, v in d.items() for s in (slug_for_ip(ip),) if s}
+
+    # 4) Room layouts: devices + segments are 'govee:<ip>'/'hue:<id>' keyed
+    for layout in cfg.get("room_layouts", {}).values():
+        for sub in ("devices", "segments"):
+            if sub in layout:
+                layout[sub] = rekey_prefixed(layout[sub])
+
+    # 5) Fixtures: members is a list of device keys
+    for fx in cfg.get("fixtures", {}).values():
+        members = fx.get("members")
+        if isinstance(members, list):
+            fx["members"] = [m for k in members for m in (rekey_member(k),) if m]
+
+    cfg["schema_version"] = 2
+    if dropped:
+        log.warning("Govee MAC migration: dropped %d unresolvable IP(s) (offline / "
+                    "IP changed): %s", len(dropped), ", ".join(sorted(dropped)))
+    log.warning("Govee MAC migration complete (schema_version=2)")
+    return True
+
+
 config = load_config()
+if migrate_govee_to_mac(config):
+    save_config(config)
 
 
 # ─── Debounced config persistence ─────────────────────────────────────────────
@@ -223,12 +382,13 @@ def flush_save_now():
         _flush_save()
 
 
-def record_govee_state(ip: str, **fields):
+def record_govee_state(ip: str, mac: str = None, **fields):
     """Record the last state set on a Govee device via LightEmUp so a second
     browser can render accurate status. Display-only — never issues commands.
-    A whole-device color clears any prior color_temp_kelvin and vice-versa."""
+    A whole-device color clears any prior color_temp_kelvin and vice-versa.
+    Keyed by the stable mac slug (resolved from the IP when not passed)."""
     store = config.setdefault("device_state", {})
-    key = f"govee:{ip}"
+    key = gv_key_for_ip(ip, mac)
     entry = store.get(key, {})
     if fields.get("r") is not None:
         entry.pop("color_temp_kelvin", None)
@@ -248,7 +408,7 @@ def persist_segments():
     """Mirror the in-memory segment_state into config for restart durability.
     snapshot() is keyed by bare IP; config uses the "govee:<ip>" key form."""
     snap = segment_state.snapshot()
-    config["segment_state"] = {f"govee:{ip}": e for ip, e in snap.items()}
+    config["segment_state"] = {gv_key_for_ip(ip): e for ip, e in snap.items()}
     schedule_save()
     publish_event("segments")
 
@@ -266,7 +426,7 @@ def correct_kelvin(ip: str, kelvin: int) -> int:
     piecewise-linearly in mired space (1e6/K) — the same perceptual spacing the
     palette generator uses — and clamp outside the sampled range. Identity when
     the device has no calibration."""
-    pts = config.get("ct_correction", {}).get(f"govee:{ip}")
+    pts = config.get("ct_correction", {}).get(gv_key_for_ip(ip))
     if not pts or kelvin is None:
         return kelvin
     samples = sorted(
@@ -310,7 +470,7 @@ def ct_rgb_color(ip: str, kelvin):
     send for a requested Kelvin (interpolated effective-K, then kelvin_to_rgb).
     Returns None when the device has no ct_rgb calibration — caller falls back to
     the native CT path. Same mired-space interpolation as correct_kelvin."""
-    pts = config.get("ct_rgb", {}).get(f"govee:{ip}")
+    pts = config.get("ct_rgb", {}).get(gv_key_for_ip(ip))
     if not pts or kelvin is None:
         return None
     samples = sorted(
@@ -403,7 +563,18 @@ log = logging.getLogger("lightemup.main")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("🔆 LightEmUp starting up...")
-    segment_state.load(config.get("segment_state", {}))
+    # config's segment_state is mac-slug keyed; the in-memory store is IP-keyed
+    # (that's the live address). Resolve slug→current IP on load (persist maps back).
+    _seg_raw = config.get("segment_state", {})
+    _seg_resolved = {}
+    for _k, _v in _seg_raw.items():
+        if _k.startswith("govee:"):
+            _ip = gv_ip_for_slug(_k[len("govee:"):])
+            if _ip:
+                _seg_resolved[f"govee:{_ip}"] = _v
+        else:
+            _seg_resolved[_k] = _v
+    segment_state.load(_seg_resolved)
     yield
     flush_save_now()
     print("🔆 LightEmUp shutting down...")
@@ -449,6 +620,8 @@ class HueLightStateRequest(BaseModel):
 
 class GoveeCommandRequest(BaseModel):
     ip: str
+    mac: Optional[str] = None  # stable identity; state is persisted under it (IP is
+                               # just the UDP address). Falls back to IP reverse-lookup.
     on: Optional[bool] = None
     brightness: Optional[int] = None  # 0-100
     r: Optional[int] = None
@@ -463,11 +636,12 @@ class FlashRequest(BaseModel):
     or ip (Govee) is set."""
     light_id: Optional[str] = None
     ip: Optional[str] = None
+    mac: Optional[str] = None  # Govee identity for state read (falls back to IP)
 
 class RoomConfig(BaseModel):
     name: str
     hue_light_ids: list[str] = []
-    govee_devices: list[str] = []  # list of IPs
+    govee_devices: list[str] = []  # list of Govee mac slugs (see gv_slug)
 
 class RoomStateRequest(BaseModel):
     room_name: str
@@ -509,6 +683,7 @@ class LightningSettingsRequest(BaseModel):
 class GoveeSegmentModeRequest(BaseModel):
     room_name: str
     ip: str
+    mac: Optional[str] = None  # identity for the config key (falls back to IP)
     enabled: bool
 
 class RoomLayoutRequest(BaseModel):
@@ -586,7 +761,7 @@ async def discover_govee():
     # the backend returns.
     device_state = config.get("device_state", {})
     for dev in devices:
-        stored = device_state.get(f"govee:{dev.get('ip')}")
+        stored = device_state.get(gv_key_for_ip(dev.get("ip"), dev.get("mac")))
         if not stored:
             continue
         st = dev.setdefault("state", {})
@@ -655,7 +830,7 @@ async def discover_govee():
             "last_seen": entry.get("last_seen"),
             "state": {"on": None, "brightness": None, "reachable": False},
         }
-        stored = device_state.get(f"govee:{ip}") if ip else None
+        stored = device_state.get(gv_key(mac))
         if stored:
             st = absent["state"]
             if stored.get("r") is not None and stored.get("g") is not None and stored.get("b") is not None:
@@ -861,7 +1036,7 @@ async def control_govee(req: GoveeCommandRequest):
         results["brightness"] = await govee_lan_brightness(req.ip, req.brightness)
 
     record_govee_state(
-        req.ip, on=req.on, brightness=req.brightness,
+        req.ip, mac=req.mac, on=req.on, brightness=req.brightness,
         r=applied_rgb[0] if applied_rgb else req.r,
         g=applied_rgb[1] if applied_rgb else req.g,
         b=applied_rgb[2] if applied_rgb else req.b,
@@ -891,7 +1066,7 @@ async def identify_device(req: FlashRequest):
         return {"success": ok}
 
     if req.ip:
-        prior = config.get("device_state", {}).get(f"govee:{req.ip}", {})
+        prior = config.get("device_state", {}).get(gv_key_for_ip(req.ip, req.mac), {})
         for _ in range(3):
             await govee_lan_turn(req.ip, True)
             await govee_lan_brightness(req.ip, 100)
@@ -958,8 +1133,13 @@ async def control_room(req: RoomStateRequest):
             success = await set_hue_light_state(ip, username, light_id, state)
             results["hue"].append({"light_id": light_id, "success": success})
 
-    # Control Govee devices in the room
-    for device_ip in room.get("govee_devices", []):
+    # Control Govee devices in the room (membership is by mac slug; resolve the
+    # current IP to actually address the device over LAN).
+    for slug in room.get("govee_devices", []):
+        device_ip = gv_ip_for_slug(slug)
+        if not device_ip:
+            results["govee"].append({"slug": slug, "success": False, "reason": "unresolved (offline?)"})
+            continue
         razer_keeper.cancel(device_ip)
         if req.r is not None or req.on is False:
             segment_state.clear(device_ip)
@@ -974,7 +1154,7 @@ async def control_room(req: RoomStateRequest):
             device_ip, on=req.on, brightness=req.brightness,
             r=req.r, g=req.g, b=req.b,
         )
-        results["govee"].append({"ip": device_ip, "success": True})
+        results["govee"].append({"ip": device_ip, "slug": slug, "success": True})
 
     publish_event("room", room=req.room_name)
     return {"results": results}
@@ -1018,18 +1198,37 @@ async def start_lightning(req: LightningStartRequest):
     saved = config.get("lightning_scenes", {}).get(req.room_name, {})
     settings = LightningSettings(**saved) if saved else LightningSettings()
 
-    # Build room_config with segment info.
+    # Build room_config with segment info. Membership + fixtures are stored by mac
+    # slug; the scene engine addresses devices by IP, so resolve slug→IP here and
+    # hand the engine an IP-based view (keeps scenes.py identity-agnostic).
     room_config = dict(room)
     govee_segments = {}
+    resolved_ips = []
     segment_mode = config.get("govee_segment_mode", {})
     segment_counts = config.get("govee_segment_counts", {})
-    for ip in room.get("govee_devices", []):
-        if segment_mode.get(ip):
-            count = segment_counts.get(ip, 0)
+    for slug in room.get("govee_devices", []):
+        ip = gv_ip_for_slug(slug)
+        if not ip:
+            continue
+        resolved_ips.append(ip)
+        if segment_mode.get(slug):
+            count = segment_counts.get(slug, 0)
             if count > 0:
                 govee_segments[ip] = count
+    room_config["govee_devices"] = resolved_ips
     room_config["govee_segments"] = govee_segments
-    room_config["fixtures"] = config.get("fixtures", {})
+    resolved_fixtures = {}
+    for fid, fix in config.get("fixtures", {}).items():
+        members = []
+        for m in fix.get("members", []):
+            if isinstance(m, str) and m.startswith("govee:"):
+                ip = gv_ip_for_slug(m[len("govee:"):])
+                if ip:
+                    members.append(f"govee:{ip}")
+            else:
+                members.append(m)
+        resolved_fixtures[fid] = {**fix, "members": members}
+    room_config["fixtures"] = resolved_fixtures
 
     hue_ip = config.get("hue_bridge_ip")
     hue_username = config.get("hue_username")
@@ -1128,12 +1327,13 @@ async def state_events():
 @app.post("/api/govee/segment-mode")
 async def set_govee_segment_mode(req: GoveeSegmentModeRequest):
     """Toggle per-segment mode for a Govee device in a room."""
+    slug = gv_slug_for_ip(req.ip, req.mac)
     if "govee_segment_mode" not in config:
         config["govee_segment_mode"] = {}
-    config["govee_segment_mode"][req.ip] = req.enabled
+    config["govee_segment_mode"][slug] = req.enabled
 
     # If enabling, try to look up segment count from SKU table if not already stored.
-    if req.enabled and req.ip not in config.get("govee_segment_counts", {}):
+    if req.enabled and slug not in config.get("govee_segment_counts", {}):
         # Try to find the SKU for this IP from discovered devices.
         # The caller should supply the count separately, but we can try the SKU table.
         pass  # Count must be set via /api/govee/segment-count
@@ -1144,6 +1344,7 @@ async def set_govee_segment_mode(req: GoveeSegmentModeRequest):
 
 class GoveeSegmentCountRequest(BaseModel):
     ip: str
+    mac: Optional[str] = None  # identity for the config key (falls back to IP)
     count: int
 
 @app.post("/api/govee/segment-count")
@@ -1151,7 +1352,7 @@ async def set_govee_segment_count(req: GoveeSegmentCountRequest):
     """Manually set segment count for a Govee device."""
     if "govee_segment_counts" not in config:
         config["govee_segment_counts"] = {}
-    config["govee_segment_counts"][req.ip] = req.count
+    config["govee_segment_counts"][gv_slug_for_ip(req.ip, req.mac)] = req.count
     save_config(config)
     return {"success": True}
 

@@ -424,7 +424,7 @@ function App() {
   const controlGoveeDevice = async (device, cmd) => {
     api("/govee/control", {
       method: "POST",
-      body: JSON.stringify({ ip: device.ip, ...cmd }),
+      body: JSON.stringify({ ip: device.ip, mac: device.mac, ...cmd }),
     }).catch(e => console.error("Govee control error:", e));
     setGoveeDevices(prev => prev.map(d => {
       if (d.ip === device.ip) {
@@ -449,7 +449,7 @@ function App() {
     // Optimistic update for all devices in this room
     const room = rooms[roomName] || {};
     const hueIds = new Set(room.hue_light_ids || []);
-    const goveeIps = new Set(room.govee_devices || []);
+    const goveeSlugs = new Set(room.govee_devices || []);
 
     if (hueIds.size > 0) {
       setHueLights(prev => prev.map(l => {
@@ -461,9 +461,9 @@ function App() {
       }));
     }
 
-    if (goveeIps.size > 0) {
+    if (goveeSlugs.size > 0) {
       setGoveeDevices(prev => prev.map(d => {
-        if (!goveeIps.has(d.ip)) return d;
+        if (!goveeSlugs.has(goveeSlug(d))) return d;
         const stateUpdate = {};
         if (cmd.on !== undefined) stateUpdate.on = cmd.on;
         if (cmd.brightness !== undefined) stateUpdate.brightness = cmd.brightness;
@@ -543,12 +543,12 @@ function App() {
     const room = rooms[roomName] || {};
     return {
       hue: hueLights.filter(l => (room.hue_light_ids || []).includes(l.id)),
-      govee: goveeDevices.filter(d => (room.govee_devices || []).includes(d.ip)),
+      govee: goveeDevices.filter(d => (room.govee_devices || []).includes(goveeSlug(d))),
     };
   };
 
   const unassignedHue = hueLights.filter(l => !Object.values(rooms).some(r => (r.hue_light_ids || []).includes(l.id)));
-  const unassignedGovee = goveeDevices.filter(d => !Object.values(rooms).some(r => (r.govee_devices || []).includes(d.ip)));
+  const unassignedGovee = goveeDevices.filter(d => !Object.values(rooms).some(r => (r.govee_devices || []).includes(goveeSlug(d))));
 
   return (
     <PickerStyleContext.Provider value={pickerStyle}>
@@ -765,7 +765,7 @@ function App() {
           const deviceRoomMap = {};
           Object.entries(rooms).forEach(([rn, room]) => {
             (room.hue_light_ids || []).forEach(id => { deviceRoomMap[`hue:${id}`] = rn; });
-            (room.govee_devices || []).forEach(ip => { deviceRoomMap[`govee:${ip}`] = rn; });
+            (room.govee_devices || []).forEach(slug => { deviceRoomMap[`govee:${slug}`] = rn; });
           });
           return (
             <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fill, minmax(260px, 1fr))", gap: 12 }}>
@@ -781,7 +781,7 @@ function App() {
                 // falls back to whole-light brightness, which can't take on a
                 // device showing segments (needs a power-cycle) and wipes the
                 // applied palette. With it, brightness scales segments in place.
-                const devKey = `govee:${device.ip}`;
+                const devKey = `govee:${goveeSlug(device)}`;
                 const persistedEntry = device.ip && segmentState ? segmentState[device.ip] : null;
                 const segColors = {};
                 if (persistedEntry?.colors) {
@@ -900,7 +900,7 @@ function App() {
                     )}
                   </div>
                   {goveeDevices.filter(d => d.responding !== false).map(device => {
-                    const dk = `govee:${device.ip}`;
+                    const dk = `govee:${goveeSlug(device)}`;
                     const friendlyName = GOVEE_SKU_NAMES[device.sku] || device.name || device.sku || "Unknown";
                     const meta = [device.sku, device.ip, device.mac].filter(Boolean).join(" · ");
                     return (
@@ -909,7 +909,7 @@ function App() {
                         meta={meta}
                         statusColor="#4ade80" statusOpacity={0.8}
                         statusLabel={ctCalibrated?.[dk] ? "◐ calibrated" : null}
-                        flashBody={{ ip: device.ip }}
+                        flashBody={{ ip: device.ip, mac: device.mac }}
                         onNicknameChange={updateNickname} isMobile={isMobile}
                       />
                     );
@@ -917,7 +917,7 @@ function App() {
                   {/* Missing devices — greyed out, red status dot, with
                       "X" (forget) and a re-scan affordance. */}
                   {missingGovee.map(device => {
-                    const dk = `govee:${device.ip}`;
+                    const dk = `govee:${goveeSlug(device)}`;
                     const friendlyName = GOVEE_SKU_NAMES[device.sku] || device.name || device.sku || "Unknown";
                     const name = nicknames?.[dk] || friendlyName;
                     const meta = [device.sku, device.ip, (device.mac && device.mac !== device.ip) ? device.mac : null].filter(Boolean).join(" · ");

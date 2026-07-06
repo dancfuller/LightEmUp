@@ -69,7 +69,7 @@ function DevicePickerModal({ title, devices, onSelect, onClose, nicknames }) {
   const [selected, setSelected] = useState(new Set());
 
   const toggle = (d) => {
-    const key = d.type === "hue" ? `hue:${d.id}` : `govee:${d.ip}`;
+    const key = d.type === "hue" ? `hue:${d.id}` : `govee:${goveeSlug(d)}`;
     setSelected(prev => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key); else next.add(key);
@@ -77,7 +77,7 @@ function DevicePickerModal({ title, devices, onSelect, onClose, nicknames }) {
     });
   };
 
-  const getKey = (d) => d.type === "hue" ? `hue:${d.id}` : `govee:${d.ip}`;
+  const getKey = (d) => d.type === "hue" ? `hue:${d.id}` : `govee:${goveeSlug(d)}`;
 
   return (
     <div style={{
@@ -316,7 +316,7 @@ function RoomAssignment({ hueLights, goveeDevices, rooms, onRoomsChange, nicknam
     const room = rooms[roomName] || {};
     return [
       ...hueLights.filter(l => (room.hue_light_ids || []).includes(l.id)),
-      ...goveeDevices.filter(d => (room.govee_devices || []).includes(d.ip)),
+      ...goveeDevices.filter(d => (room.govee_devices || []).includes(goveeSlug(d))),
     ];
   };
 
@@ -329,7 +329,7 @@ function RoomAssignment({ hueLights, goveeDevices, rooms, onRoomsChange, nicknam
     });
     return [
       ...hueLights.filter(l => !assignedHueIds.has(l.id)),
-      ...goveeDevices.filter(d => !assignedGoveeIps.has(d.ip)),
+      ...goveeDevices.filter(d => !assignedGoveeIps.has(goveeSlug(d))),
     ];
   };
 
@@ -342,7 +342,7 @@ function RoomAssignment({ hueLights, goveeDevices, rooms, onRoomsChange, nicknam
       if (device.type === "hue") {
         updated[fromRoom].hue_light_ids = (updated[fromRoom].hue_light_ids || []).filter(id => id !== device.id);
       } else {
-        updated[fromRoom].govee_devices = (updated[fromRoom].govee_devices || []).filter(ip => ip !== device.ip);
+        updated[fromRoom].govee_devices = (updated[fromRoom].govee_devices || []).filter(s => s !== goveeSlug(device));
       }
     }
 
@@ -353,8 +353,9 @@ function RoomAssignment({ hueLights, goveeDevices, rooms, onRoomsChange, nicknam
         updated[toRoom].hue_light_ids = [...(updated[toRoom].hue_light_ids || []), device.id];
       }
     } else {
-      if (!(updated[toRoom].govee_devices || []).includes(device.ip)) {
-        updated[toRoom].govee_devices = [...(updated[toRoom].govee_devices || []), device.ip];
+      const gslug = goveeSlug(device);
+      if (!(updated[toRoom].govee_devices || []).includes(gslug)) {
+        updated[toRoom].govee_devices = [...(updated[toRoom].govee_devices || []), gslug];
       }
     }
 
@@ -366,7 +367,7 @@ function RoomAssignment({ hueLights, goveeDevices, rooms, onRoomsChange, nicknam
     if (device.type === "hue") {
       updated[roomName].hue_light_ids = (updated[roomName].hue_light_ids || []).filter(id => id !== device.id);
     } else {
-      updated[roomName].govee_devices = (updated[roomName].govee_devices || []).filter(ip => ip !== device.ip);
+      updated[roomName].govee_devices = (updated[roomName].govee_devices || []).filter(s => s !== goveeSlug(device));
     }
     onRoomsChange(updated);
   };
@@ -380,8 +381,9 @@ function RoomAssignment({ hueLights, goveeDevices, rooms, onRoomsChange, nicknam
           updated[roomName].hue_light_ids = [...(updated[roomName].hue_light_ids || []), d.id];
         }
       } else {
-        if (!(updated[roomName].govee_devices || []).includes(d.ip)) {
-          updated[roomName].govee_devices = [...(updated[roomName].govee_devices || []), d.ip];
+        const gslug = goveeSlug(d);
+        if (!(updated[roomName].govee_devices || []).includes(gslug)) {
+          updated[roomName].govee_devices = [...(updated[roomName].govee_devices || []), gslug];
         }
       }
     }

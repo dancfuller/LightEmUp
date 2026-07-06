@@ -13,7 +13,7 @@ function SegmentResetDebug({ roomName, goveeDevices, segmentInfo }) {
   // Resolve a device's segment count: manual override (configured_counts by ip)
   // wins over the SKU table default. Mirrors how light-card.js derives it.
   const getSegCount = (d) => {
-    const configured = segmentInfo?.configured_counts?.[d.ip];
+    const configured = segmentInfo?.configured_counts?.[goveeSlug(d)];
     if (configured) return configured;
     return segmentInfo?.sku_table?.[d.sku]?.count || 0;
   };

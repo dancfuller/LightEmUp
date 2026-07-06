@@ -175,7 +175,7 @@ function getDeviceColor(light) {
 }
 
 function getDeviceLabel(light, nicknames) {
-  const key = light.type === "hue" ? `hue:${light.id}` : `govee:${light.ip}`;
+  const key = light.type === "hue" ? `hue:${light.id}` : `govee:${goveeSlug(light)}`;
   if (nicknames[key]) return nicknames[key];
   return light.name || light.device || key;
 }
@@ -193,7 +193,7 @@ function autoPlaceDevices(allLights, boundary, mode) {
     const usable = len - 2 * pad;
     const spacing = n > 1 ? usable / (n - 1) : 0;
     allLights.forEach((light, i) => {
-      const key = light.type === "hue" ? `hue:${light.id}` : `govee:${light.ip}`;
+      const key = light.type === "hue" ? `hue:${light.id}` : `govee:${goveeSlug(light)}`;
       devices[key] = { x: Math.round(pad + i * spacing), y: 0 };
     });
   } else {
@@ -223,7 +223,7 @@ function autoPlaceDevices(allLights, boundary, mode) {
     }
     // Assign devices to shuffled candidate positions
     allLights.forEach((light, i) => {
-      const key = light.type === "hue" ? `hue:${light.id}` : `govee:${light.ip}`;
+      const key = light.type === "hue" ? `hue:${light.id}` : `govee:${goveeSlug(light)}`;
       const pos = candidates[i % candidates.length];
       devices[key] = { x: pos.x, y: pos.y };
     });
@@ -326,7 +326,7 @@ function DeviceNode({ deviceKey, pos, gridSize, light, nicknames, colorOverride,
   // Segment capability
   const sku = light.sku;
   const segInfo = sku && segmentInfo?.sku_table?.[sku];
-  const configuredCount = light.ip && segmentInfo?.configured_counts?.[light.ip];
+  const configuredCount = light.ip && segmentInfo?.configured_counts?.[goveeSlug(light)];
   const segCount = configuredCount || segInfo?.count;
   const isExpanded = segments?.expanded;
   // Show the toggle whenever the device supports segments, even outside
@@ -870,7 +870,7 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
 
   const lightMap = {};
   allLights.forEach(l => {
-    const key = l.type === "hue" ? `hue:${l.id}` : `govee:${l.ip}`;
+    const key = l.type === "hue" ? `hue:${l.id}` : `govee:${goveeSlug(l)}`;
     lightMap[key] = l;
   });
 
@@ -885,7 +885,7 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
       if (!light) return;
       const sku = light.sku;
       const segInfo = sku && segmentInfo?.sku_table?.[sku];
-      const configuredCount = light.ip && segmentInfo?.configured_counts?.[light.ip];
+      const configuredCount = light.ip && segmentInfo?.configured_counts?.[goveeSlug(light)];
       const count = configuredCount || segInfo?.count || 0;
       deviceInfo[key] = { baseLabel: getDeviceLabel(light, nicknames), count };
     });
@@ -1052,7 +1052,7 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
   const captureCurrentState = () => {
     const snapshot = {};
     allLights.forEach(light => {
-      const key = light.type === "hue" ? `hue:${light.id}` : `govee:${light.ip}`;
+      const key = light.type === "hue" ? `hue:${light.id}` : `govee:${goveeSlug(light)}`;
       snapshot[key] = {
         on: light.state?.on || false,
         brightness: light.state?.brightness || 0,
@@ -1205,7 +1205,7 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
 
   // Placed & unplaced device keys
   const placedKeys = new Set(Object.keys(devices));
-  const allKeys = allLights.map(l => l.type === "hue" ? `hue:${l.id}` : `govee:${l.ip}`);
+  const allKeys = allLights.map(l => l.type === "hue" ? `hue:${l.id}` : `govee:${goveeSlug(l)}`);
   const unplacedKeys = allKeys.filter(k => !placedKeys.has(k));
 
   // Handle grid click (for placing devices)
@@ -1274,7 +1274,7 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
       const light = lightMap[deviceKey];
       const sku = light?.sku;
       const segInfo = sku && segmentInfo?.sku_table?.[sku];
-      const configuredCount = light?.ip && segmentInfo?.configured_counts?.[light.ip];
+      const configuredCount = light?.ip && segmentInfo?.configured_counts?.[goveeSlug(light)];
       const count = configuredCount || segInfo?.count || 0;
       if (count === 0) return prev;
       const devicePos = prev.devices[deviceKey];

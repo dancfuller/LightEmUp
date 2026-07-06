@@ -18,7 +18,7 @@ function CTCalibrationPanel({ hueLights, goveeDevices, nicknames, ctRgb, onContr
   const ctHueLights = (hueLights || []).filter(l => l.capabilities?.has_color_temp);
   const ctGoveeDevices = goveeDevices || [];
 
-  const goveeKey = (d) => `govee:${d.ip}`;
+  const goveeKey = (d) => `govee:${goveeSlug(d)}`;
   const govLabel = (d) => {
     const { nickname, friendlyName } = getDeviceDisplayName({ ...d, type: "govee" }, nicknames);
     return nickname || friendlyName;

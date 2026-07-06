@@ -149,13 +149,29 @@ const GOVEE_SKU_NAMES = {
   "H70C1": "Christmas String Lights 2 10M",
 };
 
+// ─── Device identity keys ───────────────────────────────────────────────────
+// A Govee device's identity is its stable device-id (`mac`), NOT its DHCP IP.
+// All persisted associations (rooms, nicknames, layouts, segments, calibration,
+// state) key by a colon-free slug of the mac; the IP is only the live UDP address.
+// Mirrors backend gv_slug()/gv_key(). Falls back to IP for a device with no mac.
+function normMac(mac) {
+  return (mac || "").replace(/[:-]/g, "").toLowerCase();
+}
+function goveeSlug(device) {
+  const m = device?.mac;
+  return (m && m !== "unknown") ? normMac(m) : (device?.ip || "");
+}
+function deviceKey(device) {
+  return device.type === "hue" ? `hue:${device.id}` : `govee:${goveeSlug(device)}`;
+}
+
 function getDeviceDisplayName(device, nicknames) {
-  const deviceKey = device.type === "hue" ? `hue:${device.id}` : `govee:${device.ip}`;
-  const nickname = nicknames?.[deviceKey] || "";
+  const deviceKey_ = deviceKey(device);
+  const nickname = nicknames?.[deviceKey_] || "";
   const friendlyName = device.type === "hue"
     ? (device.product_name || device.name || device.model || `Light ${device.id}`)
     : (GOVEE_SKU_NAMES[device.sku] || device.name || device.sku || "Govee Device");
-  return { nickname, friendlyName, deviceKey };
+  return { nickname, friendlyName, deviceKey: deviceKey_ };
 }
 
 // ─── Color Conversion Helpers ───────────────────────────────────────────────
