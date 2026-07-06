@@ -96,16 +96,83 @@ DEFAULT_CONFIG = {
 }
 
 
+def _config_backups() -> list[Path]:
+    """All backup files for config.json, newest first (rolling .bak + any manual
+    .recovered-*.bak safety copies), so we can restore the freshest good one."""
+    parent = CONFIG_PATH.parent
+    baks = list(parent.glob(CONFIG_PATH.name + "*.bak"))
+    return sorted(baks, key=lambda p: p.stat().st_mtime, reverse=True)
+
+
 def load_config() -> dict:
+    """Load config.json, tolerating a truncated/corrupt file.
+
+    A power loss during save could leave config.json empty or half-written. In
+    that case DON'T silently fall back to DEFAULT_CONFIG — that would wipe the
+    user's rooms/nicknames the moment the next mutation persisted. Instead restore
+    from the most recent valid backup; only use defaults if there is genuinely
+    nothing to load (fresh install)."""
     if CONFIG_PATH.exists():
-        with open(CONFIG_PATH) as f:
-            return json.load(f)
+        try:
+            with open(CONFIG_PATH) as f:
+                return json.load(f)
+        except (json.JSONDecodeError, ValueError, OSError):
+            log.error("config.json is unreadable/corrupt (power loss?); trying backups")
+    for bak in _config_backups():
+        try:
+            with open(bak) as f:
+                data = json.load(f)
+            log.warning("Restored config from backup %s", bak.name)
+            return data
+        except Exception:
+            continue
+    if CONFIG_PATH.exists():
+        log.error("config.json corrupt and no valid backup found; using defaults")
     return DEFAULT_CONFIG.copy()
 
 
 def save_config(config: dict):
-    with open(CONFIG_PATH, "w") as f:
-        json.dump(config, f, indent=2)
+    """Atomically persist config so a power loss can never truncate config.json.
+
+    The old path opened the real file in "w" mode, which truncates it to zero
+    *before* writing — a crash mid-write left an empty/corrupt config. Instead:
+    write a temp file in the same directory, fsync it, keep the prior good file
+    as a rolling .bak, then os.replace() (atomic rename) over config.json, and
+    fsync the directory so the rename itself survives a power cut."""
+    import tempfile, shutil
+    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp_fd, tmp_path = tempfile.mkstemp(
+        dir=str(CONFIG_PATH.parent) or ".",
+        prefix=CONFIG_PATH.name + ".", suffix=".tmp",
+    )
+    try:
+        with os.fdopen(tmp_fd, "w") as f:
+            json.dump(config, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        # Keep the last good file as a rolling backup before replacing it.
+        if CONFIG_PATH.exists():
+            try:
+                shutil.copy2(CONFIG_PATH, CONFIG_PATH.parent / (CONFIG_PATH.name + ".bak"))
+            except Exception:
+                log.exception("Could not refresh config backup")
+        os.replace(tmp_path, CONFIG_PATH)  # atomic on POSIX & Windows
+        tmp_path = None
+        # Durably commit the directory entry (the rename) too.
+        try:
+            dir_fd = os.open(str(CONFIG_PATH.parent) or ".", os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        except (OSError, AttributeError):
+            pass  # unsupported on some platforms (e.g. Windows) — rename is still atomic
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
 
 
 config = load_config()

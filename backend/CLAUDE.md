@@ -17,6 +17,15 @@ deploy does — auto-busting the cache. CDN `<script src="https://…">` tags ar
 - `config.json` (gitignored; template `config.json.example`) is read at startup and
   rewritten on every mutation. Use the existing save helper in `main.py` — don't
   hand-roll JSON writes.
+- **Atomic + crash-safe (v2.19.10)**: `save_config` writes a temp file in the same
+  dir, `fsync`s it, copies the current good file to a rolling `config.json.bak`, then
+  `os.replace()`s (atomic rename) and fsyncs the directory. A power loss can therefore
+  never leave a truncated config — you get either the complete old or complete new file.
+  `load_config` tolerates a corrupt/empty config.json by restoring the newest valid
+  backup (`config.json*.bak`, incl. manual `.recovered-*.bak`) instead of falling back
+  to `DEFAULT_CONFIG` — that fallback would wipe rooms/nicknames on the next mutation.
+  This replaced the old `open(...,"w")` path, which truncated the real file *before*
+  writing (an outage mid-write = total loss; the fix was prompted by exactly that).
 - Keys include: bridge creds, room assignments, nicknames, room layouts, scene
   settings, `ct_correction`, `ct_rgb`, per-room color state (incl. `shuffle_seed`,
   `target_vendor`), device modes, segment fill modes.
