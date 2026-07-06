@@ -236,4 +236,7 @@ debounced `loadAll`. `ctCalibrated = {...ctCorrection, ...ctRgb}` drives the bad
   because they POST on change — that asymmetry was the bug). Don't revert room edits to a
   local-only `setRooms`. Room *deletion* calls `DELETE /api/rooms/{name}` (v3.1.1) —
   POST only upserts, so without the DELETE a removed room lingered and reappeared on the
-  next refresh.
+  next refresh. The old top-of-page **"Save Rooms" button was removed (v3.1.3)** — it
+  re-POSTed rooms that were already persisted, and its "✓ Saved" flash falsely implied
+  edits were unsaved; the tall page made it a scroll-away trap. Don't reintroduce it.
+  See `docs/save-consistency-audit.md` for the full save/persistence UX audit.

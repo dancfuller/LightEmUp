@@ -309,8 +309,6 @@ function RoomAssignment({ hueLights, goveeDevices, rooms, onRoomsChange, nicknam
   fixtures, onFixtureUpsert, onFixtureDelete }) {
   const isMobile = useIsMobile();
   const [newRoomName, setNewRoomName] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [saveStatus, setSaveStatus] = useState(null);
 
   const getDevicesForRoom = (roomName) => {
     const room = rooms[roomName] || {};
@@ -407,28 +405,6 @@ function RoomAssignment({ hueLights, goveeDevices, rooms, onRoomsChange, nicknam
       .catch(e => console.error("Failed to delete room:", e));
   };
 
-  const saveAll = async () => {
-    setSaving(true);
-    setSaveStatus(null);
-    try {
-      for (const [name, room] of Object.entries(rooms)) {
-        await api("/rooms", {
-          method: "POST",
-          body: JSON.stringify({
-            name,
-            hue_light_ids: room.hue_light_ids || [],
-            govee_devices: room.govee_devices || [],
-          }),
-        });
-      }
-      setSaveStatus("success");
-      setTimeout(() => setSaveStatus(null), 3000);
-    } catch {
-      setSaveStatus("error");
-    }
-    setSaving(false);
-  };
-
   const unassigned = getUnassigned();
   const allRoomNames = Object.keys(rooms);
   const defaultRooms = ["Bedroom", "Living Room", "Outside"];
@@ -442,21 +418,8 @@ function RoomAssignment({ hueLights, goveeDevices, rooms, onRoomsChange, nicknam
         <div>
           <h2 style={{ fontSize: 20, fontWeight: 700, color: "#f8fafc", margin: 0 }}>Room Assignment</h2>
           <p style={{ fontSize: 13, color: "#64748b", margin: "4px 0 0" }}>
-            Add devices to rooms, reassign with the dropdown, or remove them.
+            Add devices to rooms, reassign with the dropdown, or remove them. Changes save automatically.
           </p>
-        </div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          {saveStatus === "success" && <span style={{ fontSize: 12, color: "#4ade80" }}>✓ Saved</span>}
-          {saveStatus === "error" && <span style={{ fontSize: 12, color: "#f87171" }}>Save failed</span>}
-          <button
-            onClick={saveAll} disabled={saving}
-            style={{
-              padding: "8px 24px", borderRadius: 10, border: "none",
-              background: saving ? "#475569" : "#6366f1",
-              color: "#fff", fontSize: 13, fontWeight: 600,
-              cursor: saving ? "wait" : "pointer",
-            }}
-          >{saving ? "Saving..." : "Save Rooms"}</button>
         </div>
       </div>
 
