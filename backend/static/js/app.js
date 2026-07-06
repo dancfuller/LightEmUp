@@ -166,6 +166,30 @@ function App() {
     return true;
   };
 
+  // Assign Rooms edits (assign/move/remove a device) must PERSIST IMMEDIATELY.
+  // Previously they only updated local state and relied on a "Save Rooms" click;
+  // any background config refresh (SSE from another session, a scene finishing)
+  // ran loadAll()→setRooms(cfg.rooms) and silently wiped the unsaved assignment —
+  // while nicknames (which POST on change) survived. Persist each change like a
+  // nickname so there's no unsaved window to clobber.
+  const handleRoomsChange = useCallback(async (updated) => {
+    setRooms(updated);
+    try {
+      await Promise.all(Object.entries(updated).map(([name, room]) =>
+        api("/rooms", {
+          method: "POST",
+          body: JSON.stringify({
+            name,
+            hue_light_ids: room.hue_light_ids || [],
+            govee_devices: room.govee_devices || [],
+          }),
+        })
+      ));
+    } catch (e) {
+      console.error("Failed to persist room assignment:", e);
+    }
+  }, []);
+
   const loadAll = useCallback(async () => {
     try {
       const cfg = await api("/config");
@@ -816,7 +840,7 @@ function App() {
         {activeTab === "assign rooms" && (
           <RoomAssignment
             hueLights={hueLights} goveeDevices={goveeDevices}
-            rooms={rooms} onRoomsChange={setRooms}
+            rooms={rooms} onRoomsChange={handleRoomsChange}
             nicknames={nicknames} onNicknameChange={updateNickname}
             onControlHue={controlHueLight} onControlGovee={controlGoveeDevice}
             favorites={favoriteColors} onFavoritesChange={updateFavorites}

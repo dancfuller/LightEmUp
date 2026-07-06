@@ -207,3 +207,11 @@ State, routing, API calls. `controlHueLight` / `controlGoveeDevice` spread `cmd`
 the POST body, so passing CT keys (`color_temp` mireds / `color_temp_kelvin`) works
 without new endpoints. Opens the EventSource on mount and coalesces incoming SSE into a
 debounced `loadAll`. `ctCalibrated = {...ctCorrection, ...ctRgb}` drives the badges.
+- **Assign Rooms edits persist immediately (v3.0.1):** `RoomAssignment`'s `onRoomsChange`
+  is `handleRoomsChange`, which `setRooms(updated)` **and** POSTs the rooms right away —
+  NOT `setRooms` alone. The old wiring only saved on a "Save Rooms" click, so a
+  background `loadAll()` (SSE from another session / a finishing scene) would
+  `setRooms(cfg.rooms)` and silently wipe the unsaved assignment (nicknames survived
+  because they POST on change — that asymmetry was the bug). Don't revert room edits to a
+  local-only `setRooms`. (Room *deletion* still lacks a backend DELETE endpoint — a
+  separate known gap.)
