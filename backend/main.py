@@ -47,6 +47,13 @@ from razer_keeper import razer_keeper
 from version import __version__ as APP_VERSION, GIT_HASH, GIT_DATE, version_string
 import segment_state
 
+# Module logger, defined early: config load + the one-time Govee MAC migration run
+# at import (below), before the fuller handler setup further down — and both call
+# `log`. getLogger is idempotent by name, so the handlers attached later flow
+# through this same object. (Without this, migrate_govee_to_mac's log.warning
+# raised NameError at import and crash-looped the service.)
+log = logging.getLogger("lightemup.main")
+
 # ─── Config ──────────────────────────────────────────────────────────────────
 
 CONFIG_PATH = Path("config.json")
