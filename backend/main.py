@@ -1112,6 +1112,26 @@ async def update_room(room: RoomConfig):
     return {"success": True}
 
 
+@app.delete("/api/rooms/{room_name}")
+async def delete_room(room_name: str):
+    """Delete a room. Its devices simply become unassigned (nicknames / state /
+    calibration are keyed by device, not room, so they survive). Also drop the
+    room-scoped sidecar config so a later room of the same name doesn't inherit
+    stale layout / saved scene / lightning settings."""
+    removed = room_name in config.get("rooms", {})
+    if removed:
+        del config["rooms"][room_name]
+    for key in ("room_layouts", "room_color_state", "lightning_scenes"):
+        d = config.get(key)
+        if isinstance(d, dict) and room_name in d:
+            del d[room_name]
+            removed = True
+    if removed:
+        save_config(config)
+        publish_event("config")
+    return {"success": removed}
+
+
 @app.post("/api/rooms/control")
 async def control_room(req: RoomStateRequest):
     """Control all lights in a room at once."""

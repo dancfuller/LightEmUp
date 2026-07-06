@@ -400,7 +400,11 @@ function RoomAssignment({ hueLights, goveeDevices, rooms, onRoomsChange, nicknam
   const deleteRoom = (name) => {
     const updated = { ...rooms };
     delete updated[name];
-    onRoomsChange(updated);
+    onRoomsChange(updated);  // optimistic local update + re-persist the survivors
+    // POST /api/rooms only upserts, so the room lingers on the backend without an
+    // explicit DELETE (that was the bug — deleted rooms reappeared on refresh).
+    api(`/rooms/${encodeURIComponent(name)}`, { method: "DELETE" })
+      .catch(e => console.error("Failed to delete room:", e));
   };
 
   const saveAll = async () => {

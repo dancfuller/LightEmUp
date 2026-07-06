@@ -231,5 +231,6 @@ debounced `loadAll`. `ctCalibrated = {...ctCorrection, ...ctRgb}` drives the bad
   background `loadAll()` (SSE from another session / a finishing scene) would
   `setRooms(cfg.rooms)` and silently wipe the unsaved assignment (nicknames survived
   because they POST on change — that asymmetry was the bug). Don't revert room edits to a
-  local-only `setRooms`. (Room *deletion* still lacks a backend DELETE endpoint — a
-  separate known gap.)
+  local-only `setRooms`. Room *deletion* calls `DELETE /api/rooms/{name}` (v3.1.1) —
+  POST only upserts, so without the DELETE a removed room lingered and reappeared on the
+  next refresh.
