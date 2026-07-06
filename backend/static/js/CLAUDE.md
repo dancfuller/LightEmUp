@@ -184,6 +184,14 @@ The map was unusable crammed into the ~416px controls drawer (`ControlSurface`).
     arrangement AND the open grid to drag into. (An earlier version packed empty
     rows/columns; that collapsed drag space and re-collapsed the layout on every reopen,
     fighting placement — don't reintroduce it.)
+- **Reachable from Assign Rooms too (v2.20.0):** each `RoomCard` in `room-assignment.js`
+  has a collapsible "Map / Layout" subsection that mounts the same `RoomMap` (its
+  "Open layout editor" launcher opens the full-window editor) — so you can arrange a
+  room right where you assign its devices. `RoomMap` builds its device list from the
+  `hueLights`/`goveeDevices` props, so `RoomCard` passes **only that room's** devices
+  (split by vendor from `getDevicesForRoom`), not the global lists — same contract as
+  `RoomSection`. App threads the map props (control/favorites/segment/layout/fixture
+  handlers) through `RoomAssignment` → `RoomCard`.
 
 ## app.js — orchestration
 State, routing, API calls. `controlHueLight` / `controlGoveeDevice` spread `cmd` into

@@ -179,9 +179,18 @@ function DevicePickerModal({ title, devices, onSelect, onClose, nicknames }) {
   );
 }
 
-function RoomCard({ roomName, devices, allRoomNames, unassigned, onMoveDevice, onRemoveDevice, onAddDevices, onDeleteRoom, isDefault, nicknames }) {
+function RoomCard({ roomName, devices, allRoomNames, unassigned, onMoveDevice, onRemoveDevice, onAddDevices, onDeleteRoom, isDefault, nicknames,
+  onNicknameChange, onControlHue, onControlGovee, favorites, onFavoritesChange,
+  segmentInfo, segmentState, roomLayouts, onLayoutChange, fixtures, onFixtureUpsert, onFixtureDelete }) {
   const isMobile = useIsMobile();
   const [showPicker, setShowPicker] = useState(false);
+  const [mapExpanded, setMapExpanded] = useState(false);
+
+  // RoomMap builds its device list from the props it's given, so hand it only
+  // this room's devices (split by vendor) — same contract as RoomSection.
+  const roomHue = devices.filter(d => d.type === "hue");
+  const roomGovee = devices.filter(d => d.type !== "hue");
+  const canShowMap = typeof RoomMap === "function" && !!onLayoutChange && devices.length > 0;
 
   return (
     <>
@@ -245,6 +254,40 @@ function RoomCard({ roomName, devices, allRoomNames, unassigned, onMoveDevice, o
             ))}
           </div>
         )}
+
+        {/* Collapsible Map / Layout editor — jump straight to arranging this
+            room's lights without leaving the Assign Rooms view. */}
+        {canShowMap && (
+          <div style={{ marginTop: 14, border: "1px solid #1e293b", borderRadius: 12, overflow: "hidden" }}>
+            <button
+              onClick={() => setMapExpanded(v => !v)}
+              style={{
+                width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
+                padding: "10px 14px", background: mapExpanded ? "rgba(52,211,153,0.10)" : "transparent",
+                border: "none", cursor: "pointer", color: mapExpanded ? "#34d399" : "#94a3b8",
+                fontSize: 12, fontWeight: 700, letterSpacing: 0.6, textTransform: "uppercase",
+              }}
+            >
+              <span>&#x1F5FA;&#xFE0F; Map / Layout</span>
+              <span style={{ fontSize: 11, transform: mapExpanded ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.15s" }}>&#x25BC;</span>
+            </button>
+            {mapExpanded && (
+              <div style={{ padding: 12, borderTop: "1px solid #1e293b" }}>
+                <RoomMap
+                  roomName={roomName}
+                  hueLights={roomHue} goveeDevices={roomGovee}
+                  onControlHue={onControlHue} onControlGovee={onControlGovee}
+                  favorites={favorites} onFavoritesChange={onFavoritesChange}
+                  nicknames={nicknames} onNicknameChange={onNicknameChange}
+                  segmentInfo={segmentInfo} segmentState={segmentState}
+                  roomLayouts={roomLayouts} onLayoutChange={onLayoutChange}
+                  fixtures={fixtures}
+                  onFixtureUpsert={onFixtureUpsert} onFixtureDelete={onFixtureDelete}
+                />
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {showPicker && (
@@ -260,7 +303,10 @@ function RoomCard({ roomName, devices, allRoomNames, unassigned, onMoveDevice, o
   );
 }
 
-function RoomAssignment({ hueLights, goveeDevices, rooms, onRoomsChange, nicknames }) {
+function RoomAssignment({ hueLights, goveeDevices, rooms, onRoomsChange, nicknames,
+  onNicknameChange, onControlHue, onControlGovee, favorites, onFavoritesChange,
+  segmentInfo, segmentState, roomLayouts, onLayoutChange,
+  fixtures, onFixtureUpsert, onFixtureDelete }) {
   const isMobile = useIsMobile();
   const [newRoomName, setNewRoomName] = useState("");
   const [saving, setSaving] = useState(false);
@@ -441,6 +487,12 @@ function RoomAssignment({ hueLights, goveeDevices, rooms, onRoomsChange, nicknam
           onDeleteRoom={deleteRoom}
           isDefault={defaultRooms.includes(roomName)}
           nicknames={nicknames}
+          onNicknameChange={onNicknameChange}
+          onControlHue={onControlHue} onControlGovee={onControlGovee}
+          favorites={favorites} onFavoritesChange={onFavoritesChange}
+          segmentInfo={segmentInfo} segmentState={segmentState}
+          roomLayouts={roomLayouts} onLayoutChange={onLayoutChange}
+          fixtures={fixtures} onFixtureUpsert={onFixtureUpsert} onFixtureDelete={onFixtureDelete}
         />
       ))}
 

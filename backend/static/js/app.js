@@ -817,7 +817,12 @@ function App() {
           <RoomAssignment
             hueLights={hueLights} goveeDevices={goveeDevices}
             rooms={rooms} onRoomsChange={setRooms}
-            nicknames={nicknames}
+            nicknames={nicknames} onNicknameChange={updateNickname}
+            onControlHue={controlHueLight} onControlGovee={controlGoveeDevice}
+            favorites={favoriteColors} onFavoritesChange={updateFavorites}
+            segmentInfo={segmentInfo} segmentState={segmentState}
+            roomLayouts={roomLayouts} onLayoutChange={handleLayoutChange}
+            fixtures={fixtures} onFixtureUpsert={upsertFixture} onFixtureDelete={deleteFixture}
           />
         )}
 
