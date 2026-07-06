@@ -463,6 +463,15 @@ function App() {
     }));
   };
 
+  // Drive EVERY discovered light at once (the global All On / Off / Soft White
+  // bar). Vendor commands differ: Hue takes color_temp in mireds, Govee takes
+  // color_temp_kelvin — so pass each its own cmd. Fire-and-forget per device.
+  const controlAll = (hueCmd, goveeCmd) => {
+    hueLights.forEach(l => controlHueLight(l, hueCmd));
+    goveeDevices.forEach(d => controlGoveeDevice(d, goveeCmd));
+  };
+  const SOFT_WHITE_K = 2700;
+
   const controlRoom = async (roomName, cmd) => {
     // cmd can be { on: bool } or { on, brightness, r, g, b }
     api("/rooms/control", {
@@ -691,6 +700,27 @@ function App() {
         ))}
       </nav>
 
+      {/* Global master controls — drive every light from any page. */}
+      <div style={{
+        display: "flex", gap: isMobile ? 6 : 8, padding: isMobile ? "8px 10px" : "10px 24px",
+        borderBottom: "1px solid #1e293b", flexWrap: "wrap", alignItems: "center",
+      }}>
+        <span style={{ fontSize: 11, color: "#64748b", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.6, marginRight: 2 }}>All Lights</span>
+        <button
+          onClick={() => controlAll({ on: true }, { on: true })}
+          style={{ padding: isMobile ? "6px 12px" : "7px 16px", borderRadius: 8, border: "none", background: "#6366f1", color: "#fff", fontSize: isMobile ? 12 : 13, fontWeight: 700, cursor: "pointer", boxShadow: "0 2px 8px rgba(99,102,241,0.3)" }}
+        >All On</button>
+        <button
+          onClick={() => controlAll({ on: true, color_temp: kelvinToMired(SOFT_WHITE_K) }, { on: true, color_temp_kelvin: SOFT_WHITE_K })}
+          title="Turn every light on at a warm soft-white (2700K)"
+          style={{ padding: isMobile ? "6px 12px" : "7px 16px", borderRadius: 8, border: "1px solid rgba(251,191,36,0.5)", background: "rgba(251,191,36,0.12)", color: "#fbbf24", fontSize: isMobile ? 12 : 13, fontWeight: 700, cursor: "pointer" }}
+        >All On · Soft White</button>
+        <button
+          onClick={() => controlAll({ on: false }, { on: false })}
+          style={{ padding: isMobile ? "6px 12px" : "7px 16px", borderRadius: 8, border: "1px solid #334155", background: "transparent", color: "#94a3b8", fontSize: isMobile ? 12 : 13, fontWeight: 700, cursor: "pointer" }}
+        >All Off</button>
+      </div>
+
       <main style={{ padding: isMobile ? 12 : 24, maxWidth: 1200, margin: "0 auto" }}>
         {error && (
           <div style={{
@@ -776,7 +806,13 @@ function App() {
               <RoomSection name="Unassigned"
                 hueLights={unassignedHue} goveeDevices={unassignedGovee}
                 onControlHue={controlHueLight} onControlGovee={controlGoveeDevice}
-                onControlRoom={() => {}}
+                onControlRoom={(_, cmd) => {
+                  // "Unassigned" is not a backend room, so /rooms/control can't
+                  // target it — drive its devices directly instead (was a no-op,
+                  // which made the On/Off toggle here do nothing).
+                  unassignedHue.forEach(l => controlHueLight(l, cmd));
+                  unassignedGovee.forEach(d => controlGoveeDevice(d, cmd));
+                }}
                 favorites={favoriteColors} onFavoritesChange={updateFavorites}
                 nicknames={nicknames} onNicknameChange={updateNickname}
                 ctCorrection={ctCalibrated}

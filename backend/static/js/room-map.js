@@ -1458,13 +1458,17 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
       <div style={{
         display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginBottom: 12,
       }}>
+        {/* Edit⇄View mode toggle. Labelled by the mode it switches TO, and NOT
+            "Done Editing" — that collided with the header's "Done" (which closes
+            the whole editor), reading as two Done buttons. */}
         <button onClick={() => { setIsEdit(!isEdit); setPlacingDevice(null); setSelectedDeviceKeys([]); }}
+          title={isEdit ? "Switch to view mode (tap a light to control it)" : "Switch to edit mode (drag to arrange)"}
           style={{
             padding: "5px 14px", borderRadius: 8, border: "1px solid #334155",
             background: isEdit ? "rgba(99,102,241,0.15)" : "transparent",
             color: isEdit ? "#a5b4fc" : "#94a3b8", fontSize: 12, fontWeight: 600, cursor: "pointer",
           }}
-        >{isEdit ? "Done Editing" : "Edit Layout"}</button>
+        >{isEdit ? "View Layout" : "Edit Layout"}</button>
 
         <button onClick={toggleMode}
           style={{

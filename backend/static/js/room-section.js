@@ -80,8 +80,6 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
   // Single overlay surface state — replaces the old per-panel show* booleans.
   // null | "lightning" | "scenes" | "controls" | "debug"
   const [surfaceView, setSurfaceView] = useState(null);
-  // Map lives inside the Controls panel as a collapsible subsection.
-  const [mapExpanded, setMapExpanded] = useState(false);
   const [roomBrightness, setRoomBrightness] = useState(75);
   const [roomColor, setRoomColor] = useState(null);
   const [colorModeApplied, setColorModeApplied] = useState(null);
@@ -105,11 +103,15 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
 
   // Tabs available in the control surface. Debug only appears when there is a
   // segment-capable device to debug.
+  // "Room Map" is a real room (has a layout handler) with at least one device —
+  // the pseudo-"Unassigned" group has neither, so it gets no map.
+  const canMap = typeof RoomMap === "function" && !!onLayoutChange && allLights.length > 0;
   const views = [
     { key: "lightning", label: lightningActive ? "⚡ Storm" : "⚡ Lightning", accent: "#fbbf24" },
     { key: "scenes", label: "Scenes", accent: "#34d399" },
     { key: "controls", label: "Controls", accent: "#a5b4fc" },
   ];
+  if (canMap) views.push({ key: "map", label: "🗺 Room Map", accent: "#22d3ee" });
   if (anySegmented) views.push({ key: "debug", label: "Debug", accent: "#fbbf24" });
 
   const applyRoomBrightness = (val) => {
@@ -136,43 +138,28 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
     >{label}</button>
   );
 
-  // Room-level controls panel (override + brightness + color + map).
+  // Room map is now its own first-class surface view ("Room Map" opener), not a
+  // buried collapsible inside Controls — the layout was too hidden.
+  const roomMapEl = (
+    <RoomMap
+      roomName={name}
+      segmentState={segmentState}
+      hueLights={hueLights} goveeDevices={goveeDevices}
+      onControlHue={onControlHue} onControlGovee={onControlGovee}
+      favorites={favorites} onFavoritesChange={onFavoritesChange}
+      nicknames={nicknames} onNicknameChange={onNicknameChange}
+      segmentInfo={segmentInfo}
+      roomLayouts={roomLayouts} onLayoutChange={onLayoutChange}
+      appliedColors={colorModeApplied}
+      fixtures={fixtures}
+      onFixtureUpsert={onFixtureUpsert}
+      onFixtureDelete={onFixtureDelete}
+    />
+  );
+
+  // Room-level controls panel (override + brightness + color).
   const controlsPanel = (
     <div>
-      {/* Collapsible Map subsection */}
-      <div style={{ marginBottom: 16, border: "1px solid #1e293b", borderRadius: 12, overflow: "hidden" }}>
-        <button
-          onClick={() => setMapExpanded(!mapExpanded)}
-          style={{
-            width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
-            padding: "10px 14px", background: mapExpanded ? "rgba(52,211,153,0.10)" : "transparent",
-            border: "none", cursor: "pointer", color: mapExpanded ? "#34d399" : "#94a3b8",
-            fontSize: 12, fontWeight: 700, letterSpacing: 0.6, textTransform: "uppercase",
-          }}
-        >
-          <span>Map</span>
-          <span style={{ fontSize: 11, transform: mapExpanded ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.15s" }}>&#x25BC;</span>
-        </button>
-        {mapExpanded && (
-          <div style={{ padding: 12, borderTop: "1px solid #1e293b" }}>
-            <RoomMap
-              roomName={name}
-              segmentState={segmentState}
-              hueLights={hueLights} goveeDevices={goveeDevices}
-              onControlHue={onControlHue} onControlGovee={onControlGovee}
-              favorites={favorites} onFavoritesChange={onFavoritesChange}
-              nicknames={nicknames} onNicknameChange={onNicknameChange}
-              segmentInfo={segmentInfo}
-              roomLayouts={roomLayouts} onLayoutChange={onLayoutChange}
-              appliedColors={colorModeApplied}
-              fixtures={fixtures}
-              onFixtureUpsert={onFixtureUpsert}
-              onFixtureDelete={onFixtureDelete}
-            />
-          </div>
-        )}
-      </div>
-
       {/* Override header + on/off toggle */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, gap: 8, flexWrap: "wrap" }}>
         <div style={{ fontSize: 12, fontWeight: 600, color: "#a5b4fc", textTransform: "uppercase", letterSpacing: 0.8 }}>
@@ -265,6 +252,8 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
     );
   } else if (surfaceView === "controls") {
     panel = controlsPanel;
+  } else if (surfaceView === "map") {
+    panel = roomMapEl;
   } else if (surfaceView === "debug") {
     panel = (
       <SegmentResetDebug
@@ -291,18 +280,26 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
               {totalSegments > 0 && <> &middot; {totalSegments} segments</>}
             </span>
           </div>
-          <button
-            onClick={() => onControlRoom(name, { on: !anyOn })}
-            style={{
-              padding: isMobile ? "8px 16px" : "9px 20px", borderRadius: 10, border: "none",
-              background: anyOn ? "#334155" : "#6366f1",
-              color: anyOn ? "#94a3b8" : "#fff", fontSize: 13, fontWeight: 700,
-              boxShadow: anyOn ? "none" : "0 2px 10px rgba(99,102,241,0.35)",
-              cursor: "pointer", transition: "all 0.2s", whiteSpace: "nowrap",
-            }}
-          >
-            {anyOn ? "Turn Off" : "Turn On"}
-          </button>
+          {/* On/off is a toggle switch, not a "Turn Off" button — the old button
+              looked greyed-out (disabled) exactly when the lights were ON. The
+              switch's position + color show the current state; tapping flips all. */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+            <span style={{ fontSize: 12, fontWeight: 700, color: anyOn ? "#e2e8f0" : "#64748b", whiteSpace: "nowrap" }}>
+              {anyOn ? "On" : "Off"}
+            </span>
+            <button
+              onClick={() => onControlRoom(name, { on: !anyOn })}
+              title={anyOn ? "Turn all lights off" : "Turn all lights on"}
+              style={{
+                width: 48, height: 28, borderRadius: 14, border: "none",
+                background: anyOn ? "#6366f1" : "#334155", cursor: "pointer",
+                position: "relative", transition: "background 0.2s", flexShrink: 0,
+                boxShadow: anyOn ? "0 0 8px rgba(99,102,241,0.4)" : "none",
+              }}
+            >
+              <div style={{ width: 22, height: 22, borderRadius: "50%", background: "#fff", position: "absolute", top: 3, left: anyOn ? 23 : 3, transition: "left 0.2s ease" }} />
+            </button>
+          </div>
         </div>
 
         {/* Surface openers */}
@@ -310,6 +307,7 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
           {openerBtn("lightning", lightningActive ? "⚡ Storm" : "⚡ Lightning", lightningActive ? "#fbbf24" : "#94a3b8")}
           {openerBtn("scenes", "Scenes", "#34d399")}
           {openerBtn("controls", "Controls", "#a5b4fc")}
+          {canMap && openerBtn("map", "🗺 Room Map", "#22d3ee")}
           {anySegmented && openerBtn("debug", "Debug", "#64748b", true)}
         </div>
       </div>

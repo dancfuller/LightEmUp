@@ -211,6 +211,20 @@ State, routing, API calls. `controlHueLight` / `controlGoveeDevice` spread `cmd`
 the POST body, so passing CT keys (`color_temp` mireds / `color_temp_kelvin`) works
 without new endpoints. Opens the EventSource on mount and coalesces incoming SSE into a
 debounced `loadAll`. `ctCalibrated = {...ctCorrection, ...ctRgb}` drives the badges.
+- **Global master controls (v3.1.0):** a bar under the nav (visible on every tab) with
+  All On / All On · Soft White / All Off, driving `controlAll(hueCmd, goveeCmd)` — which
+  fans out per device (Hue wants `color_temp` mireds, Govee wants `color_temp_kelvin`, so
+  each vendor gets its own cmd; soft white = 2700K). It iterates `hueLights`+`goveeDevices`
+  client-side (fire-and-forget) — no backend all-control endpoint yet.
+- **"Unassigned" isn't a backend room** — its `RoomSection` gets an `onControlRoom` that
+  drives `unassignedHue`/`unassignedGovee` directly (was a no-op `() => {}`, so its on/off
+  toggle did nothing — v3.1.0 fix). Don't route Unassigned through `/api/rooms/control`.
+- **Room on/off is a toggle switch, not a "Turn Off" button** (room-section.js, v3.1.0):
+  the old button was styled muted/grey exactly when lights were ON, reading as disabled.
+  The switch shows state (indigo+knob-right = on).
+- **"Room Map" is its own surface view** (room-section.js, v3.1.0), gated on
+  `canMap = !!onLayoutChange && allLights.length > 0` (so Unassigned has none). It was a
+  buried collapsible inside Controls; now it's a first-class opener next to Scenes/Controls.
 - **Assign Rooms edits persist immediately (v3.0.1):** `RoomAssignment`'s `onRoomsChange`
   is `handleRoomsChange`, which `setRooms(updated)` **and** POSTs the rooms right away —
   NOT `setRooms` alone. The old wiring only saved on a "Save Rooms" click, so a
