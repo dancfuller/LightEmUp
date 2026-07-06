@@ -2176,8 +2176,12 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
           <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 10 }}>
             {legend.map(e => (
               <div key={e.key} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "#cbd5e1", opacity: e.on === false ? 0.55 : 1 }}>
-                <span style={{ width: 20, height: 20, borderRadius: "50%", background: e.color, border: "1px solid rgba(255,255,255,0.25)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                  <span style={{ fontSize: 10, fontWeight: 800, color: "#fff", textShadow: "0 0 2px rgba(0,0,0,0.85)" }}>{e.num}</span>
+                {/* Neutral badge here — this is just a device roster, so a colored
+                    badge would falsely imply the light is set to that color. The
+                    identification colors live in the full-window layout editor,
+                    where they glance-match a dot to its legend row. */}
+                <span style={{ width: 20, height: 20, borderRadius: "50%", background: "#334155", border: "1px solid #475569", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                  <span style={{ fontSize: 10, fontWeight: 800, color: "#cbd5e1" }}>{e.num}</span>
                 </span>
                 <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.label}</span>
               </div>

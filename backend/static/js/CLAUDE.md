@@ -164,7 +164,10 @@ The map was unusable crammed into the ~416px controls drawer (`ControlSurface`).
   which is useless for telling entries apart. `distinctColor(i)` assigns each legend
   entry (every device AND every segment) a color from a curated max-contrast palette
   (`DISTINCT_COLORS`), used for BOTH the dot and its legend swatch so they glance-match.
-  Don't revert dots to `getDeviceColor` here.
+  Don't revert dots to `getDeviceColor` here. **Exception (v3.1.2):** the COLLAPSED
+  "Room Map" panel legend (the `!expanded` device roster, before opening the editor) uses
+  a **neutral grey badge**, not `e.color` — there are no dots to match there, so a colored
+  badge just read as "this light is set to red/green." Colors stay in the full editor only.
 - **Numbering/coloring is FROZEN at open (v3.0.3)** — number and color derive from the
   index into `numberOrder`, a snapshot of the legend-key order captured when the editor
   opens (the `[expanded, layout?.mode]` effect sets it from `spatialOrderRef`). So a
