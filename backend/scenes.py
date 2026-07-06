@@ -350,6 +350,29 @@ class SceneManager:
     def get_active_rooms(self) -> list[str]:
         return list(self.active_scenes.keys())
 
+    def update_settings(self, room_name: str, updates: dict) -> bool:
+        """Live-apply changed settings to a RUNNING storm by mutating the shared
+        LightningSettings object the device loops read from. Single-threaded asyncio,
+        so setattr is safe between awaits — no lock needed.
+
+        Applies live: everything the loops read per-flash — flash/background COLOR
+        (`color_r/g/b`, `use_color_temp`), and for Govee whole-device also brightness
+        and Kelvin. Does NOT re-time a storm already in flight: the flash cadence
+        (`min/max_gap_ms`, `flash_duration_*`, `burst_count_*`) is baked into patterns
+        generated at start, and Hue CT / segment colors are computed once at start — so
+        those take effect on the next storm start. Returns False if no storm is running.
+        """
+        scene = self.active_scenes.get(room_name)
+        if not scene:
+            return False
+        settings = scene.get("settings")
+        if settings is None:
+            return False
+        for key, value in updates.items():
+            if value is not None and hasattr(settings, key):
+                setattr(settings, key, value)
+        return True
+
     # ── flash event pub/sub (for thunder SSE) ─────────────────────────
 
     def subscribe_flashes(self, room_name: str) -> asyncio.Queue:

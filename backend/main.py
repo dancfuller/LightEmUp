@@ -1299,7 +1299,11 @@ async def save_lightning_settings(req: LightningSettingsRequest):
     existing.update(updates)
     config["lightning_scenes"][req.room_name] = existing
     save_config(config)
-    return {"success": True, "settings": existing}
+    # If a storm is running in this room, live-apply the changed settings so the
+    # user's tweaks take effect without stopping the storm (see update_settings for
+    # what applies live vs. on next start).
+    applied_live = scene_manager.update_settings(req.room_name, updates)
+    return {"success": True, "settings": existing, "applied_live": applied_live}
 
 
 @app.get("/api/scenes/lightning/events/{room_name}")

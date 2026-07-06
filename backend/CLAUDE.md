@@ -153,6 +153,20 @@ not in the browser (v2.14.0):
   helpers. The SKU→name table lives in `discovery.py` (`GOVEE_SKUS`); the frontend
   falls back to backend `device.name` when its small `GOVEE_SKU_NAMES` subset misses.
 
+## Lightning settings: auto-persist + live-apply (v3.2.0)
+The frontend has no "Save Settings" button — `updateSetting` debounce-POSTs
+`/api/scenes/lightning/settings` ~600ms after the last change. If a storm is running,
+that endpoint calls `scene_manager.update_settings(room, updates)`, which mutates the
+shared `LightningSettings` object the running device loops read from (single-threaded
+asyncio → `setattr` between awaits is safe, no lock). **What applies live depends on
+where the loop reads the value:** the Govee whole-device loop reads `settings.*`
+per-flash → color/CT/brightness update immediately; Hue reads `color_r/g/b` +
+`use_color_temp` per-flash (live) but computes CT/brightness once at start; the flash
+**cadence** (`min/max_gap_ms`, `flash_duration_*`, `burst_count_*`) is baked into
+patterns generated at start, and segment colors are computed once — so those take
+effect on the **next** storm start. Making cadence fully live means regenerating
+patterns each cycle (deferred; needs a real-storm test). Endpoint returns `applied_live`.
+
 ## SSE live-sync (multi-session)
 - `_event_subscribers` queues; `publish_event(type, **fields)` fans out to all open
   clients via `GET /api/events`. Each event is tagged with the originating client

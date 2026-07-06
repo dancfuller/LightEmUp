@@ -76,22 +76,43 @@ function LightningPanel({ roomName, isActive, onStart, onStop, goveeDevices, seg
     return () => stopRain();
   }, [isActive, settings?.background_rain]);
 
-  const updateSetting = (key, value) => {
-    setSettings(prev => ({ ...prev, [key]: value }));
+  // Settings auto-persist ~600ms after the last change — no "Save Settings" button
+  // (which sat at the bottom of a long form, easy to miss = lost edits). If a storm
+  // is running the backend live-applies the change: flash/background COLOR takes
+  // effect immediately; cadence (gaps/durations/bursts) and Hue CT take effect on the
+  // next start (see scenes.py update_settings).
+  const settingsRef = useRef(null);
+  useEffect(() => { settingsRef.current = settings; }, [settings]);
+  const saveTimer = useRef(null);
+
+  const persistSettings = () => {
+    const s = settingsRef.current;
+    if (!s) return;
+    setSaving(true);
+    api("/scenes/lightning/settings", {
+      method: "POST",
+      body: JSON.stringify({ room_name: roomName, ...s }),
+    }).catch(e => console.error("Failed to save lightning settings:", e))
+      .finally(() => setSaving(false));
   };
 
-  const saveSettings = async () => {
-    setSaving(true);
-    try {
-      await api("/scenes/lightning/settings", {
-        method: "POST",
-        body: JSON.stringify({ room_name: roomName, ...settings }),
-      });
-    } catch (e) {
-      console.error("Failed to save lightning settings:", e);
-    }
-    setSaving(false);
+  const updateSetting = (key, value) => {
+    setSettings(prev => ({ ...prev, [key]: value }));
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(persistSettings, 600);
   };
+
+  // Flush a pending save if the panel closes before the debounce fires (no state
+  // touch, so it's safe during unmount).
+  useEffect(() => () => {
+    if (saveTimer.current) {
+      clearTimeout(saveTimer.current);
+      const s = settingsRef.current;
+      if (s) api("/scenes/lightning/settings", {
+        method: "POST", body: JSON.stringify({ room_name: roomName, ...s }),
+      }).catch(() => {});
+    }
+  }, [roomName]);
 
   const segmentCapableDevices = (goveeDevices || []).filter(d => {
     const info = segmentInfo?.sku_table?.[d.sku];
@@ -451,16 +472,10 @@ function LightningPanel({ roomName, isActive, onStart, onStop, goveeDevices, seg
             </div>
           )}
 
-          {/* Save */}
-          <button
-            onClick={saveSettings} disabled={saving}
-            style={{
-              padding: "10px 24px", borderRadius: 10, border: "none",
-              background: saving ? "#475569" : "#334155",
-              color: "#f1f5f9", fontSize: 13, fontWeight: 600,
-              cursor: saving ? "wait" : "pointer", alignSelf: "flex-start",
-            }}
-          >{saving ? "Saving..." : "Save Settings"}</button>
+          {/* Settings auto-save (debounced) — no explicit Save button. */}
+          <div style={{ fontSize: 11, color: "#64748b", alignSelf: "flex-start", fontStyle: "italic" }}>
+            {saving ? "Saving…" : (isActive ? "Changes save automatically · applied live where possible" : "Changes save automatically")}
+          </div>
         </div>
       )}
     </div>
