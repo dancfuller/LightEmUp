@@ -165,12 +165,16 @@ The map was unusable crammed into the ~416px controls drawer (`ControlSurface`).
   entry (every device AND every segment) a color from a curated max-contrast palette
   (`DISTINCT_COLORS`), used for BOTH the dot and its legend swatch so they glance-match.
   Don't revert dots to `getDeviceColor` here.
-- **Numbering/coloring must be STABLE (v2.19.2)** — number and color derive from the
-  legend index, so the ordering of `legend` determines them. Floor Plan numbers by
-  **device insertion order** (no `sort` — a fixed ID per light that never changes on
-  drag); a line numbers by **position** (`sort` by x — reads 1..N, stable across the
-  order-preserving compaction, changes only on a deliberate reorder). Do NOT sort the
-  floor-plan legend by position — that renumbers/recolors dots every time you move one.
+- **Numbering/coloring is FROZEN at open (v3.0.3)** — number and color derive from the
+  index into `numberOrder`, a snapshot of the legend-key order captured when the editor
+  opens (the `[expanded, layout?.mode]` effect sets it from `spatialOrderRef`). So a
+  line reads 1..N left→right **on open**, and then dragging/reordering a dot does NOT
+  renumber it — the frozen number sticks to the device key; devices added while open get
+  appended numbers; closing + reopening re-freezes fresh. Before the first freeze, render
+  falls back to the live spatial order (a line sorts by x; a floor plan uses device
+  insertion order). Earlier (v2.19.2) a line re-sorted by x every render, so numbers
+  shuffled live as you dragged — confusing; don't reintroduce that. Do NOT sort the
+  legend by position for numbering — sort it by `num` (which is the frozen order).
 - **Drag snapping honors the cell-center offset (v2.19.5).** Floor-plan devices render
   at cell *centers* — `displayPos = {x: gridX+0.5, y: gridY+0.5}`, i.e. `(cell+0.5)*gridSize`,
   which is where the grid nodes are. So the drag stores `round(svgP/gridSize - 0.5)` (the

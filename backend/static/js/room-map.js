@@ -824,6 +824,13 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
   // so it isn't crushed into the ~416px controls drawer. Collapsed, the drawer
   // shows a readable numbered legend + an "Open" launcher instead.
   const [expanded, setExpanded] = useState(false);
+  // Frozen numbering order (array of legend keys). Numbers/colors are assigned by
+  // index into this list and captured when the editor OPENS, so dragging/reordering
+  // dots doesn't renumber them under you. Devices added while open get appended
+  // numbers; reopening the editor re-freezes fresh. null → not yet frozen (render
+  // falls back to the live spatial order). See the [expanded] effect below.
+  const [numberOrder, setNumberOrder] = useState(null);
+  const spatialOrderRef = useRef([]);
   // selectedDeviceKeys is the multi-select set of placed device keys (edit
   // mode allows shift/ctrl-click to add). The single-device action bar uses
   // selectedDeviceKeys[0] when length === 1.
@@ -963,6 +970,13 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
     if (!expanded) return;
     const fixed = layout?.mode === "linear" ? compactLinearLayout(layout) : fitFloorPlanLayout(layout);
     if (fixed) updateLayout(() => fixed);
+  }, [expanded, layout?.mode]);
+
+  // Freeze the numbering order when the editor opens. Order-preserving compaction
+  // (above) means the captured key order is stable whether we read it before or
+  // after the fit, so we snapshot the current spatial order. Reopening re-freezes.
+  useEffect(() => {
+    if (expanded) setNumberOrder(spatialOrderRef.current);
   }, [expanded, layout?.mode]);
 
   // ─── Furniture / landmark logic ────────────────────────────────────────
@@ -1412,17 +1426,31 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
       });
     }
   });
-  // Numbering must be stable so dragging doesn't renumber/recolor a dot.
-  //  - Floor Plan has no canonical order → number by device insertion order
-  //    (+ segment index), a fixed ID per light that never changes on drag.
-  //  - A line IS an ordering → number left-to-right by position, which reads 1..N
-  //    and is stable across the on-open compaction (order-preserving); only a
-  //    deliberate reorder (dragging a dot past another) changes it.
-  if (isLinear) legend.sort((a, b) => a.x - b.x);
-  legend.forEach((e, i) => { e.num = i + 1; e.color = distinctColor(i); });
+  // Spatial (default) numbering order: a line reads left→right by position; a floor
+  // plan uses device insertion order (already stable under drag). Snapshot it into a
+  // ref so the [expanded] effect can FREEZE it when the editor opens.
+  const spatialOrder = (isLinear ? [...legend].sort((a, b) => a.x - b.x) : legend).map(e => e.key);
+  spatialOrderRef.current = spatialOrder;
+  // Number/color by index into the FROZEN order captured at open, so dragging or
+  // reordering a dot doesn't renumber it under you. Existing keys keep their frozen
+  // number; keys added while open are appended (in spatial order); closing +
+  // reopening re-freezes fresh (effect above). Before the first freeze, fall back to
+  // the live spatial order.
+  let orderKeys;
+  if (numberOrder) {
+    const present = new Set(legend.map(e => e.key));
+    const frozen = new Set(numberOrder);
+    orderKeys = numberOrder.filter(k => present.has(k))
+      .concat(spatialOrder.filter(k => !frozen.has(k)));
+  } else {
+    orderKeys = spatialOrder;
+  }
   const legendNumByKey = {};
   const legendColorByKey = {};
-  legend.forEach(e => { legendNumByKey[e.key] = e.num; legendColorByKey[e.key] = e.color; });
+  orderKeys.forEach((k, i) => { legendNumByKey[k] = i + 1; legendColorByKey[k] = distinctColor(i); });
+  legend.forEach(e => { e.num = legendNumByKey[e.key]; e.color = legendColorByKey[e.key]; });
+  // Legend rows read in numbered order (and stay put too, since numbers are frozen).
+  legend.sort((a, b) => (a.num || 0) - (b.num || 0));
 
   const body = (
     <div style={{ marginBottom: 16, ...(fullScreen ? { marginBottom: 0 } : {}) }}>
