@@ -140,7 +140,7 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
   const whiteBtn = (label, kelvin, fg, bg, border) => (
     <button
       onClick={() => setRoomWhite(kelvin)}
-      title={`Turn this room on at ${kelvin}K, full brightness`}
+      title={`Set every light in this room to ${kelvin}K white at full brightness`}
       style={{
         padding: isMobile ? "6px 12px" : "6px 16px", borderRadius: 8,
         border: `1px solid ${border}`, background: bg, color: fg,
@@ -328,21 +328,29 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
           </div>
         </div>
 
-        {/* Surface openers + per-room white quick-actions */}
+        {/* Surface openers */}
         <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 6 : 8, flexWrap: "wrap" }}>
           {openerBtn("lightning", lightningActive ? "⚡ Storm" : "⚡ Lightning", lightningActive ? "#fbbf24" : "#94a3b8")}
           {openerBtn("scenes", "Scenes", "#34d399")}
           {openerBtn("controls", "Controls", "#a5b4fc")}
           {canMap && openerBtn("map", "🗺 Room Map", "#22d3ee")}
           {anySegmented && openerBtn("debug", "Debug", "#64748b", true)}
-          {allLights.length > 0 && (
-            <>
-              <span style={{ width: 1, height: 20, background: "#1e293b", margin: isMobile ? "0 2px" : "0 4px" }} />
-              {whiteBtn(isMobile ? "☀ Soft" : "☀ Soft White", SOFT_WHITE_K, "#fcd34d", "rgba(251,191,36,0.12)", "rgba(251,191,36,0.4)")}
-              {whiteBtn(isMobile ? "❄ Cool" : "❄ Cool White", COOL_WHITE_K, "#93c5fd", "rgba(96,165,250,0.12)", "rgba(96,165,250,0.4)")}
-            </>
-          )}
         </div>
+
+        {/* Whole-room white quick-actions — a labeled group on its own line, kept
+            visually separate from the panel openers above. The heading scopes both
+            buttons (they set EVERY light in the room), so the buttons stay short. */}
+        {allLights.length > 0 && (
+          <div>
+            <div style={{ fontSize: 10, color: "#64748b", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 7 }}>
+              Whole-room shortcuts
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 6 : 8, flexWrap: "wrap" }}>
+              {whiteBtn("Soft White", SOFT_WHITE_K, "#fcd34d", "rgba(251,191,36,0.12)", "rgba(251,191,36,0.4)")}
+              {whiteBtn("Cool White", COOL_WHITE_K, "#93c5fd", "rgba(96,165,250,0.12)", "rgba(96,165,250,0.4)")}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Light-card grid — renders independently of the control surface. */}

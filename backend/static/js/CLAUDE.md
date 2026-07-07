@@ -239,16 +239,18 @@ debounced `loadAll`. `ctCalibrated = {...ctCorrection, ...ctRgb}` drives the bad
   (Hue/Govee each get their own cmd) client-side, fire-and-forget. The old global "All On"
   / "All On · Soft White" were **removed**: you rarely want to light every outside light +
   every empty room at once. The useful *on* shortcuts are now **per-room** (below).
-- **Per-room white quick-actions (room-section.js, v3.4.0):** each `RoomSection` header
-  (openers row) has **☀ Soft White (2700K)** + **❄ Cool White (6500K)** buttons (labels
-  shorten to "Soft"/"Cool" on mobile), shown when the group has ≥1 light (so Unassigned
-  gets them too). Cool White is an "emergency / brightest" mode; **both force full
-  brightness**. `setRoomWhite(kelvin)` fans out over *that room's* `hueLights`/
+- **Per-room white quick-actions (room-section.js, v3.4.0, relabeled v3.4.2):** each
+  `RoomSection` header has a **"Whole-room shortcuts"** labeled group *on its own line*
+  below the panel openers (not inline with them), with **Soft White (2700K)** +
+  **Cool White (6500K)** buttons — shown when the group has ≥1 light (so Unassigned gets
+  them too). The heading scopes both buttons (they set EVERY light in the room), so the
+  buttons stay short and carry **no icons** (a ❄ snowflake read as literal "cold", fighting
+  the warm/cool-white metaphor). Cool White is an "emergency / brightest" mode; **both force
+  full brightness**. `setRoomWhite(kelvin)` fans out over *that room's* `hueLights`/
   `goveeDevices` via `onControlHue`/`onControlGovee` — Hue gets `{on:true, brightness:254,
   color_temp: mireds}`, Govee gets `{on:true, brightness:100, color_temp_kelvin}` (note the
   vendor brightness scales differ: Hue 1–254, Govee 0–100; Govee CT → server-side `ct_rgb`
-  calibration). Warm-amber / cool-blue tinted so they read as direct actions, not surface
-  openers (a thin divider separates them from Lightning/Scenes/Controls/Map).
+  calibration). Buttons keep warm-amber / cool-blue tint.
 - **"Unassigned" isn't a backend room** — its `RoomSection` gets an `onControlRoom` that
   drives `unassignedHue`/`unassignedGovee` directly (was a no-op `() => {}`, so its on/off
   toggle did nothing — v3.1.0 fix). Don't route Unassigned through `/api/rooms/control`.
