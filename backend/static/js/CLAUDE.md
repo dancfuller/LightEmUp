@@ -209,6 +209,16 @@ The map was unusable crammed into the ~416px controls drawer (`ControlSurface`).
   `RoomSection`. App threads the map props (control/favorites/segment/layout/fixture
   handlers) through `RoomAssignment` → `RoomCard`.
 
+## Settings → Power Recovery (app.js `PowerRecoveryCard`, v3.3.0)
+A Settings-tab card choosing how a fresh boot after a power outage treats the lights:
+three radio-style mode cards (`resume_unless_night` default / `resume_always` / `off`)
+plus two 30-min-increment time dropdowns (`NIGHT_TIME_OPTIONS`) for the night window,
+shown only for `resume_unless_night`. Auto-saves each change via `updatePowerRecovery`
+→ `POST /api/power-recovery` (optimistic, no Save button). `powerRecovery` state loads
+from `cfg.power_recovery` (falls back to the built-in defaults when the key is absent, so
+an un-migrated config still renders). The backend applies it only on the Pi's next boot —
+this card never drives lights. See `backend/CLAUDE.md` "Power-recovery after an outage".
+
 ## app.js — orchestration
 State, routing, API calls. `controlHueLight` / `controlGoveeDevice` spread `cmd` into
 the POST body, so passing CT keys (`color_temp` mireds / `color_temp_kelvin`) works

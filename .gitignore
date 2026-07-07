@@ -1,6 +1,9 @@
 # Config with local IPs, API keys, room assignments
 backend/config.json
 
+# Runtime clean-shutdown marker (power-recovery: planned reboot vs outage)
+backend/.clean_shutdown
+
 # Python
 __pycache__/
 *.pyc

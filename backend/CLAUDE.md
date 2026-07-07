@@ -167,6 +167,43 @@ patterns generated at start, and segment colors are computed once — so those t
 effect on the **next** storm start. Making cadence fully live means regenerating
 patterns each cycle (deferred; needs a real-storm test). Endpoint returns `applied_live`.
 
+## Power-recovery after an outage (v3.3.0)
+A sudden power loss + restore reboots the Pi, the Hue bridge, and the Govee devices
+together; the lights come back to their **hardware/bridge** default (often full-on),
+which at 3am lights the whole house. On a **genuine fresh boot** the lifespan schedules
+`_apply_power_recovery()` (a background task) to bring them back gracefully.
+- **Fresh-boot gate (critical):** it only runs when `/proc/uptime ≤ FRESH_BOOT_MAX_UPTIME_S`
+  (600s). A normal deploy / service restart happens long after boot, so it is skipped —
+  otherwise deploying at night would kill lights that are intentionally on. On non-Linux
+  dev boxes `/proc/uptime` is absent → recovery never fires there (safe for local work).
+- **Planned reboot vs outage (`SHUTDOWN_MARKER`):** a low uptime alone can't tell a
+  `sudo reboot` from a power cut. The lifespan shutdown hook writes `.clean_shutdown`
+  (SIGTERM runs it — a planned reboot / `systemctl restart` / deploy); startup consumes
+  it (`exists()` → `unlink()`). Present at boot ⇒ **clean** (planned) → **always resume,
+  even overnight**; absent ⇒ the process was killed without a clean stop (a real outage)
+  → the overnight guard applies. The marker is written *before* `flush_save_now()` so a
+  force-kill after SIGTERM still leaves it. This matches Dan's workflow: he commits/pushes
+  then reboots the Pi at night and wants a resume, not all-off. So `stay_off =
+  mode==resume_unless_night AND night AND NOT clean_shutdown`.
+- **Settle + resolve:** the task waits `RECOVERY_SETTLE_S` (45s) for the bridge/Govee to
+  rejoin the LAN, then runs `discover_govee()` to refresh DHCP-reassigned Govee IPs before
+  addressing anything.
+- **Policy** (`config["power_recovery"]`, additive — absent ⇒ defaults):
+  `mode ∈ {resume_unless_night (default), resume_always, off}`; `night_start`/`night_end`
+  are 24h `"HH:MM"`. `_in_night_window()` wraps past midnight (22:00→07:00 default;
+  start==end ⇒ never night). `resume_unless_night` + inside the window ⇒ **force all off**
+  (`_recovery_all_off`: every Hue light + every known Govee device → off); otherwise
+  **resume** (`_recovery_resume`: replay `device_state`).
+- **`device_state` now holds Hue too.** `record_hue_state(light_id, state)` mirrors the
+  last Hue command under `hue:<id>` (on/bri/xy/ct/hue/sat; xy/ct mutually exclusive),
+  called from `control_hue_light` + room control, purely so resume can replay it — the
+  browser still renders Hue from live bridge state. Govee resume replays exactly what was
+  sent (calibrated CT was already stored as r/g/b, so no re-calibration needed).
+- Settings persist via `POST /api/power-recovery` (auto-saved from the frontend, no Save
+  button); editing never drives lights — it only applies on the *next* boot. **This is
+  device-state resume, not scene resume** — resuming an active lightning storm is separate
+  (task #46).
+
 ## SSE live-sync (multi-session)
 - `_event_subscribers` queues; `publish_event(type, **fields)` fans out to all open
   clients via `GET /api/events`. Each event is tagged with the originating client

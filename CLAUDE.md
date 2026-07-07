@@ -174,6 +174,8 @@ All endpoints are under `/api/`. Key groups:
 - `/api/nicknames` — device nickname CRUD
 - `/api/identify` — flash a device to locate it (Hue native `alert`; Govee on/off blink then restore)
 - `/api/favorites` — favorite colors (stored in config, synced across sessions)
+- `/api/power-recovery` — how a fresh boot after a power outage treats the lights
+  (resume last state / stay off overnight); applied on the Pi's next boot only
 - `/api/scenes/lightning/*` — lightning storm scene start/stop/settings
 - `/api/scenes/room-apply` — backend-driven room color-scene apply (staggered in a
   background task so the browser can close); `/cancel` to stop. Progress via SSE.

@@ -100,6 +100,11 @@ DEFAULT_CONFIG = {
         "min_saturation_enabled": True,  # clamp generated colors to a floor
         "min_saturation_pct": 35,        # 0..100; saturation in HSL terms
     },
+    "power_recovery": {   # how a fresh boot after a power outage treats the lights
+        "mode": "resume_unless_night",   # "resume_unless_night" | "resume_always" | "off"
+        "night_start": "22:00",          # 24h HH:MM — start of the "stay off overnight" window
+        "night_end": "07:00",            # 24h HH:MM — end of it (window wraps past midnight)
+    },
 }
 
 
@@ -411,6 +416,29 @@ def record_govee_state(ip: str, mac: str = None, **fields):
     publish_event("govee", key=key)
 
 
+def record_hue_state(light_id: str, state: dict):
+    """Mirror the last state we sent a Hue light into device_state under
+    'hue:<id>', so power-recovery can replay it. Stores the Hue-native fields we
+    sent (on/bri/xy/ct/hue/sat). Color (xy/hue/sat) and CT are mutually
+    exclusive — a new color clears a prior ct and vice-versa. Display-only for
+    the browser (Hue lights render from live bridge state); this exists purely so
+    a fresh boot can restore the last intended state."""
+    store = config.setdefault("device_state", {})
+    key = f"hue:{light_id}"
+    entry = store.get(key, {})
+    if any(k in state for k in ("xy", "hue", "sat")):
+        entry.pop("ct", None)
+    if "ct" in state:
+        for k in ("xy", "hue", "sat"):
+            entry.pop(k, None)
+    for k in ("on", "bri", "xy", "ct", "hue", "sat"):
+        if state.get(k) is not None:
+            entry[k] = state[k]
+    entry["updated_at"] = _now_iso()
+    store[key] = entry
+    schedule_save()
+
+
 def persist_segments():
     """Mirror the in-memory segment_state into config for restart durability.
     snapshot() is keyed by bare IP; config uses the "govee:<ip>" key form."""
@@ -565,6 +593,171 @@ if not any(isinstance(h, logging.StreamHandler) and not isinstance(h, TimedRotat
 log = logging.getLogger("lightemup.main")
 
 
+# ─── Power-recovery (graceful handling of a power outage → boot) ──────────────
+# A sudden power loss + restore reboots the Pi, the Hue bridge, and the Govee
+# devices together. The lights come back to their *hardware/bridge* default —
+# often full-on — which at 3am lights the whole house. So on a genuine fresh
+# boot we either replay the last-known lighting (daytime) or force everything
+# off (overnight), per the user's power_recovery settings.
+#
+# CRITICAL: only act on an actual boot. A normal deploy / service restart (the
+# machine has been up for hours) must NOT touch the lights — otherwise deploying
+# at night would kill lights that are intentionally on. /proc/uptime is the
+# discriminator: a power event restarts the service within minutes of boot; a
+# deploy restart happens long after. On non-Linux dev boxes /proc/uptime is
+# absent, so recovery simply never fires there.
+
+FRESH_BOOT_MAX_UPTIME_S = 600   # service up within 10 min of boot ⇒ treat as power event
+RECOVERY_SETTLE_S = 45          # wait for the bridge + Govee to rejoin the LAN first
+# Clean-shutdown marker: written when the lifespan shutdown hook runs (a planned
+# reboot / `systemctl restart` sends SIGTERM, so it runs) and consumed on the next
+# startup. Present at boot ⇒ we were stopped cleanly (planned reboot — always
+# resume, even overnight). Absent ⇒ the process was killed without a clean stop
+# (a power outage), so the overnight "stay off" guard applies. This is how a
+# planned nightly reboot differs from a 3am outage.
+SHUTDOWN_MARKER = CONFIG_PATH.parent / ".clean_shutdown"
+
+
+def _system_uptime_s():
+    """Seconds since the machine booted, or None if unknowable (non-Linux)."""
+    try:
+        with open("/proc/uptime") as f:
+            return float(f.read().split()[0])
+    except Exception:
+        return None
+
+
+def _parse_hhmm(s, default_h=-1, default_m=-1):
+    """Parse 'HH:MM' → (hour, minute); returns the defaults on any bad input."""
+    try:
+        h, m = str(s).split(":")
+        return int(h) % 24, int(m) % 60
+    except Exception:
+        return default_h, default_m
+
+
+def _in_night_window(now, start_s, end_s):
+    """Is local time `now` inside the [start, end) overnight window? The window
+    wraps past midnight (e.g. 22:00→07:00). Equal start==end ⇒ never night."""
+    sh, sm = _parse_hhmm(start_s, 22, 0)
+    eh, em = _parse_hhmm(end_s, 7, 0)
+    cur = now.hour * 60 + now.minute
+    a, b = sh * 60 + sm, eh * 60 + em
+    if a == b:
+        return False
+    if a < b:
+        return a <= cur < b
+    return cur >= a or cur < b   # wraps midnight
+
+
+async def _recovery_all_off():
+    """Overnight recovery: force every Hue light and known Govee device off."""
+    ip = config.get("hue_bridge_ip")
+    username = config.get("hue_username")
+    hue_n = govee_n = 0
+    if ip and username:
+        try:
+            lights = await get_hue_lights(ip, username)
+        except Exception:
+            lights = []
+        for light in lights:
+            try:
+                await set_hue_light_state(ip, username, str(light["id"]), {"on": False})
+                record_hue_state(str(light["id"]), {"on": False})
+                hue_n += 1
+            except Exception:
+                pass
+    for mac, info in list(_known_govee().items()):
+        dip = info.get("ip")
+        if not dip:
+            continue
+        try:
+            await govee_lan_turn(dip, False)
+            record_govee_state(dip, mac=mac, on=False)
+            govee_n += 1
+        except Exception:
+            pass
+    log.info("Power recovery: forced OFF %d Hue + %d Govee", hue_n, govee_n)
+
+
+async def _recovery_resume():
+    """Daytime recovery: replay the last state we set on each device."""
+    ds = config.get("device_state", {})
+    ip = config.get("hue_bridge_ip")
+    username = config.get("hue_username")
+    hue_n = govee_n = 0
+    for key, st in list(ds.items()):
+        if key.startswith("hue:") and ip and username:
+            replay = {k: st[k] for k in ("on", "bri", "xy", "ct", "hue", "sat") if k in st}
+            if not replay:
+                continue
+            try:
+                await set_hue_light_state(ip, username, key[len("hue:"):], replay)
+                hue_n += 1
+            except Exception:
+                pass
+        elif key.startswith("govee:"):
+            dip = gv_ip_for_slug(key[len("govee:"):])
+            if not dip:
+                continue
+            on = st.get("on", True)
+            try:
+                await govee_lan_turn(dip, bool(on))
+                if on:
+                    if st.get("brightness") is not None:
+                        await govee_lan_brightness(dip, st["brightness"])
+                    if st.get("r") is not None and st.get("g") is not None and st.get("b") is not None:
+                        await govee_lan_color(dip, st["r"], st["g"], st["b"])
+                    elif st.get("color_temp_kelvin") is not None:
+                        await govee_lan_color_temp(dip, st["color_temp_kelvin"])
+                govee_n += 1
+            except Exception:
+                pass
+    log.info("Power recovery: resumed %d Hue + %d Govee", hue_n, govee_n)
+
+
+async def _apply_power_recovery(clean_shutdown: bool):
+    """One-shot background task, launched only on a fresh boot. Waits for the
+    network to settle, refreshes Govee IPs, then resumes or forces-off.
+
+    `clean_shutdown` True ⇒ we were stopped cleanly (a planned reboot), so we
+    always resume — even overnight. The overnight "stay off" guard only kicks in
+    for an *unclean* boot (a genuine power outage). Lightning storms are novelty
+    and are never resumed: the scene engine bypasses device_state, so a resume
+    replays the pre-storm static lighting, and the storm itself stays off."""
+    from datetime import datetime
+    settings = config.get("power_recovery", {})
+    mode = settings.get("mode", "resume_unless_night")
+    if mode == "off":
+        log.info("Power recovery: disabled (mode=off) — leaving lights as-is")
+        return
+
+    await asyncio.sleep(RECOVERY_SETTLE_S)
+
+    now = datetime.now()   # Pi runs in the user's local timezone
+    night = _in_night_window(now, settings.get("night_start", "22:00"),
+                             settings.get("night_end", "07:00"))
+    # Planned reboot (clean shutdown) always resumes; only a real outage at night
+    # forces the lights off.
+    stay_off = (mode == "resume_unless_night") and night and not clean_shutdown
+    log.info("Power recovery: mode=%s local=%s night=%s clean_shutdown=%s → %s", mode,
+             now.strftime("%H:%M"), night, clean_shutdown, "ALL OFF" if stay_off else "RESUME")
+
+    # DHCP may have handed out new Govee IPs on reboot — refresh before addressing.
+    try:
+        await discover_govee()
+    except Exception:
+        log.exception("Power recovery: Govee refresh failed (continuing anyway)")
+
+    try:
+        if stay_off:
+            await _recovery_all_off()
+        else:
+            await _recovery_resume()
+    except Exception:
+        log.exception("Power recovery: apply failed")
+
+
 # ─── App ─────────────────────────────────────────────────────────────────────
 
 @asynccontextmanager
@@ -582,7 +775,39 @@ async def lifespan(app: FastAPI):
         else:
             _seg_resolved[_k] = _v
     segment_state.load(_seg_resolved)
+
+    # Was our last stop clean (planned reboot) or abrupt (power outage)? Consume
+    # the marker now so a later outage — which won't run the shutdown hook — is
+    # seen as unclean. Written again in the shutdown hook below.
+    _clean_shutdown = SHUTDOWN_MARKER.exists()
+    try:
+        SHUTDOWN_MARKER.unlink()
+    except FileNotFoundError:
+        pass
+    except Exception:
+        log.exception("Could not clear clean-shutdown marker")
+
+    # Power-recovery: on a genuine fresh boot, gracefully resume or force-off the
+    # lights. Skip on a normal deploy/service restart (machine up for a while) so
+    # we never disturb lights that are intentionally on.
+    _uptime = _system_uptime_s()
+    if _uptime is not None and _uptime <= FRESH_BOOT_MAX_UPTIME_S:
+        log.info("Fresh boot detected (uptime %.0fs, clean_shutdown=%s) — scheduling power recovery",
+                 _uptime, _clean_shutdown)
+        asyncio.create_task(_apply_power_recovery(_clean_shutdown))
+    else:
+        log.info("Not a fresh boot (uptime=%s) — skipping power recovery",
+                 f"{_uptime:.0f}s" if _uptime is not None else "unknown")
+
     yield
+
+    # Mark this as a clean stop FIRST (before the flush, which could be slow), so
+    # even if shutdown is force-killed after SIGTERM the marker is already down —
+    # the next boot then knows this was a planned stop, not an outage.
+    try:
+        SHUTDOWN_MARKER.write_text(_now_iso())
+    except Exception:
+        log.exception("Could not write clean-shutdown marker")
     flush_save_now()
     print("🔆 LightEmUp shutting down...")
 
@@ -1002,6 +1227,8 @@ async def control_hue_light(req: HueLightStateRequest):
             state["bri"] = max(1, min(254, int(Y * 254)))
 
     success = await set_hue_light_state(ip, username, req.light_id, state)
+    if success:
+        record_hue_state(req.light_id, state)  # last-known, for power recovery
     publish_event("hue", key=f"hue:{req.light_id}")
     return {"success": success}
 
@@ -1158,6 +1385,8 @@ async def control_room(req: RoomStateRequest):
                 state["hue"] = h
                 state["sat"] = s
             success = await set_hue_light_state(ip, username, light_id, state)
+            if success:
+                record_hue_state(str(light_id), state)  # last-known, for power recovery
             results["hue"].append({"light_id": light_id, "success": success})
 
     # Control Govee devices in the room (membership is by mac slug; resolve the
@@ -2004,6 +2233,7 @@ async def get_config():
         "device_modes": config.get("device_modes", {}),
         "segment_fill_modes": config.get("segment_fill_modes", {}),
         "ui_prefs": config.get("ui_prefs", {}),
+        "power_recovery": config.get("power_recovery", {}),
         "favorites": config.get("favorites") or DEFAULT_FAVORITES,
     }
 
@@ -2153,6 +2383,32 @@ async def set_ui_prefs(req: UiPrefsRequest):
         config["ui_prefs"]["min_saturation_pct"] = max(0, min(100, req.min_saturation_pct))
     save_config(config)
     return {"success": True, "ui_prefs": config["ui_prefs"]}
+
+
+# ─── Power-recovery settings ────────────────────────────────────────────────
+
+class PowerRecoveryRequest(BaseModel):
+    mode: Optional[str] = None          # "resume_unless_night" | "resume_always" | "off"
+    night_start: Optional[str] = None   # 24h "HH:MM"
+    night_end: Optional[str] = None     # 24h "HH:MM"
+
+
+@app.post("/api/power-recovery")
+async def set_power_recovery(req: PowerRecoveryRequest):
+    """Persist how a fresh boot after a power outage treats the lights. Applied
+    on the next boot only — changing it here never drives lights now."""
+    pr = config.setdefault("power_recovery", {})
+    if req.mode in ("resume_unless_night", "resume_always", "off"):
+        pr["mode"] = req.mode
+    for field in ("night_start", "night_end"):
+        val = getattr(req, field)
+        if val is not None:
+            h, m = _parse_hhmm(val)
+            if h >= 0:
+                pr[field] = f"{h:02d}:{m:02d}"
+    save_config(config)
+    publish_event("config")
+    return {"success": True, "power_recovery": pr}
 
 
 # ─── Room Layout Endpoints ──────────────────────────────────────────────────

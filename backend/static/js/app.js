@@ -1,3 +1,89 @@
+// 30-minute time slots for the night-window dropdowns: { value:"HH:MM", label:"h:MM AM/PM" }.
+const NIGHT_TIME_OPTIONS = Array.from({ length: 48 }, (_, i) => {
+  const h = Math.floor(i / 2), m = i % 2 ? 30 : 0;
+  const value = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  const label = `${h12}:${String(m).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`;
+  return { value, label };
+});
+
+// ─── Settings → Power Recovery ────────────────────────────────────────────────
+// After a power outage the Pi reboots and (on a genuine fresh boot) the backend
+// either replays the last-known lighting or, overnight, forces everything off —
+// see _apply_power_recovery in main.py. This card just persists the preference;
+// it auto-saves each change (no Save button, per the save-consistency audit).
+function PowerRecoveryCard({ settings, onChange, isMobile }) {
+  const mode = settings.mode || "resume_unless_night";
+  const nightStart = settings.night_start || "22:00";
+  const nightEnd = settings.night_end || "07:00";
+
+  const MODES = [
+    { value: "resume_unless_night", title: "Resume Lighting Unless Overnight",
+      desc: "Restore your lights during the day. After an overnight power outage, keep them off." },
+    { value: "resume_always", title: "Resume Previous Lighting",
+      desc: "Always restore the last lighting, whatever the time." },
+    { value: "off", title: "Do Nothing",
+      desc: "Leave the lights however they come back on after power returns." },
+  ];
+
+  const timeSelect = (value, onPick) => (
+    <select value={value} onChange={(e) => onPick(e.target.value)}
+      style={{
+        padding: "6px 8px", borderRadius: 8, border: "1px solid #334155",
+        background: "#0f172a", color: "#e2e8f0", fontSize: 13, fontWeight: 600,
+        cursor: "pointer", outline: "none",
+      }}>
+      {NIGHT_TIME_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+    </select>
+  );
+
+  return (
+    <div style={{ background: "#1e293b", borderRadius: 16, padding: isMobile ? 16 : 20, border: "1px solid #334155", marginBottom: 16 }}>
+      <h3 style={{ fontSize: 15, fontWeight: 600, color: "#e2e8f0", margin: 0, marginBottom: 6 }}>Power Recovery</h3>
+      <div style={{ fontSize: 12, color: "#64748b", marginBottom: 14, lineHeight: 1.5 }}>
+        After a power outage, when the hub reboots it can bring your lights back gracefully instead of blasting them all on — especially in the middle of the night. A normal restart or reboot always resumes your lighting; only a real power outage triggers the overnight rule below. (Lightning storms are never resumed.)
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {MODES.map(m => {
+          const active = mode === m.value;
+          return (
+            <button key={m.value} onClick={() => onChange({ mode: m.value })}
+              style={{
+                textAlign: "left", padding: isMobile ? 12 : 14, borderRadius: 12, cursor: "pointer",
+                border: `1px solid ${active ? "#6366f1" : "#334155"}`,
+                background: active ? "rgba(99,102,241,0.12)" : "transparent",
+              }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{
+                  width: 16, height: 16, borderRadius: "50%", flexShrink: 0,
+                  border: `2px solid ${active ? "#818cf8" : "#475569"}`,
+                  background: active ? "#6366f1" : "transparent",
+                  boxShadow: active ? "inset 0 0 0 3px #1e293b" : "none",
+                }} />
+                <span style={{ fontSize: 13, fontWeight: 700, color: active ? "#c7d2fe" : "#e2e8f0" }}>{m.title}</span>
+              </div>
+              <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 4, marginLeft: 24, lineHeight: 1.4 }}>{m.desc}</div>
+            </button>
+          );
+        })}
+      </div>
+
+      {mode === "resume_unless_night" && (
+        <div style={{ marginTop: 14, paddingTop: 14, borderTop: "1px solid #334155" }}>
+          <div style={{ fontSize: 11, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>Overnight window — outage stays off</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 13, color: "#94a3b8" }}>From</span>
+            {timeSelect(nightStart, (v) => onChange({ night_start: v }))}
+            <span style={{ fontSize: 13, color: "#94a3b8" }}>to</span>
+            {timeSelect(nightEnd, (v) => onChange({ night_end: v }))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Settings device row ─────────────────────────────────────────────────────
 // One device line in Settings → Hue Bridge / Govee Devices. Shows status,
 // display name, a Flash button to physically locate the device (POST
@@ -129,6 +215,14 @@ function App() {
   // modes (palette, custom, beacon, presets) apply verbatim. Default on at 35%.
   const [minSatEnabled, setMinSatEnabled] = useState(true);
   const [minSatPct, setMinSatPct] = useState(35);
+  // Power-recovery: how a fresh boot after a power outage treats the lights.
+  // mode "resume_unless_night" (default) resumes during the day but stays off
+  // in the [night_start, night_end) window; "resume_always" always resumes;
+  // "off" leaves the lights however they came back. Applied on the Pi's next
+  // boot only — editing here just persists the preference.
+  const [powerRecovery, setPowerRecovery] = useState({
+    mode: "resume_unless_night", night_start: "22:00", night_end: "07:00",
+  });
 
   const updateFavorites = (newFavs) => {
     setFavoriteColors(newFavs);  // optimistic; backend is the source of truth
@@ -210,6 +304,9 @@ function App() {
       }
       if (typeof cfg.ui_prefs?.min_saturation_pct === "number") {
         setMinSatPct(cfg.ui_prefs.min_saturation_pct);
+      }
+      if (cfg.power_recovery && Object.keys(cfg.power_recovery).length) {
+        setPowerRecovery(pr => ({ ...pr, ...cfg.power_recovery }));
       }
 
       const promises = [
@@ -312,6 +409,17 @@ function App() {
       });
     } catch (e) {
       console.warn("Failed to save min saturation:", e);
+    }
+  }, []);
+
+  // Auto-persist power-recovery settings (no Save button — see save-consistency
+  // audit). Optimistic: update local state now, POST in the background.
+  const updatePowerRecovery = useCallback(async (patch) => {
+    setPowerRecovery(prev => ({ ...prev, ...patch }));
+    try {
+      await api("/power-recovery", { method: "POST", body: JSON.stringify(patch) });
+    } catch (e) {
+      console.warn("Failed to save power recovery settings:", e);
     }
   }, []);
 
@@ -1077,6 +1185,8 @@ function App() {
                 </div>
               </div>
             </div>
+
+            <PowerRecoveryCard settings={powerRecovery} onChange={updatePowerRecovery} isMobile={isMobile} />
 
             <div style={{ background: "#1e293b", borderRadius: 16, padding: 20, border: "1px solid #334155", marginBottom: 16 }}>
               <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 12, color: "#e2e8f0" }}>About</h3>
