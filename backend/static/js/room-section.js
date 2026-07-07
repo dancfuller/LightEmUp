@@ -106,6 +106,9 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
   // "Room Map" is a real room (has a layout handler) with at least one device —
   // the pseudo-"Unassigned" group has neither, so it gets no map.
   const canMap = typeof RoomMap === "function" && !!onLayoutChange && allLights.length > 0;
+  // A real room has a layout handler; the pseudo-"Unassigned" group doesn't. Used
+  // to word the whole-room white group as "Set room to" vs "Set lights to".
+  const isRealRoom = !!onLayoutChange;
   const views = [
     { key: "lightning", label: lightningActive ? "⚡ Storm" : "⚡ Lightning", accent: "#fbbf24" },
     { key: "scenes", label: "Scenes", accent: "#34d399" },
@@ -348,7 +351,7 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
         {allLights.length > 0 && (
           <div>
             <div style={{ fontSize: 10, color: "#64748b", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 7 }}>
-              Set room to
+              {isRealRoom ? "Set room to" : "Set lights to"}
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 6 : 8, flexWrap: "wrap" }}>
               {whiteBtn("Soft White", SOFT_WHITE_K, "#fcd34d", "rgba(251,191,36,0.12)", "rgba(251,191,36,0.4)")}

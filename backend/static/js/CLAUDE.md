@@ -253,7 +253,9 @@ debounced `loadAll`. `ctCalibrated = {...ctCorrection, ...ctRgb}` drives the bad
   calibration). Buttons keep warm-amber / cool-blue tint. **Heading is "Set room to"
   (v3.4.3)** — it deliberately holds *only* the specific looks (no on/off/resume), because
   the master power toggle owns that. This split fixes the "two zones both do whole-room
-  power" clunk: toggle = power/resume, this group = looks.
+  power" clunk: toggle = power/resume, this group = looks. On the pseudo-"Unassigned" group
+  the heading reads **"Set lights to"** instead (v3.4.4) — it's not a room; `isRealRoom =
+  !!onLayoutChange` distinguishes them.
 - **"Unassigned" isn't a backend room** — its `RoomSection` gets an `onControlRoom` that
   drives `unassignedHue`/`unassignedGovee` directly (was a no-op `() => {}`, so its on/off
   toggle did nothing — v3.1.0 fix). Don't route Unassigned through `/api/rooms/control`.
