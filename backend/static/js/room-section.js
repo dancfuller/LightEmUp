@@ -124,6 +124,32 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
     onControlRoom(name, { on: true, r, g, b });
   };
 
+  // Per-room white quick-actions. Turn THIS room on at a fixed color temperature.
+  // These replace the old global "All On" buttons — you rarely want to light the
+  // whole house/outside, but "warm up this room" / "cool white this room" is a
+  // genuinely useful one-tap. Fans out client-side per device so each vendor gets
+  // its native command (Hue mireds, Govee kelvin → server-side ct_rgb calibration).
+  // Cool White is effectively an "emergency / brightest" mode → 6500K daylight.
+  // Both shortcuts force full brightness. Brightness scale is vendor-specific:
+  // Hue's `bri` is 1–254, Govee's is 0–100, so 100% is 254 vs 100 respectively.
+  const SOFT_WHITE_K = 2700, COOL_WHITE_K = 6500;
+  const setRoomWhite = (kelvin) => {
+    hueLights.forEach(l => onControlHue(l, { on: true, brightness: 254, color_temp: kelvinToMired(kelvin) }));
+    goveeDevices.forEach(d => onControlGovee(d, { on: true, brightness: 100, color_temp_kelvin: kelvin }));
+  };
+  const whiteBtn = (label, kelvin, fg, bg, border) => (
+    <button
+      onClick={() => setRoomWhite(kelvin)}
+      title={`Turn this room on at ${kelvin}K, full brightness`}
+      style={{
+        padding: isMobile ? "6px 12px" : "6px 16px", borderRadius: 8,
+        border: `1px solid ${border}`, background: bg, color: fg,
+        fontSize: isMobile ? 11 : 12, fontWeight: 700, cursor: "pointer",
+        whiteSpace: "nowrap", transition: "all 0.2s",
+      }}
+    >{label}</button>
+  );
+
   // Opener button in the room header (sets the surface view).
   const openerBtn = (key, label, accent, dashed) => (
     <button
@@ -302,13 +328,20 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
           </div>
         </div>
 
-        {/* Surface openers */}
+        {/* Surface openers + per-room white quick-actions */}
         <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 6 : 8, flexWrap: "wrap" }}>
           {openerBtn("lightning", lightningActive ? "⚡ Storm" : "⚡ Lightning", lightningActive ? "#fbbf24" : "#94a3b8")}
           {openerBtn("scenes", "Scenes", "#34d399")}
           {openerBtn("controls", "Controls", "#a5b4fc")}
           {canMap && openerBtn("map", "🗺 Room Map", "#22d3ee")}
           {anySegmented && openerBtn("debug", "Debug", "#64748b", true)}
+          {allLights.length > 0 && (
+            <>
+              <span style={{ width: 1, height: 20, background: "#1e293b", margin: isMobile ? "0 2px" : "0 4px" }} />
+              {whiteBtn(isMobile ? "☀ Soft" : "☀ Soft White", SOFT_WHITE_K, "#fcd34d", "rgba(251,191,36,0.12)", "rgba(251,191,36,0.4)")}
+              {whiteBtn(isMobile ? "❄ Cool" : "❄ Cool White", COOL_WHITE_K, "#93c5fd", "rgba(96,165,250,0.12)", "rgba(96,165,250,0.4)")}
+            </>
+          )}
         </div>
       </div>
 
