@@ -250,13 +250,20 @@ debounced `loadAll`. `ctCalibrated = {...ctCorrection, ...ctRgb}` drives the bad
   `goveeDevices` via `onControlHue`/`onControlGovee` — Hue gets `{on:true, brightness:254,
   color_temp: mireds}`, Govee gets `{on:true, brightness:100, color_temp_kelvin}` (note the
   vendor brightness scales differ: Hue 1–254, Govee 0–100; Govee CT → server-side `ct_rgb`
-  calibration). Buttons keep warm-amber / cool-blue tint.
+  calibration). Buttons keep warm-amber / cool-blue tint. **Heading is "Set room to"
+  (v3.4.3)** — it deliberately holds *only* the specific looks (no on/off/resume), because
+  the master power toggle owns that. This split fixes the "two zones both do whole-room
+  power" clunk: toggle = power/resume, this group = looks.
 - **"Unassigned" isn't a backend room** — its `RoomSection` gets an `onControlRoom` that
   drives `unassignedHue`/`unassignedGovee` directly (was a no-op `() => {}`, so its on/off
   toggle did nothing — v3.1.0 fix). Don't route Unassigned through `/api/rooms/control`.
 - **Room on/off is a toggle switch, not a "Turn Off" button** (room-section.js, v3.1.0):
   the old button was styled muted/grey exactly when lights were ON, reading as disabled.
-  The switch shows state (indigo+knob-right = on).
+  The switch shows state (indigo+knob-right = on). **It's really Resume ⇄ Off (v3.4.3):**
+  turning "on" sends `{on:true}`, so lights return to their last state (bulbs/strips
+  remember) — not a fixed look. The label shows current state honestly; the tooltip spells
+  out "Resume the room's last lighting". It owns power/resume; the "Set room to" group owns
+  presets — so they're no longer duplicate whole-room controls.
 - **"Room Map" is its own surface view** (room-section.js, v3.1.0), gated on
   `canMap = !!onLayoutChange && allLights.length > 0` (so Unassigned has none). It was a
   buried collapsible inside Controls; now it's a first-class opener next to Scenes/Controls.

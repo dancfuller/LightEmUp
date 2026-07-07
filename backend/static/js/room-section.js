@@ -306,16 +306,20 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
               {totalSegments > 0 && <> &middot; {totalSegments} segments</>}
             </span>
           </div>
-          {/* On/off is a toggle switch, not a "Turn Off" button — the old button
-              looked greyed-out (disabled) exactly when the lights were ON. The
-              switch's position + color show the current state; tapping flips all. */}
+          {/* Master power toggle. It's really Resume ⇄ Off: turning "on" sends
+              {on:true}, so each light comes back to its last state (bulbs/strips
+              remember) rather than a fixed look. The specific-look shortcuts live
+              in the "Set room to" group below — this toggle owns power/resume, they
+              own the presets, so the two no longer read as duplicate whole-room
+              controls. Tooltip spells out the resume semantics (no hover on mobile,
+              but the label already shows state honestly). */}
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
             <span style={{ fontSize: 12, fontWeight: 700, color: anyOn ? "#e2e8f0" : "#64748b", whiteSpace: "nowrap" }}>
               {anyOn ? "On" : "Off"}
             </span>
             <button
               onClick={() => onControlRoom(name, { on: !anyOn })}
-              title={anyOn ? "Turn all lights off" : "Turn all lights on"}
+              title={anyOn ? "Turn the whole room off" : "Resume the room's last lighting"}
               style={{
                 width: 48, height: 28, borderRadius: 14, border: "none",
                 background: anyOn ? "#6366f1" : "#334155", cursor: "pointer",
@@ -337,13 +341,14 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
           {anySegmented && openerBtn("debug", "Debug", "#64748b", true)}
         </div>
 
-        {/* Whole-room white quick-actions — a labeled group on its own line, kept
-            visually separate from the panel openers above. The heading scopes both
-            buttons (they set EVERY light in the room), so the buttons stay short. */}
+        {/* "Set room to" — specific whole-room looks. Deliberately excludes an
+            on/off/resume button: the master power toggle (top-right) owns that, so
+            these read as "looks", not another power control. The heading scopes
+            both buttons (they set EVERY light in the room) so the labels stay short. */}
         {allLights.length > 0 && (
           <div>
             <div style={{ fontSize: 10, color: "#64748b", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 7 }}>
-              Whole-room shortcuts
+              Set room to
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 6 : 8, flexWrap: "wrap" }}>
               {whiteBtn("Soft White", SOFT_WHITE_K, "#fcd34d", "rgba(251,191,36,0.12)", "rgba(251,191,36,0.4)")}
