@@ -218,6 +218,10 @@ shown only for `resume_unless_night`. Auto-saves each change via `updatePowerRec
 from `cfg.power_recovery` (falls back to the built-in defaults when the key is absent, so
 an un-migrated config still renders). The backend applies it only on the Pi's next boot —
 this card never drives lights. See `backend/CLAUDE.md` "Power-recovery after an outage".
+The night window shows the **browser's local zone** (`Intl…resolvedOptions().timeZone` +
+the short abbr) purely as a callout — the hub compares wall-clock `HH:MM` against its own
+local clock, which is DST-safe by construction (10 PM is always 10 PM), and the hub shares
+the browser's zone (same LAN, same house). No timezone picker — it's local-only by design.
 
 ## app.js — orchestration
 State, routing, API calls. `controlHueLight` / `controlGoveeDevice` spread `cmd` into

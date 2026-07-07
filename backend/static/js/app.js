@@ -17,9 +17,21 @@ function PowerRecoveryCard({ settings, onChange, isMobile }) {
   const nightStart = settings.night_start || "22:00";
   const nightEnd = settings.night_end || "07:00";
 
+  // The window is wall-clock local time — the hub compares it against its own
+  // local clock, which follows DST automatically (10 PM is always 10 PM). Surface
+  // the browser's zone so the user knows there's no UTC/offset surprise. The hub
+  // sits on the same LAN in the same house, so its zone matches the browser's.
+  let tzLabel = "";
+  try {
+    const tzName = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+    const parts = new Date().toLocaleTimeString("en-US", { timeZoneName: "short" }).split(" ");
+    const tzAbbr = parts[parts.length - 1] || "";
+    tzLabel = [tzAbbr, tzName].filter(Boolean).join(" · ");
+  } catch (e) { /* older browser — just omit the zone */ }
+
   const MODES = [
     { value: "resume_unless_night", title: "Resume Lighting Unless Overnight",
-      desc: "Restore your lights during the day. After an overnight power outage, keep them off." },
+      desc: "Restore your lights during the day. If power is restored overnight, keep the lights off." },
     { value: "resume_always", title: "Resume Previous Lighting",
       desc: "Always restore the last lighting, whatever the time." },
     { value: "off", title: "Do Nothing",
@@ -77,6 +89,9 @@ function PowerRecoveryCard({ settings, onChange, isMobile }) {
             {timeSelect(nightStart, (v) => onChange({ night_start: v }))}
             <span style={{ fontSize: 13, color: "#94a3b8" }}>to</span>
             {timeSelect(nightEnd, (v) => onChange({ night_end: v }))}
+          </div>
+          <div style={{ fontSize: 11, color: "#64748b", marginTop: 8, lineHeight: 1.5 }}>
+            🕓 Your local time{tzLabel ? ` (${tzLabel})` : ""}. Adjusts automatically for daylight saving.
           </div>
         </div>
       )}
