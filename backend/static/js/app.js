@@ -189,6 +189,10 @@ function App() {
   const [rescanning, setRescanning] = useState(false);
   const [rooms, setRooms] = useState({});
   const [loading, setLoading] = useState(true);
+  // Progressive status shown on the initial loading screen. Govee LAN discovery
+  // dominates the wait (network broadcast + sequential per-device state queries),
+  // so we narrate the phases to make the wait feel shorter and explain the pause.
+  const [loadingStatus, setLoadingStatus] = useState("Connecting to the hub…");
   const [error, setError] = useState(null);
   const [activeTab, setActiveTab] = useState("rooms");
   const [newRoomName, setNewRoomName] = useState("");
@@ -299,9 +303,12 @@ function App() {
     }
   }, []);
 
-  const loadAll = useCallback(async () => {
+  const loadAll = useCallback(async (isFirst = false) => {
+    // Only the first load drives the full-screen loader; SSE refetches are silent.
+    const status = isFirst ? setLoadingStatus : () => {};
     try {
       const cfg = await api("/config");
+      status("Loading your rooms and settings…");
       setConfig(cfg);
       setRooms(cfg.rooms || {});
       setNicknames(cfg.nicknames || {});
@@ -325,7 +332,11 @@ function App() {
       }
 
       const promises = [
-        api("/discover/govee").catch(() => ({ devices: [] })),
+        api("/discover/govee").catch(() => ({ devices: [] })).then(r => {
+          const n = (r.devices || []).length;
+          status(`Found ${n} Govee device${n === 1 ? "" : "s"} — almost ready…`);
+          return r;
+        }),
         api("/scenes/lightning/status").catch(() => ({ active: [] })),
         api("/govee/segment-info").catch(() => ({ sku_table: {}, configured_counts: {}, segment_mode: {} })),
         api("/govee/segment-state").catch(() => ({ state: {} })),
@@ -338,6 +349,10 @@ function App() {
         );
       }
 
+      // Govee LAN discovery is the slow leg (UDP broadcast + sequential state
+      // reads), so this message is the one the user actually watches; the .then
+      // above swaps it to a device count as soon as the scan returns.
+      status("Scanning your network for Govee lights…");
       const results = await Promise.all(promises);
       // Devices arrive render-ready: the backend overlays the last color/temp it
       // set onto each Govee device (LAN devStatus doesn't report color reliably)
@@ -359,7 +374,7 @@ function App() {
     setLoading(false);
   }, []);
 
-  useEffect(() => { loadAll(); }, [loadAll]);
+  useEffect(() => { loadAll(true); }, [loadAll]);
 
   // Live sync across open sessions. The server broadcasts lightweight
   // "what changed" signals over SSE; we don't trust the payload to carry
@@ -686,9 +701,11 @@ function App() {
         minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center",
         background: "#0a0f1e", color: "#94a3b8", fontFamily: "'Geist', -apple-system, sans-serif",
       }}>
-        <div style={{ textAlign: "center" }}>
-          <div style={{ fontSize: 48, marginBottom: 16 }}>🔆</div>
-          <div>Loading LightEmUp...</div>
+        <div style={{ textAlign: "center", padding: "0 24px" }}>
+          <style>{`@keyframes leuPulse{0%,100%{opacity:.45;transform:scale(0.96)}50%{opacity:1;transform:scale(1)}}`}</style>
+          <div style={{ fontSize: 48, marginBottom: 14, animation: "leuPulse 1.4s ease-in-out infinite" }}>🔆</div>
+          <div style={{ fontSize: 18, fontWeight: 700, color: "#e2e8f0", marginBottom: 8 }}>LightEmUp</div>
+          <div style={{ fontSize: 13, color: "#94a3b8", minHeight: 18, transition: "opacity 0.2s" }}>{loadingStatus}</div>
         </div>
       </div>
     );
