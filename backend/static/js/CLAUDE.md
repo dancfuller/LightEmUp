@@ -224,13 +224,16 @@ local clock, which is DST-safe by construction (10 PM is always 10 PM), and the 
 the browser's zone (same LAN, same house). No timezone picker — it's local-only by design.
 
 ## app.js — orchestration
-State, routing, API calls. **Progressive loading screen (v3.4.1):** `loadAll(isFirst)`
-narrates its phases into `loadingStatus` (only when `isFirst` — SSE refetches pass
-nothing and stay silent) — "Loading your rooms and settings…" → "Scanning your network
-for Govee lights…" (the slow leg: UDP broadcast + sequential state reads) → "Found N
-Govee device(s)…" from a `.then` on the discover promise. The initial full-screen loader
-renders `loadingStatus` under a pulsing 🔆 so the wait feels shorter and explains the
-Govee pause. `controlHueLight` / `controlGoveeDevice` spread `cmd` into
+State, routing, API calls. **Fast initial load (v3.5.0):** `loadAll(isFirst)` paints from
+`/config` + `/discover/govee/cached` (instant, no LAN scan) + the quick segment/lightning/
+hue calls, then flips `loading` off — so the UI is interactive in ~a config round-trip
+instead of waiting 6–15s on the Govee UDP scan. On first load only, it then fires the live
+`/discover/govee` **in the background** (not awaited) and replaces the cached devices with
+live reachability + state when it lands. SSE refetches also use the cached endpoint (fast)
+and don't trigger a background scan. **Progressive loading screen (v3.4.1):** the phases
+narrate into `loadingStatus` (only when `isFirst`) — "Loading your rooms and settings…" →
+"Loading your lights…" — rendered under a pulsing 🔆 on the full-screen loader.
+`controlHueLight` / `controlGoveeDevice` spread `cmd` into
 the POST body, so passing CT keys (`color_temp` mireds / `color_temp_kelvin`) works
 without new endpoints. Opens the EventSource on mount and coalesces incoming SSE into a
 debounced `loadAll`. `ctCalibrated = {...ctCorrection, ...ctRgb}` drives the badges.

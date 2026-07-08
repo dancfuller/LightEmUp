@@ -331,12 +331,14 @@ function App() {
         setPowerRecovery(pr => ({ ...pr, ...cfg.power_recovery }));
       }
 
+      // Fast initial paint: the CACHED Govee list (no LAN scan) plus the other
+      // quick calls. The slow live scan (6–15s of UDP broadcast + per-device
+      // state reads) is deferred to a background refresh after paint (below), so
+      // the UI is interactive in roughly a config round-trip instead of stalling
+      // on discovery.
+      status("Loading your lights…");
       const promises = [
-        api("/discover/govee").catch(() => ({ devices: [] })).then(r => {
-          const n = (r.devices || []).length;
-          status(`Found ${n} Govee device${n === 1 ? "" : "s"} — almost ready…`);
-          return r;
-        }),
+        api("/discover/govee/cached").catch(() => ({ devices: [], missing: [] })),
         api("/scenes/lightning/status").catch(() => ({ active: [] })),
         api("/govee/segment-info").catch(() => ({ sku_table: {}, configured_counts: {}, segment_mode: {} })),
         api("/govee/segment-state").catch(() => ({ state: {} })),
@@ -349,10 +351,6 @@ function App() {
         );
       }
 
-      // Govee LAN discovery is the slow leg (UDP broadcast + sequential state
-      // reads), so this message is the one the user actually watches; the .then
-      // above swaps it to a device count as soon as the scan returns.
-      status("Scanning your network for Govee lights…");
       const results = await Promise.all(promises);
       // Devices arrive render-ready: the backend overlays the last color/temp it
       // set onto each Govee device (LAN devStatus doesn't report color reliably)
@@ -372,6 +370,16 @@ function App() {
       setError(e.message);
     }
     setLoading(false);
+
+    // The paint above used the CACHED Govee list (instant). On first load,
+    // refresh reachability + live device state with the real LAN scan in the
+    // background — not awaited, since it takes several seconds and must never
+    // block the UI. Results replace the cached devices when they land.
+    if (isFirst) {
+      api("/discover/govee")
+        .then(d => { setGoveeDevices(d.devices || []); setMissingGovee(d.missing || []); })
+        .catch(e => console.warn("Background Govee refresh failed:", e));
+    }
   }, []);
 
   useEffect(() => { loadAll(true); }, [loadAll]);

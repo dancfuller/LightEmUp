@@ -973,6 +973,53 @@ async def pair_hue(req: HuePairRequest):
         raise HTTPException(400, str(e))
 
 
+def _govee_cached_devices():
+    """Build the Govee device list from persisted ``known_devices`` + last-known
+    ``device_state`` with **no LAN scan** — instant. Used for the fast initial
+    paint; the client follows up with the live ``/discover/govee`` in the
+    background to refresh reachability + live state. Devices are optimistically
+    marked responding (assume-presence, v2.16.0); the live scan corrects any that
+    are actually offline. Mirrors the render-ready shape of the live endpoint."""
+    known = _known_govee()
+    device_state = config.get("device_state", {})
+    devices = []
+    for mac, entry in known.items():
+        sku = entry.get("sku")
+        dev = {
+            "ip": entry.get("ip"),
+            "device": mac,
+            "mac": mac,
+            "sku": sku,
+            "type": "govee",
+            "name": entry.get("name") or sku or "Govee Device",
+            "capabilities": {"has_color": True, "has_brightness": True, "has_segments": False},
+            "responding": True,
+            "last_seen": entry.get("last_seen"),
+            "state": {"on": None, "brightness": None, "reachable": True},
+        }
+        stored = device_state.get(gv_key(mac))
+        if stored:
+            st = dev["state"]
+            if stored.get("r") is not None and stored.get("g") is not None and stored.get("b") is not None:
+                st["color"] = {"r": stored["r"], "g": stored["g"], "b": stored["b"]}
+            elif stored.get("color_temp_kelvin") is not None:
+                st["color_temp"] = stored["color_temp_kelvin"]
+            if stored.get("on") is not None:
+                st["on"] = stored["on"]
+            if stored.get("brightness") is not None:
+                st["brightness"] = stored["brightness"]
+        devices.append(dev)
+    return devices
+
+
+@app.get("/api/discover/govee/cached")
+async def discover_govee_cached():
+    """Instant Govee device list from cache (no LAN scan) for the fast initial
+    paint. The client renders these immediately, then calls the live
+    ``/discover/govee`` in the background to refresh reachability + state."""
+    return {"devices": _govee_cached_devices(), "missing": []}
+
+
 @app.get("/api/discover/govee")
 async def discover_govee():
     """Discover Govee devices via LAN and fetch their current state.

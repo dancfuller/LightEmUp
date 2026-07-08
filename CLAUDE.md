@@ -167,7 +167,10 @@ Open `http://localhost:8420`. Internet required on first load only (CDN scripts)
 
 All endpoints are under `/api/`. Key groups:
 - `/api/config` — full config read
-- `/api/discover/govee`, `/api/discover/hue` — device discovery
+- `/api/discover/govee`, `/api/discover/hue` — device discovery (live LAN/network scan)
+- `/api/discover/govee/cached` — instant Govee list from `known_devices` + last-known
+  `device_state`, **no LAN scan** (used for the fast initial paint; the client then
+  refreshes with the live `/api/discover/govee` in the background)
 - `/api/hue/light`, `/api/govee/control` — individual device control
 - `/api/rooms`, `/api/rooms/control` — room CRUD and bulk control
 - `/api/room-layouts` — floor plan / line layout CRUD (auto-saved from frontend)

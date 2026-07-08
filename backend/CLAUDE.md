@@ -107,7 +107,15 @@ The backend returns data the UI can paint directly — derivation/merging lives 
 not in the browser (v2.14.0):
 - `GET /api/discover/govee` overlays the last color/temp/on/brightness set via
   LightEmUp (`device_state`) onto each scanned device, so devices come back
-  render-ready (LAN devStatus doesn't report color reliably).
+  render-ready (LAN devStatus doesn't report color reliably). **This is the slow leg**
+  (a fixed ~6s `discover_govee_lan` UDP window + up to ~2s/device sequential state
+  reads), so it must NOT gate the initial paint.
+- `GET /api/discover/govee/cached` (v3.5.0) returns the same render-ready shape built
+  purely from `known_devices` + `device_state` (`_govee_cached_devices`) with **no LAN
+  scan** — instant. The frontend paints from this on first load, then fires the live
+  `/api/discover/govee` in the background to refresh reachability + state. Devices are
+  optimistically `responding: true` (assume-presence); the live scan corrects offline
+  ones. `missing` is `[]` (only the live scan can know who's absent).
 - `GET /api/hue/lights` attaches `state.color` (RGB from the reported xy via
   `_hue_xy_to_rgb`) so the frontend paints the current color from backend data.
 - `GET /api/govee/segment-state` returns the UI shape directly:
