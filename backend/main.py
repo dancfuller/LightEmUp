@@ -700,7 +700,10 @@ async def _recovery_resume():
             dip = gv_ip_for_slug(key[len("govee:"):])
             if not dip:
                 continue
-            on = st.get("on", True)
+            # Default to OFF when the on-state was never recorded — after an outage
+            # a Govee device powers back on at its hardware default, so an unknown
+            # state must NOT be treated as "turn it on".
+            on = st.get("on", False)
             try:
                 await govee_lan_turn(dip, bool(on))
                 if on:
@@ -717,31 +720,43 @@ async def _recovery_resume():
 
 
 async def _apply_power_recovery(clean_shutdown: bool):
-    """One-shot background task, launched only on a fresh boot. Waits for the
-    network to settle, refreshes Govee IPs, then resumes or forces-off.
+    """One-shot background task, launched only on a fresh boot. Decides whether the
+    lights actually lost power, and if so resumes or forces-off per settings.
 
-    `clean_shutdown` True ⇒ we were stopped cleanly (a planned reboot), so we
-    always resume — even overnight. The overnight "stay off" guard only kicks in
-    for an *unclean* boot (a genuine power outage). Lightning storms are novelty
-    and are never resumed: the scene engine bypasses device_state, so a resume
-    replays the pre-storm static lighting, and the storm itself stays off."""
+    KEY INSIGHT: the Pi does NOT power the Hue/Govee lights — they run on their own
+    wall power. So a plain Pi reboot (`sudo reboot`, `systemctl`, a deploy) leaves
+    the lights untouched; they keep their real state across the reboot and there is
+    NOTHING to recover. Actively driving them would be wrong (it would turn ON lights
+    that were off — the v3.4.4 bug). The ONLY event that actually de-powers the
+    lights is a house/circuit outage — and that also kills the Pi *without* a clean
+    shutdown, so the clean-shutdown marker is absent.
+
+    Therefore: `clean_shutdown` True ⇒ planned reboot ⇒ do NOTHING (leave the lights
+    exactly as they were — this is the truest "resume", and never wakes the house).
+    Only an *unclean* boot (real outage) applies the policy: resume the last-known
+    lighting during the day, or force everything off overnight. Lightning storms are
+    never resumed (the scene engine bypasses device_state)."""
     from datetime import datetime
     settings = config.get("power_recovery", {})
     mode = settings.get("mode", "resume_unless_night")
     if mode == "off":
         log.info("Power recovery: disabled (mode=off) — leaving lights as-is")
         return
+    if clean_shutdown:
+        log.info("Power recovery: clean shutdown (planned reboot) — the lights kept "
+                 "their state through the reboot (the Pi doesn't power them), so "
+                 "there's nothing to recover; leaving them untouched")
+        return
 
+    # Only a genuine power outage (unclean boot) reaches here.
     await asyncio.sleep(RECOVERY_SETTLE_S)
 
     now = datetime.now()   # Pi runs in the user's local timezone
     night = _in_night_window(now, settings.get("night_start", "22:00"),
                              settings.get("night_end", "07:00"))
-    # Planned reboot (clean shutdown) always resumes; only a real outage at night
-    # forces the lights off.
-    stay_off = (mode == "resume_unless_night") and night and not clean_shutdown
-    log.info("Power recovery: mode=%s local=%s night=%s clean_shutdown=%s → %s", mode,
-             now.strftime("%H:%M"), night, clean_shutdown, "ALL OFF" if stay_off else "RESUME")
+    stay_off = (mode == "resume_unless_night") and night
+    log.info("Power recovery: OUTAGE detected — mode=%s local=%s night=%s → %s", mode,
+             now.strftime("%H:%M"), night, "ALL OFF" if stay_off else "RESUME")
 
     # DHCP may have handed out new Govee IPs on reboot — refresh before addressing.
     try:

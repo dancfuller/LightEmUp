@@ -176,24 +176,33 @@ which at 3am lights the whole house. On a **genuine fresh boot** the lifespan sc
   (600s). A normal deploy / service restart happens long after boot, so it is skipped —
   otherwise deploying at night would kill lights that are intentionally on. On non-Linux
   dev boxes `/proc/uptime` is absent → recovery never fires there (safe for local work).
+- **The lights aren't powered by the Pi (v3.4.5 — critical correction):** Hue/Govee run
+  on their own wall power, so a Pi reboot (`sudo reboot`, `systemctl restart`, a deploy)
+  leaves them untouched — they keep their real state across it, and there is **nothing to
+  recover**. Actively driving them on a plain reboot is a bug: v3.4.4 did exactly that and
+  turned ON lights that were off after a routine `sudo reboot`. The ONLY event that truly
+  de-powers the lights is a house/circuit outage — which also kills the Pi *without* a
+  clean shutdown.
 - **Planned reboot vs outage (`SHUTDOWN_MARKER`):** a low uptime alone can't tell a
   `sudo reboot` from a power cut. The lifespan shutdown hook writes `.clean_shutdown`
   (SIGTERM runs it — a planned reboot / `systemctl restart` / deploy); startup consumes
-  it (`exists()` → `unlink()`). Present at boot ⇒ **clean** (planned) → **always resume,
-  even overnight**; absent ⇒ the process was killed without a clean stop (a real outage)
-  → the overnight guard applies. The marker is written *before* `flush_save_now()` so a
-  force-kill after SIGTERM still leaves it. This matches Dan's workflow: he commits/pushes
-  then reboots the Pi at night and wants a resume, not all-off. So `stay_off =
-  mode==resume_unless_night AND night AND NOT clean_shutdown`.
+  it (`exists()` → `unlink()`). **Present at boot ⇒ clean (planned reboot) ⇒ do NOTHING**
+  (leave the lights exactly as they were — the truest "resume", and it never wakes the
+  house). **Absent ⇒ the process was killed without a clean stop (a real outage) ⇒ apply
+  the policy.** The marker is written *before* `flush_save_now()` so a force-kill after
+  SIGTERM still leaves it. This also matches Dan's workflow (commit/push then reboot the Pi
+  at night → lights left as-is, never forced off).
 - **Settle + resolve:** the task waits `RECOVERY_SETTLE_S` (45s) for the bridge/Govee to
   rejoin the LAN, then runs `discover_govee()` to refresh DHCP-reassigned Govee IPs before
   addressing anything.
 - **Policy** (`config["power_recovery"]`, additive — absent ⇒ defaults):
   `mode ∈ {resume_unless_night (default), resume_always, off}`; `night_start`/`night_end`
   are 24h `"HH:MM"`. `_in_night_window()` wraps past midnight (22:00→07:00 default;
-  start==end ⇒ never night). `resume_unless_night` + inside the window ⇒ **force all off**
-  (`_recovery_all_off`: every Hue light + every known Govee device → off); otherwise
-  **resume** (`_recovery_resume`: replay `device_state`).
+  start==end ⇒ never night). On an outage boot only: `resume_unless_night` + inside the
+  window ⇒ **force all off** (`_recovery_all_off`: every Hue light + every known Govee
+  device → off); otherwise **resume** (`_recovery_resume`: replay `device_state`).
+  `_recovery_resume` defaults a Govee entry with no recorded on-state to **off** (not on),
+  so an outage never blasts on a device whose state we never captured.
 - **`device_state` now holds Hue too.** `record_hue_state(light_id, state)` mirrors the
   last Hue command under `hue:<id>` (on/bri/xy/ct/hue/sat; xy/ct mutually exclusive),
   called from `control_hue_light` + room control, purely so resume can replay it — the

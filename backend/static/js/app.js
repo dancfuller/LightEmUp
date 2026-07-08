@@ -53,7 +53,7 @@ function PowerRecoveryCard({ settings, onChange, isMobile }) {
     <div style={{ background: "#1e293b", borderRadius: 16, padding: isMobile ? 16 : 20, border: "1px solid #334155", marginBottom: 16 }}>
       <h3 style={{ fontSize: 15, fontWeight: 600, color: "#e2e8f0", margin: 0, marginBottom: 6 }}>Power Recovery</h3>
       <div style={{ fontSize: 12, color: "#64748b", marginBottom: 14, lineHeight: 1.5 }}>
-        After a power outage, when the hub reboots it can bring your lights back gracefully instead of blasting them all on — especially in the middle of the night. A normal restart or reboot always resumes your lighting; only a real power outage triggers the overnight rule below. (Lightning storms are never resumed.)
+        After a power outage, when the hub reboots it can bring your lights back gracefully instead of blasting them all on — especially in the middle of the night. A normal restart or reboot leaves your lights exactly as they were (your lights don't lose power when the hub reboots); only a real power outage triggers the rules below. (Lightning storms are never resumed.)
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
