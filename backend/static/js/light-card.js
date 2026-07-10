@@ -1,6 +1,6 @@
 // ─── Light Card Component ───────────────────────────────────────────────────
 
-function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, onNicknameChange, roomName, segmentColors, segmentInfo, segmentBrightness, onSegmentStateRefresh, controlMode, onControlModeChange, segmentFillMode, onSegmentFillModeChange, ctCorrection }) {
+function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, onNicknameChange, roomName, segmentColors, segmentInfo, segmentBrightness, onSegmentStateRefresh, controlMode, onControlModeChange, segmentFillMode, onSegmentFillModeChange, onSegmentCountChange, ctCorrection }) {
   const isMobile = useIsMobile();
   const deviceBrightness = light.type === "hue"
     ? Math.round((light.state?.brightness || 0) / 254 * 100)
@@ -53,12 +53,15 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
     : hasColor; // most Govee LAN color devices accept colorTemInKelvin
 
   // Segment display: show a per-segment color strip when segment colors have been applied.
-  // The SKU table is authoritative when the device is known; the per-device
-  // configured count is only a fallback for devices not in the table (and
-  // avoids a stale override pinning a known device to the wrong count).
+  // The per-device CONFIGURED count wins — it's the user telling us how many
+  // segments this physical device actually has (e.g. a 7-panel Glide Hexa, whose
+  // SKU default is the product line's 15-segment max). The SKU table is only the
+  // fallback when nothing's been configured. This matches room-map, room-section
+  // and the segment debug panel; light-card was the outlier that rendered 15 boxes
+  // for a device laid out + scened as 7 (v3.5.2 fix).
   const configuredSegCount = light.ip && segmentInfo?.configured_counts?.[goveeSlug(light)];
   const skuSegCount = light.sku && segmentInfo?.sku_table?.[light.sku]?.count;
-  const segCount = skuSegCount || configuredSegCount || 0;
+  const segCount = configuredSegCount || skuSegCount || 0;
   const hasSegmentColors = segCount > 0 && segmentColors && Object.keys(segmentColors).length > 0;
 
   const deviceKey = light.type === "hue" ? `hue:${light.id}` : `govee:${goveeSlug(light)}`;
@@ -282,6 +285,31 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
 
           {hasColor && effectiveMode === "segments" && supportsSegments && (
             <div>
+              {/* Segment-count stepper: Govee's API doesn't report the real panel
+                  count (a Glide Hexa returns the line's 15-segment max no matter how
+                  many hexagons are attached), so let the user set their actual count.
+                  Drives configured_counts, which every count consumer respects. */}
+              {onSegmentCountChange && (
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 10, color: "#64748b" }}>Segments on this device:</span>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <button
+                      onClick={() => onSegmentCountChange(light, Math.max(1, segCount - 1))}
+                      disabled={segCount <= 1}
+                      title="One fewer segment"
+                      style={{ width: 24, height: 24, borderRadius: 6, border: "1px solid #334155", background: "transparent", color: segCount <= 1 ? "#475569" : "#a5b4fc", fontSize: 16, fontWeight: 700, cursor: segCount <= 1 ? "default" : "pointer", lineHeight: 1, padding: 0 }}
+                    >−</button>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: "#e2e8f0", minWidth: 18, textAlign: "center" }}>{segCount}</span>
+                    <button
+                      onClick={() => onSegmentCountChange(light, Math.min(30, segCount + 1))}
+                      disabled={segCount >= 30}
+                      title="One more segment"
+                      style={{ width: 24, height: 24, borderRadius: 6, border: "1px solid #334155", background: "transparent", color: segCount >= 30 ? "#475569" : "#a5b4fc", fontSize: 16, fontWeight: 700, cursor: segCount >= 30 ? "default" : "pointer", lineHeight: 1, padding: 0 }}
+                    >+</button>
+                  </div>
+                  <span style={{ fontSize: 9, color: "#475569" }}>match your actual panel count</span>
+                </div>
+              )}
               <div style={{ fontSize: 10, color: "#64748b", marginBottom: 6 }}>
                 Tap a segment to edit, then pick a color below
               </div>

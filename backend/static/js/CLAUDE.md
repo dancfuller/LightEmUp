@@ -28,6 +28,23 @@ A new file must be added to index.html in the correct slot (after its dependenci
   `gv_slug`/`gv_key`. **Never build a Govee key from `.ip` again — use `deviceKey`/
   `goveeSlug`.** The live UDP address is still `device.ip`: control POSTs send both
   (`{ ip, mac }`), and the transient `segmentState`/`segment-state` map stays IP-keyed.
+- **Govee segment-count precedence — `configured_counts` WINS over the SKU default
+  (v3.5.2):** a device's real segment count is `configured_counts[slug] || sku_table[sku]
+  .count`. The SKU count is only the product-line *max* (e.g. Glide Hexa H6061 = 15) and is
+  a fallback; the configured count is the user's ground truth (a 7-panel Hexa). Every count
+  consumer must use this order — `room-map`, `room-section` (`segmentCountFor`),
+  `segment-reset-debug`, `light-card` (`segCount`), and `color-mode` (`segCountForDevice`).
+  `light-card` used to prefer the SKU count and rendered 15 segment boxes for a device laid
+  out + scened as 7 — don't reintroduce SKU-first precedence anywhere.
+- **Setting the count — the LightCard stepper (v3.6.0):** the LightCard's Segments section
+  has a "Segments on this device" −/+ stepper (`onSegmentCountChange` → app's
+  `updateSegmentCount` → `POST /api/govee/segment-count`, optimistic on
+  `segmentInfo.configured_counts`). This is the **trustworthy** way to set the real panel
+  count. **Do NOT try to auto-detect from Govee's API** — a probe confirmed the v2
+  `segment_color_setting` capability returns a blanket `elementRange 0–14` (15) for nearly
+  every SKU and a `size.max` that's a per-request batch limit, not the panel count (a
+  2-pack reported 15, a 7-panel Hexa reported 21). Neither reflects reality; manual is the
+  only reliable source.
 - `useThrottledControl(value, onCommit, ms=180)` — instant local thumb/label +
   trailing-throttled commit + drag guard so external updates don't yank the thumb back.
   Every slider that drives a light routes through it (wired into the shared Slider /
@@ -233,6 +250,12 @@ live reachability + state when it lands. SSE refetches also use the cached endpo
 and don't trigger a background scan. **Progressive loading screen (v3.4.1):** the phases
 narrate into `loadingStatus` (only when `isFirst`) — "Loading your rooms and settings…" →
 "Loading your lights…" — rendered under a pulsing 🔆 on the full-screen loader.
+**Instant pre-mount loader (v3.5.1):** `index.html` ships a static HTML/CSS loader
+*inside* `#root` (pulsing 🔆 + "LightEmUp" + "Starting up…", using the global `pulse`
+keyframe) so something shows the moment the page paints — before the CDN React/Babel
+scripts download and Babel transpiles the ~15 files. `createRoot(root).render()` replaces
+it on mount; app.js's loader uses the same `pulse` keyframe + layout so the handoff is
+seamless (no flash). Previously the navy `<body>` sat empty during that window.
 `controlHueLight` / `controlGoveeDevice` spread `cmd` into
 the POST body, so passing CT keys (`color_temp` mireds / `color_temp_kelvin`) works
 without new endpoints. Opens the EventSource on mount and coalesces incoming SSE into a

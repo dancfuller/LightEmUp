@@ -1671,11 +1671,15 @@ class GoveeSegmentCountRequest(BaseModel):
 
 @app.post("/api/govee/segment-count")
 async def set_govee_segment_count(req: GoveeSegmentCountRequest):
-    """Manually set segment count for a Govee device."""
+    """Manually set a Govee device's real segment (panel) count. Govee's own API
+    doesn't report this reliably — a Glide Hexa returns the product line's max
+    regardless of how many hexagons are physically attached — so this is the
+    trustworthy source. Every count consumer prefers it over the SKU-table default."""
     if "govee_segment_counts" not in config:
         config["govee_segment_counts"] = {}
-    config["govee_segment_counts"][gv_slug_for_ip(req.ip, req.mac)] = req.count
+    config["govee_segment_counts"][gv_slug_for_ip(req.ip, req.mac)] = max(1, min(60, req.count))
     save_config(config)
+    publish_event("config")
     return {"success": True}
 
 

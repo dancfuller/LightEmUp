@@ -627,7 +627,13 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     if (effectiveVendor === "hue" && !key.startsWith("hue:")) return;
     if (effectiveVendor === "govee" && !key.startsWith("govee:")) return;
     const segData = segments[key];
-    const segCountForDevice = light?.sku ? (segmentInfo?.sku_table?.[light.sku]?.count || 0) : 0;
+    // Configured count wins over the SKU default (a 7-panel Hexa vs the SKU's
+    // 15-segment max), matching light-card/room-map. Only affects the synthetic
+    // (non-laid-out) segment spread; laid-out devices use their placed positions.
+    const segCountForDevice = light
+      ? ((light.ip && segmentInfo?.configured_counts?.[goveeSlug(light)])
+         || (light.sku && segmentInfo?.sku_table?.[light.sku]?.count) || 0)
+      : 0;
     const addressIndividual = addressSegments === "individual" && segCountForDevice > 1;
 
     if (addressIndividual && segData?.expanded && segData.positions) {

@@ -473,6 +473,23 @@ function App() {
     }
   }, []);
 
+  // Manually set a Govee device's real segment count (its physical panel count).
+  // Govee's API doesn't report this reliably — a Glide Hexa returns the line's
+  // 15-segment max regardless of how many hexagons are connected — so it's a
+  // user-set override. Optimistically updates configured_counts (keyed by slug,
+  // matching every count consumer) then persists.
+  const updateSegmentCount = useCallback((device, count) => {
+    const slug = goveeSlug(device);
+    setSegmentInfo(prev => ({
+      ...prev,
+      configured_counts: { ...(prev.configured_counts || {}), [slug]: count },
+    }));
+    api("/govee/segment-count", {
+      method: "POST",
+      body: JSON.stringify({ ip: device.ip, mac: device.mac, count }),
+    }).catch(e => console.warn("Failed to save segment count:", e));
+  }, []);
+
   const updateDeviceMode = useCallback(async (deviceKey, mode) => {
     setDeviceModes(prev => ({ ...prev, [deviceKey]: mode }));
     try {
@@ -710,8 +727,9 @@ function App() {
         background: "#0a0f1e", color: "#94a3b8", fontFamily: "'Geist', -apple-system, sans-serif",
       }}>
         <div style={{ textAlign: "center", padding: "0 24px" }}>
-          <style>{`@keyframes leuPulse{0%,100%{opacity:.45;transform:scale(0.96)}50%{opacity:1;transform:scale(1)}}`}</style>
-          <div style={{ fontSize: 48, marginBottom: 14, animation: "leuPulse 1.4s ease-in-out infinite" }}>🔆</div>
+          {/* Uses the global `pulse` keyframe (index.html), identical to the static
+              pre-mount loader in #root, so the React takeover is a seamless handoff. */}
+          <div style={{ fontSize: 48, marginBottom: 14, animation: "pulse 1.4s ease-in-out infinite" }}>🔆</div>
           <div style={{ fontSize: 18, fontWeight: 700, color: "#e2e8f0", marginBottom: 8 }}>LightEmUp</div>
           <div style={{ fontSize: 13, color: "#94a3b8", minHeight: 18, transition: "opacity 0.2s" }}>{loadingStatus}</div>
         </div>
@@ -932,6 +950,7 @@ function App() {
                   onDeviceModesBulkChange={updateDeviceModesBulk}
                   segmentFillModes={segmentFillModes}
                   onSegmentFillModeChange={updateSegmentFillMode}
+                  onSegmentCountChange={updateSegmentCount}
                   roomLayouts={roomLayouts}
                   onLayoutChange={handleLayoutChange}
                   fixtures={fixtures}
@@ -1008,6 +1027,7 @@ function App() {
                     onControlModeChange={(m) => updateDeviceMode && updateDeviceMode(devKey, m)}
                     segmentFillMode={segmentFillModes?.[devKey]}
                     onSegmentFillModeChange={(m) => updateSegmentFillMode && updateSegmentFillMode(devKey, m)}
+                    onSegmentCountChange={updateSegmentCount}
                     ctCorrection={ctCalibrated} />
                 );
               })}
