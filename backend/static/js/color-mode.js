@@ -11,12 +11,7 @@ function dimRgbCss(c) {
 }
 
 // ─── Preset color helpers (Teams / NCAA / Flags modes) ──────────────────────
-function hexToRgb(hex) {
-  const m = /^#?([0-9a-f]{6})$/i.exec((hex || "").trim());
-  if (!m) return null;
-  const n = parseInt(m[1], 16);
-  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
-}
+// hexToRgb lives in utils.js (shared with the manual hex entry in ColorPicker).
 // Near-black guard: these modes skip black so a "team color" of black doesn't
 // just leave a light off-looking. Judge by the BRIGHTEST channel, not luminance:
 // blue contributes almost nothing to luminance, so a luminance test wrongly

@@ -198,6 +198,14 @@ function LightningPanel({ roomName, isActive, onStart, onStop, goveeDevices, seg
                 <RgbSliderInput label="R" value={settings.color_r} onChange={(v) => updateSetting("color_r", v)} color="#f87171" />
                 <RgbSliderInput label="G" value={settings.color_g} onChange={(v) => updateSetting("color_g", v)} color="#4ade80" />
                 <RgbSliderInput label="B" value={settings.color_b} onChange={(v) => updateSetting("color_b", v)} color="#60a5fa" />
+                <HexColorInput
+                  value={{ r: settings.color_r, g: settings.color_g, b: settings.color_b }}
+                  onChange={({ r, g, b }) => {
+                    updateSetting("color_r", r);
+                    updateSetting("color_g", g);
+                    updateSetting("color_b", b);
+                  }}
+                />
               </div>
             )}
           </div>

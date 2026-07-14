@@ -17,6 +17,12 @@ A new file must be added to index.html in the correct slot (after its dependenci
 - React hooks destructured here for everyone: `const { useState, useEffect, ... } = React`.
 - `api(path, opts)` wrapper — injects the per-tab `X-Client-Id` header (`CLIENT_ID`).
 - Color math: `hueXYToRGB`, `kelvinToRGB`, `kelvinToMired`, `spreadKelvin`, `hslToRgb`.
+- **Hex ⇄ RGB (v3.7.0):** `hexToRgb(hex)` / `rgbToHex(r,g,b)` live here (canonical —
+  `color-mode.js` used to carry its own `hexToRgb` for the preset palettes; that copy is
+  gone). `hexToRgb` takes the `#` as **optional** and accepts 3-digit shorthand
+  (`#1e90ff`, `1e90ff`, `#19f`, `19f`), returning `null` for anything unparseable — that
+  null is what the manual hex input uses to tell a half-typed draft from a real value.
+  `rgbToHex` always emits canonical uppercase `#RRGGBB`.
 - `useIsMobile()` — 640px breakpoint. Required for all responsive forks.
 - `hashStr` / `seededRng` (mulberry32) — deterministic PRNG for palette assignment.
 - **Device identity keys (v3.0.0):** `deviceKey(device)` → `hue:<id>` or
@@ -50,6 +56,20 @@ A new file must be added to index.html in the correct slot (after its dependenci
   Every slider that drives a light routes through it (wired into the shared Slider /
   ColorTempSlider / RgbSliderInput). This is why sliders feel instant despite slow
   LAN apply — don't fire raw commands on every onChange tick (that floods the LAN).
+
+## components-shared.js — manual color entry (v3.7.0)
+The ColorPicker's **RGB** tab is not slider-only: each channel has a number box, and a
+`HexColorInput` row underneath takes a full hex code. All three paths (wheel/hue bar,
+sliders, hex) converge on the same `onColorSelect(r,g,b)`. `HexColorInput` is also used by
+`lightning-panel.js` (where it commits `color_r/g/b` as three `updateSetting` calls).
+- **Draft state is the whole trick.** Both the RGB number box and the hex field keep a
+  local `draft` string while the user types and only commit when it *parses*. Without it,
+  clearing the field to retype instantly commits `0` (`Number("") || 0`) and fires that at
+  the light — the old number box did exactly this. An unparseable hex draft renders red and
+  is never sent; `onBlur` drops the draft so the field snaps back to the real value.
+- The `#` is a fixed prefix glyph and the input holds the bare digits, but a pasted
+  `#RRGGBB` still works because `hexToRgb` strips it. Never require the user to match a
+  format.
 
 ## color-mode.js — the room color tool (most complex file)
 Assigns colors/temperatures across a room's devices and applies them.

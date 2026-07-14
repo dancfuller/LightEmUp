@@ -74,6 +74,11 @@ function HueBar({ currentColor, onChange, height = 22 }) {
 
 function RgbSliderInput({ label, value, onChange, color }) {
   const [local, onInput] = useThrottledControl(value, onChange, 180);
+  // The number box keeps its own draft string while focused: without it, clearing
+  // the field to retype snaps the value to 0 mid-keystroke (and fires the light).
+  // A draft that isn't a number is simply not committed; blur restores the real value.
+  const [draft, setDraft] = useState(null);
+
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
       <span style={{ fontSize: 11, fontWeight: 700, color, width: 12, textAlign: "center" }}>{label}</span>
@@ -81,7 +86,7 @@ function RgbSliderInput({ label, value, onChange, color }) {
         type="range" min={0} max={255} value={local}
         onChange={(e) => onInput(Number(e.target.value))}
         style={{
-          flex: 1, height: 5, appearance: "none", borderRadius: 3,
+          flex: 1, minWidth: 0, height: 5, appearance: "none", borderRadius: 3,
           background: `linear-gradient(to right, ${
             label === "R" ? `rgb(0,0,0), rgb(255,0,0)` :
             label === "G" ? `rgb(0,0,0), rgb(0,255,0)` :
@@ -91,17 +96,69 @@ function RgbSliderInput({ label, value, onChange, color }) {
         }}
       />
       <input
-        type="number" min={0} max={255} value={local}
+        type="number" min={0} max={255} inputMode="numeric"
+        value={draft ?? String(local)}
+        onFocus={(e) => e.target.select()}
         onChange={(e) => {
-          const v = Math.max(0, Math.min(255, Number(e.target.value) || 0));
-          onInput(v);
+          const text = e.target.value;
+          setDraft(text);
+          if (text.trim() !== "" && !Number.isNaN(Number(text))) {
+            onInput(Math.max(0, Math.min(255, Math.round(Number(text)))));
+          }
         }}
+        onBlur={() => setDraft(null)}
+        onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }}
         style={{
-          width: 46, padding: "3px 6px", borderRadius: 6,
+          width: 46, flexShrink: 0, padding: "3px 6px", borderRadius: 6,
           border: "1px solid #334155", background: "#0f172a",
           color: "#e2e8f0", fontSize: 12, textAlign: "center", outline: "none",
         }}
       />
+    </div>
+  );
+}
+
+// HexColorInput: type or paste a hex code to set the color exactly. The "#" is
+// shown as a fixed prefix and stripped from anything pasted, so both "#1E90FF"
+// and "1e90ff" work (3-digit shorthand too). While you're typing, the field
+// holds a draft: it only drives the light once the text actually parses, and an
+// unparseable draft turns red instead of sending garbage. Blur re-normalizes to
+// the canonical value.
+function HexColorInput({ value, onChange }) {
+  const [draft, setDraft] = useState(null);
+  const canonical = rgbToHex(value?.r ?? 0, value?.g ?? 0, value?.b ?? 0).slice(1);
+  const shown = draft ?? canonical;
+  const parsed = hexToRgb(shown);
+  const invalid = draft !== null && draft.trim() !== "" && !parsed;
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <span style={{ fontSize: 11, fontWeight: 700, color: "#94a3b8", width: 12, textAlign: "center" }}>#</span>
+      <input
+        type="text" value={shown} placeholder="RRGGBB"
+        spellCheck={false} autoComplete="off" autoCapitalize="off"
+        onFocus={(e) => e.target.select()}
+        onChange={(e) => {
+          const text = e.target.value;
+          setDraft(text);
+          const rgb = hexToRgb(text);
+          if (rgb) onChange(rgb);
+        }}
+        onBlur={() => setDraft(null)}
+        onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }}
+        style={{
+          flex: 1, minWidth: 0, padding: "4px 8px", borderRadius: 6,
+          border: `1px solid ${invalid ? "#f87171" : "#334155"}`,
+          background: "#0f172a", color: invalid ? "#fca5a5" : "#e2e8f0",
+          fontSize: 12, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+          letterSpacing: 1, textTransform: "uppercase", outline: "none",
+        }}
+      />
+      <div style={{
+        width: 46, height: 22, flexShrink: 0, borderRadius: 6,
+        background: parsed ? `rgb(${parsed.r},${parsed.g},${parsed.b})` : "transparent",
+        border: "1px solid rgba(255,255,255,0.1)",
+      }} />
     </div>
   );
 }
@@ -219,12 +276,18 @@ function ColorPicker({ size = 140, currentColor, onColorSelect, favorites, onFav
         </div>
       )}
 
-      {/* RGB sliders mode */}
+      {/* RGB sliders mode — drag the sliders, type exact channel values, or
+          paste a hex code. All three drive the same color. */}
       {mode === "rgb" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           <RgbSliderInput label="R" value={localR} onChange={(v) => handleRgbChange("r", v)} color="#f87171" />
           <RgbSliderInput label="G" value={localG} onChange={(v) => handleRgbChange("g", v)} color="#4ade80" />
           <RgbSliderInput label="B" value={localB} onChange={(v) => handleRgbChange("b", v)} color="#60a5fa" />
+          <div style={{ height: 1, background: "#1e293b", margin: "2px 0" }} />
+          <HexColorInput
+            value={{ r: localR, g: localG, b: localB }}
+            onChange={({ r, g, b }) => handleWheelPick(r, g, b)}
+          />
         </div>
       )}
 

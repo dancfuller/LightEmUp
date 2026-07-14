@@ -245,6 +245,34 @@ function getInitialColor(light) {
   return null;
 }
 
+// ─── Hex ⇄ RGB ──────────────────────────────────────────────────────────────
+// The leading "#" is optional everywhere — "#1e90ff", "1e90ff", "#19f" and
+// "19f" all parse — so no caller (or user) has to think about it. Returns null
+// when the text isn't a hex color, which is how the manual-entry inputs tell a
+// half-typed draft from a real value.
+function hexToRgb(hex) {
+  const s = String(hex ?? "").trim().replace(/^#/, "");
+  if (/^[0-9a-f]{3}$/i.test(s)) {
+    return {
+      r: parseInt(s[0] + s[0], 16),
+      g: parseInt(s[1] + s[1], 16),
+      b: parseInt(s[2] + s[2], 16),
+    };
+  }
+  if (/^[0-9a-f]{6}$/i.test(s)) {
+    const n = parseInt(s, 16);
+    return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+  }
+  return null;
+}
+
+// Always emits the canonical "#RRGGBB" (uppercase). Channels are clamped to 0-255.
+function rgbToHex(r, g, b) {
+  const chan = (v) => Math.max(0, Math.min(255, Math.round(Number(v) || 0)))
+    .toString(16).padStart(2, "0");
+  return `#${chan(r)}${chan(g)}${chan(b)}`.toUpperCase();
+}
+
 // ─── HSL Utilities (for tonal shade generation) ─────────────────────────────
 
 function rgbToHsl(r, g, b) {
