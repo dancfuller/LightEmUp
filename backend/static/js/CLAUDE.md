@@ -115,6 +115,19 @@ Assigns colors/temperatures across a room's devices and applies them.
   repeat the same two colors — don't reintroduce it. The room only ever *shows* as many
   colors as it has lights; the extras stay in the pool. (Stepper/seeds keep their plain
   caps: palette ≤24, custom seeds ≤4.)
+- **Palette on a LINEAR layout uses a positional cycle, NOT graph-coloring (v3.7.1):**
+  `computePalette` branches on `isLinear`. Floor plans keep the graph-coloring + swap +
+  repair path. But a compacted line seats entries ~1 unit apart, so the spatial adjacency
+  graph (threshold 8) makes each node adjacent to ~7 others per side; with a small palette
+  (e.g. the user drops to 3 colours via the stepper) that graph is uncolourable and the
+  relax fallbacks emit *adjacent repeats* (the reported bug). The linear branch instead
+  lays colours down as a repeating cycle `ABCABC…` along the left-to-right order (same
+  proven approach as Custom/`cycleAssign`), which guarantees distinct neighbours whenever
+  N≥2 → clean `ABAB` / `ABCABC` / `ABCDABCD`. `orderPaletteForCycle()` (module scope)
+  first orders the palette so consecutive cycle positions are perceptually distinct — the
+  "which colour is A/B/C" decision — which matters at N≥4 (a no-op for N≤3). Shuffle still
+  rotates the starting phase so short strips re-roll which colours appear. Don't route
+  linear palette back through the graph-colourer.
 - **Selectable before layout (v2.17.0):** the mode/palette UI is gated on
   `hasColorLights`, not `hasLayout`, so a palette/scene can be chosen (and persisted)
   before the room map is laid out — a warning banner ("Finish setting up the room layout

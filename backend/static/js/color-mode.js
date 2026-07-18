@@ -66,6 +66,40 @@ function extendPalette(baseColors, targetLen) {
   return result;
 }
 
+// ─── Cyclic palette ordering ──────────────────────────────────────────────
+// Order palette-color indices so consecutive positions in a repeating cycle
+// (…A B C A B C…) are as perceptually distinct as possible — a greedy
+// "farthest-next" walk over hue/lightness/saturation. Used by Palette mode on
+// LINEAR layouts, where colors are laid down as a positional cycle: this decides
+// which color is A, which is B, etc. so a 4+ color palette doesn't seat two
+// look-alikes next to each other. For N ≤ 3 every cyclic order is equivalent, so
+// it returns the identity order untouched.
+function orderPaletteForCycle(cols) {
+  const n = cols.length;
+  const identity = cols.map((_, i) => i);
+  if (n <= 3) return identity;
+  const H = cols.map(c => rgbToHsl(c.r, c.g, c.b));
+  const dist = (i, j) => {
+    let dh = Math.abs(H[i].h - H[j].h);
+    if (dh > 0.5) dh = 1 - dh;
+    return dh * 2 + Math.abs(H[i].l - H[j].l) + Math.abs(H[i].s - H[j].s) * 0.3;
+  };
+  const used = new Set([0]);
+  const seq = [0];
+  while (seq.length < n) {
+    const last = seq[seq.length - 1];
+    let best = -1, bestD = -Infinity;
+    for (let i = 0; i < n; i++) {
+      if (used.has(i)) continue;
+      const d = dist(last, i);
+      if (d > bestD) { bestD = d; best = i; }
+    }
+    used.add(best);
+    seq.push(best);
+  }
+  return seq;
+}
+
 // ─── Gradient Direction Picker with Mini Map ──────────────────────────────
 function GradientDirectionPicker({ direction, onDirectionChange, availableDirections, placedLights, layout, preview, lightMap, nicknames, isLinear }) {
   const isMobile = useIsMobile();
@@ -815,10 +849,32 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
   const computePalette = useCallback(() => {
     if (placedColorLights.length === 0 || paletteColors.length === 0) return null;
 
-    const rng = seededRng(`${roomName}|palette|${shuffleSeed}`);
-    const adj = buildAdjacency(placedColorLights);
     const colors = paletteColors;
     const N = colors.length;
+
+    // LINEAR layouts: a clean positional cycle (ABCABC…) down the strip. This
+    // beats graph-coloring here — in a compacted line every entry sits ~1 unit
+    // from its neighbours, so the spatial adjacency graph (threshold 8) makes
+    // each node adjacent to ~7 others each side; with a small palette (e.g. 3
+    // colours) that graph is uncolourable and the relax fallbacks emit adjacent
+    // repeats. The cycle instead guarantees distinct neighbours whenever N ≥ 2
+    // (matching Custom/Teams/Flags). Palette colours are first ordered so
+    // consecutive cycle positions are perceptually distinct — this is the
+    // "respect adjacency when deciding which colour is A/B/C" step, and matters
+    // at N ≥ 4 (for N ≤ 3 every cyclic order is equivalent). Shuffle rotates the
+    // starting phase, so short strips still re-roll which colours appear.
+    if (isLinear) {
+      const order = orderPaletteForCycle(colors);
+      const ordered = [...placedColorLights].sort((a, b) =>
+        (a.x !== b.x) ? a.x - b.x : a.y - b.y);
+      const offset = Math.floor(seededRng(`${roomName}|palette|${shuffleSeed}`)() * N);
+      const result = {};
+      ordered.forEach((d, i) => { result[d.key] = colors[order[(i + offset) % N]]; });
+      return result;
+    }
+
+    const rng = seededRng(`${roomName}|palette|${shuffleSeed}`);
+    const adj = buildAdjacency(placedColorLights);
 
     // Precompute HSL for each palette color
     const hsl = colors.map(c => rgbToHsl(c.r, c.g, c.b));
@@ -1076,7 +1132,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
       result[key] = colors[ci];
     });
     return result;
-  }, [placedColorLights, paletteColors, buildAdjacency, fixtures, roomName, shuffleSeed]);
+  }, [placedColorLights, paletteColors, buildAdjacency, fixtures, roomName, shuffleSeed, isLinear]);
 
   // ─── Tonal mode: 8 shades of one color, randomly assigned with adjacency gap ─
   const computeTonal = useCallback(() => {
