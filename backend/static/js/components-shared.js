@@ -163,7 +163,14 @@ function HexColorInput({ value, onChange }) {
   );
 }
 
-function ColorPicker({ size = 140, currentColor, onColorSelect, favorites, onFavoritesChange, compact = false }) {
+function ColorPicker({ size = 140, currentColor, onColorSelect, favorites, onFavoritesChange, compact = false,
+                       stageApply = false, onApply, applyLabel }) {
+  // stageApply (opt-in): picking a color/favorite/RGB does NOT drive the lights —
+  // it *stages* a pending color, committed only by the "Apply to …" button
+  // (onApply). Used by the room Controls so selecting a favorite or nudging RGB
+  // no longer silently applies with no feedback. Default off, so every other
+  // ColorPicker (per-device, room map, the color-tool base pickers that must
+  // live-preview) keeps its immediate onColorSelect behavior untouched.
   const pickerStyle = useContext(PickerStyleContext); // "huebar" | "wheel"
   const [mode, setMode] = useState("wheel"); // "wheel" | "rgb" | "favorites"
   const [localR, setLocalR] = useState(currentColor?.r ?? 255);
@@ -171,31 +178,46 @@ function ColorPicker({ size = 140, currentColor, onColorSelect, favorites, onFav
   const [localB, setLocalB] = useState(currentColor?.b ?? 100);
   const [editingFavs, setEditingFavs] = useState(false);
   const [newFavLabel, setNewFavLabel] = useState("");
+  // staged = there's a pending color the user picked but hasn't Applied yet
+  // (stageApply mode only). A ref mirrors it so the currentColor sync effect can
+  // read it without re-subscribing.
+  const [staged, setStaged] = useState(false);
+  const stagedRef = useRef(false);
+  const setStagedFlag = (v) => { stagedRef.current = v; setStaged(v); };
 
   // Sync local RGB when currentColor prop changes (e.g. after Apply from ColorMode
-  // updates the parent light's state.color)
+  // updates the parent light's state.color). In stageApply mode, don't clobber a
+  // pending stage with an incoming refresh — the user's unapplied pick wins until
+  // they Apply (or a fresh external color arrives after they've committed).
   useEffect(() => {
+    if (stageApply && stagedRef.current) return;
     if (currentColor?.r != null) setLocalR(currentColor.r);
     if (currentColor?.g != null) setLocalG(currentColor.g);
     if (currentColor?.b != null) setLocalB(currentColor.b);
   }, [currentColor?.r, currentColor?.g, currentColor?.b]);
 
-  // Sync local RGB when currentColor changes from external source (wheel pick)
-  const handleWheelPick = (r, g, b) => {
+  // Unified color choice. In stageApply mode it stages (no light command); else it
+  // drives the lights immediately (legacy behavior).
+  const chooseColor = (r, g, b) => {
     setLocalR(r);
     setLocalG(g);
     setLocalB(b);
-    onColorSelect(r, g, b);
+    if (stageApply) setStagedFlag(true);
+    else onColorSelect(r, g, b);
   };
+
+  const applyStaged = () => {
+    onApply?.(localR, localG, localB);
+    setStagedFlag(false);
+  };
+
+  const handleWheelPick = (r, g, b) => chooseColor(r, g, b);
 
   const handleRgbChange = (channel, val) => {
     const r = channel === "r" ? val : localR;
     const g = channel === "g" ? val : localG;
     const b = channel === "b" ? val : localB;
-    if (channel === "r") setLocalR(val);
-    if (channel === "g") setLocalG(val);
-    if (channel === "b") setLocalB(val);
-    onColorSelect(r, g, b);
+    chooseColor(r, g, b);
   };
 
   const addCurrentAsFavorite = () => {
@@ -303,17 +325,28 @@ function ColorPicker({ size = 140, currentColor, onColorSelect, favorites, onFav
             </div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              {favorites.map((fav, i) => (
+              {favorites.map((fav, i) => {
+                // Highlight the favorite that is the currently-APPLIED color (solid
+                // ring), or — in stageApply mode — the pending pick the user hasn't
+                // committed yet (dashed ring, "Staged"). "Applied" is judged against
+                // currentColor (the real light state), NOT the local pick, so the
+                // default pick never falsely flags a look-alike favorite.
+                const matchesStaged = stageApply && staged
+                  && fav.r === localR && fav.g === localG && fav.b === localB;
+                const matchesApplied = !matchesStaged && currentColor?.r != null
+                  && fav.r === currentColor.r && fav.g === currentColor.g && fav.b === currentColor.b;
+                const isCurrent = matchesStaged || matchesApplied;
+                return (
                 <div key={i} style={{
                   display: "flex", alignItems: "center", gap: 8,
                   padding: "8px 10px", borderRadius: 8,
-                  background: "#0f172a", border: "1px solid #1e293b",
+                  background: isCurrent ? "rgba(99,102,241,0.10)" : "#0f172a",
+                  border: isCurrent
+                    ? `1px ${matchesStaged ? "dashed" : "solid"} #6366f1`
+                    : "1px solid #1e293b",
                 }}>
                   <button
-                    onClick={() => {
-                      setLocalR(fav.r); setLocalG(fav.g); setLocalB(fav.b);
-                      onColorSelect(fav.r, fav.g, fav.b);
-                    }}
+                    onClick={() => chooseColor(fav.r, fav.g, fav.b)}
                     style={{
                       display: "flex", alignItems: "center", gap: 8,
                       background: "none", border: "none", cursor: "pointer",
@@ -326,7 +359,16 @@ function ColorPicker({ size = 140, currentColor, onColorSelect, favorites, onFav
                       border: "1px solid rgba(255,255,255,0.1)",
                     }} />
                     <div>
-                      <div style={{ fontSize: 12, fontWeight: 600, color: "#e2e8f0" }}>{fav.label}</div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <span style={{ fontSize: 12, fontWeight: 600, color: "#e2e8f0" }}>{fav.label}</span>
+                        {stageApply && isCurrent && (
+                          <span style={{
+                            fontSize: 9, fontWeight: 700, letterSpacing: 0.4,
+                            padding: "1px 6px", borderRadius: 10, textTransform: "uppercase",
+                            color: "#a5b4fc", background: "rgba(99,102,241,0.18)",
+                          }}>{matchesStaged ? "Staged" : "Applied"}</span>
+                        )}
+                      </div>
                       <div style={{ fontSize: 10, color: "#64748b" }}>{fav.r}, {fav.g}, {fav.b}</div>
                     </div>
                   </button>
@@ -341,7 +383,8 @@ function ColorPicker({ size = 140, currentColor, onColorSelect, favorites, onFav
                     >&times;</button>
                   )}
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
 
@@ -394,6 +437,32 @@ function ColorPicker({ size = 140, currentColor, onColorSelect, favorites, onFav
             )}
           </div>
         </div>
+      )}
+
+      {/* Stage-then-Apply commit bar (opt-in). Muted "Applied" until the user
+          stages a new color, then a prominent "Apply to {room}". */}
+      {stageApply && (
+        <button
+          onClick={applyStaged}
+          disabled={!staged}
+          style={{
+            width: "100%", marginTop: 12, padding: "11px 12px", borderRadius: 10,
+            border: "none", cursor: staged ? "pointer" : "default",
+            display: "flex", alignItems: "center", justifyContent: "center", gap: 10,
+            background: staged ? "#6366f1" : "#1e293b",
+            color: staged ? "#fff" : "#64748b",
+            fontSize: 13, fontWeight: 700, transition: "all 0.15s",
+          }}
+        >
+          <span style={{
+            width: 18, height: 18, borderRadius: 5, flexShrink: 0,
+            background: `rgb(${localR},${localG},${localB})`,
+            border: "1px solid rgba(255,255,255,0.25)",
+          }} />
+          {staged
+            ? `Apply to ${applyLabel || "room"}`
+            : (currentColor?.r != null ? "Applied ✓" : "Pick a color to apply")}
+        </button>
       )}
     </div>
   );

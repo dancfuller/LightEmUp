@@ -217,7 +217,10 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
           <ColorPicker
             size={160}
             currentColor={roomColor}
-            onColorSelect={applyRoomColor}
+            onColorSelect={() => {}}
+            stageApply={true}
+            onApply={applyRoomColor}
+            applyLabel={name}
             favorites={favorites}
             onFavoritesChange={onFavoritesChange}
           />

@@ -70,6 +70,20 @@ sliders, hex) converge on the same `onColorSelect(r,g,b)`. `HexColorInput` is al
 - The `#` is a fixed prefix glyph and the input holds the bare digits, but a pasted
   `#RRGGBB` still works because `hexToRgb` strips it. Never require the user to match a
   format.
+- **Stage-then-Apply (opt-in, v3.7.2):** ColorPicker takes `stageApply` + `onApply` +
+  `applyLabel`. **Default off** — the picker keeps its immediate `onColorSelect` behavior
+  everywhere it's used (per-device LightCard, room map, and the color-tool *base-color*
+  pickers, which must live-preview into `baseColor` and must NOT be given staging). Only
+  the **room Controls** picker (`room-section.js`) opts in: there, picking a wheel/RGB/hex
+  color or tapping a favorite **stages** a pending color (updates the local preview, drives
+  no lights) and a prominent "Apply to {room}" bar commits it via `onApply` (the old
+  immediate-apply gave zero feedback that a color was set — the reported bug). The staged
+  favorite shows a dashed indigo ring + "Staged" chip; the favorite equal to the live
+  `currentColor` shows a solid ring + "Applied" chip. Both chips are judged against
+  `currentColor` (the real light state) / the staged pick — **never** the default local
+  RGB, so the 255/180/100 default never falsely flags the "Warm" favorite. A `stagedRef`
+  guards the `currentColor`→local sync effect so an SSE refresh mid-edit can't clobber an
+  unapplied pick. The bar reads "Pick a color to apply" until a color is known/applied.
 
 ## color-mode.js — the room color tool (most complex file)
 Assigns colors/temperatures across a room's devices and applies them.
