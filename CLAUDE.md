@@ -89,6 +89,7 @@ backend/
       room-map.js         # RoomMap — interactive SVG floor plan & linear layout editor
       palette-data.js     # Static color datasets for Teams/NCAA/Flags modes (PRESET_TEAMS/NCAA/FLAGS)
       color-mode.js       # Room color tool — palette/gradient/beacon/custom/teams/ncaa/flags + apply pipeline
+      schedules.js        # SchedulesTab (time-based automation) + Settings LocationCard
       segment-reset-debug.js # Debug panel for segment reset behavior
       room-section.js     # RoomSection — room grouping with controls, map, lightning toggles
       room-assignment.js  # RoomAssignment — device-to-room assignment UI
@@ -179,6 +180,10 @@ All endpoints are under `/api/`. Key groups:
 - `/api/favorites` — favorite colors (stored in config, synced across sessions)
 - `/api/power-recovery` — how a fresh boot after a power outage treats the lights
   (resume last state / stay off overnight); applied on the Pi's next boot only
+- `/api/schedules` — time-based schedules CRUD (GET list, POST upsert-by-id,
+  `DELETE /{id}`); `/api/location` — lat/lng for sunrise/sunset triggers. Config keys
+  `schedules` + `location` are additive. The hub fires these on its own via a
+  once-a-minute background loop — see `backend/CLAUDE.md` "Time-based schedules"
 - `/api/scenes/lightning/*` — lightning storm scene start/stop/settings
 - `/api/scenes/room-apply` — backend-driven room color-scene apply (staggered in a
   background task so the browser can close); `/cancel` to stop. Progress via SSE.

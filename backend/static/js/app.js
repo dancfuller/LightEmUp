@@ -242,6 +242,13 @@ function App() {
   const [powerRecovery, setPowerRecovery] = useState({
     mode: "resume_unless_night", night_start: "22:00", night_end: "07:00",
   });
+  // Time-based schedules + the lat/lng sun-relative triggers need.
+  const [schedules, setSchedules] = useState([]);
+  const [location, setLocation] = useState({});
+  // A look captured by "Schedule this look" in a room's Scenes panel, handed to
+  // the Schedules tab to pre-fill a new schedule: {room, plan}. Cleared once
+  // the editor consumes it.
+  const [pendingScheduleScene, setPendingScheduleScene] = useState(null);
 
   const updateFavorites = (newFavs) => {
     setFavoriteColors(newFavs);  // optimistic; backend is the source of truth
@@ -330,6 +337,8 @@ function App() {
       if (cfg.power_recovery && Object.keys(cfg.power_recovery).length) {
         setPowerRecovery(pr => ({ ...pr, ...cfg.power_recovery }));
       }
+      setSchedules(cfg.schedules || []);
+      setLocation(cfg.location || {});
 
       // Fast initial paint: the CACHED Govee list (no LAN scan) plus the other
       // quick calls. The slow live scan (6–15s of UDP broadcast + per-device
@@ -459,6 +468,50 @@ function App() {
     } catch (e) {
       console.warn("Failed to save power recovery settings:", e);
     }
+  }, []);
+
+  // ─── Schedules ────────────────────────────────────────────────────────
+  // Unlike most control actions these are NOT fire-and-forget: the backend
+  // mints the id and is the record of truth for the list, so we take its
+  // response. Failures surface (a schedule that silently didn't save is worse
+  // than a slow save — it just never fires).
+  const saveSchedule = useCallback(async (sched) => {
+    const res = await api("/schedules", { method: "POST", body: JSON.stringify(sched) });
+    setSchedules(prev => {
+      const saved = res.schedule;
+      const idx = prev.findIndex(s => s.id === saved.id);
+      if (idx < 0) return [...prev, saved];
+      const next = [...prev];
+      next[idx] = saved;
+      return next;
+    });
+    return res.schedule;
+  }, []);
+
+  const deleteSchedule = useCallback(async (id) => {
+    setSchedules(prev => prev.filter(s => s.id !== id));   // optimistic
+    try {
+      await api(`/schedules/${id}`, { method: "DELETE" });
+    } catch (e) {
+      console.warn("Failed to delete schedule:", e);
+      loadAll();   // resync — the row is still there server-side
+    }
+  }, [loadAll]);
+
+  const updateLocation = useCallback(async (lat, lng) => {
+    setLocation({ lat, lng });
+    try {
+      await api("/location", { method: "POST", body: JSON.stringify({ lat, lng }) });
+    } catch (e) {
+      console.warn("Failed to save location:", e);
+    }
+  }, []);
+
+  // "Schedule this look" from a room's Scenes panel: stash the captured plan
+  // and jump to the Schedules tab with the editor pre-filled.
+  const handleScheduleLook = useCallback((roomName, plan) => {
+    setPendingScheduleScene({ room: roomName, plan });
+    setActiveTab("schedules");
   }, []);
 
   const updateSegmentFillMode = useCallback(async (deviceKey, mode) => {
@@ -850,7 +903,7 @@ function App() {
       </header>
 
       <nav style={{ display: "flex", gap: 4, padding: isMobile ? "8px 10px" : "12px 24px", borderBottom: "1px solid #1e293b", flexWrap: "wrap", overflowX: "auto" }}>
-        {["rooms", "all lights", "assign rooms", "settings"].map(tab => (
+        {["rooms", "all lights", "schedules", "assign rooms", "settings"].map(tab => (
           <button
             key={tab} onClick={() => setActiveTab(tab)}
             style={{
@@ -960,6 +1013,7 @@ function App() {
                   minSatPct={minSatPct}
                   savedColorState={roomColorState[roomName]}
                   ctCorrection={ctCalibrated}
+                  onScheduleLook={handleScheduleLook}
                 />
               );
             })}
@@ -1034,6 +1088,20 @@ function App() {
             </div>
           );
         })()}
+
+        {activeTab === "schedules" && (
+          <SchedulesTab
+            schedules={schedules}
+            rooms={Object.keys(rooms)}
+            location={location}
+            favorites={favoriteColors}
+            onFavoritesChange={updateFavorites}
+            onSave={saveSchedule}
+            onDelete={deleteSchedule}
+            pendingScene={pendingScheduleScene}
+            onConsumePending={() => setPendingScheduleScene(null)}
+          />
+        )}
 
         {activeTab === "assign rooms" && (
           <RoomAssignment
@@ -1241,6 +1309,8 @@ function App() {
             </div>
 
             <PowerRecoveryCard settings={powerRecovery} onChange={updatePowerRecovery} isMobile={isMobile} />
+
+            <LocationCard location={location} onChange={updateLocation} isMobile={isMobile} />
 
             <div style={{ background: "#1e293b", borderRadius: 16, padding: 20, border: "1px solid #334155", marginBottom: 16 }}>
               <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 12, color: "#e2e8f0" }}>About</h3>

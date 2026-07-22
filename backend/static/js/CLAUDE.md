@@ -8,8 +8,8 @@ rules that apply to every UI change. **Keep this file current when behavior chan
 
 ## Load order (from index.html)
 utils → audio → components-shared → light-card → lightning-panel → room-map →
-palette-data → color-mode → segment-reset-debug → room-section → room-assignment →
-setup-wizard → server-logs → ct-calibration → app
+palette-data → color-mode → schedules → segment-reset-debug → room-section →
+room-assignment → setup-wizard → server-logs → ct-calibration → app
 
 A new file must be added to index.html in the correct slot (after its dependencies).
 
@@ -159,6 +159,36 @@ Assigns colors/temperatures across a room's devices and applies them.
   ColorMode effect (filtered by `roomName`) drives `applying`/`applyPhase`/`applyDone`/
   `applyTotal`/`applyLabel`/`applyEndAt`. So any open session shows live progress, not
   just the one that pressed Apply. Cancel → `POST /api/scenes/room-apply/cancel`.
+
+## schedules.js — Schedules tab + Settings Location card (v3.8.0)
+`SchedulesTab` (its own nav tab) lists schedules with a human trigger summary, a
+next-run hint, an enable toggle, edit, and a two-step delete; `ScheduleEditor` is the
+add/edit form; `LocationCard` renders in Settings.
+- **Scene actions are captured, never authored here.** All the scene math lives in
+  `color-mode.js` in the browser, so a scene schedule stores the resolved apply plan.
+  The editor shows a captured scene read-only ("build it again in that room's Scenes
+  panel and capture it") and **locks the room select** — the plan is device-specific.
+  White and Color actions ARE authored here (presets / `ColorPicker` + brightness).
+- **`buildScenePlan()` in color-mode.js is the single source of the apply plan.**
+  `applyColors` POSTs it and "⏰ Schedule this look" snapshots it — extracted from
+  `applyColors` precisely so the two can't drift. It stamps **`mac` on every Govee
+  entry** (`base_seeds`/`govee_whole`/`razer`; `cloud` already had `device_mac`) so the
+  backend can re-resolve DHCP IPs at fire time. **Anything you add to the plan must be
+  added inside `buildScenePlan`, not in `applyColors`.**
+- **Handoff:** the button calls `onScheduleLook(plan)` → `room-section` adds the room
+  name → app's `handleScheduleLook` stashes `pendingScheduleScene` and switches to the
+  Schedules tab; a `SchedulesTab` effect opens the editor pre-filled and calls
+  `onConsumePending()` so revisiting the tab doesn't reopen it.
+- **Day numbering is 0=Monday** (Python's `weekday()`), NOT JS `getDay()`'s 0=Sunday.
+  `nextRunLabel` converts with `(getDay() + 6) % 7`. Get this wrong and every weekly
+  schedule is off by a day.
+- **Saving is NOT fire-and-forget** (the one deliberate exception to the optimistic-UI
+  rule): the backend mints the id and owns the list, so `saveSchedule` awaits the
+  response and takes `res.schedule`. A schedule that silently failed to save is worse
+  than a slow save — it just never fires, with nothing on screen to say so.
+- Sun triggers can't be predicted client-side (no astral in the browser), so the list
+  shows "At sunset" rather than a guessed clock time, and a banner points at
+  Settings → Location when a sun schedule exists with no location set.
 
 ## ct-calibration.js — RGB-space white calibration UI
 Drives the device by **RGB** while tuning (so it warms past Govee's blue CT floor),

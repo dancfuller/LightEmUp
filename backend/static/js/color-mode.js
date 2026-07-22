@@ -468,7 +468,7 @@ function PresetPicker({ items, value, onChange, placeholder, isMobile }) {
   );
 }
 
-function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlGovee, favorites, onFavoritesChange, nicknames, segmentInfo, roomLayouts, fixtures, onApply, minSatEnabled, minSatPct, segmentFillModes, savedColorState }) {
+function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlGovee, favorites, onFavoritesChange, nicknames, segmentInfo, roomLayouts, fixtures, onApply, onScheduleLook, minSatEnabled, minSatPct, segmentFillModes, savedColorState }) {
   const isMobile = useIsMobile();
   const [mode, setMode] = useState("palette"); // "palette" | "gradient" | "tonal" | "custom" | "beacon"
   // Color space: "color" (RGB, the default) or "white" (tunable color temperature).
@@ -1504,8 +1504,19 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
   // device and cloud_v2 segment batches) in a background task. So you can close
   // the browser right after pressing Apply and the lights still fill in. Live
   // progress arrives back over SSE (see the scene_apply effect above).
-  const applyColors = () => {
-    if (!preview || applying) return;
+  //
+  // buildScenePlan() resolves the current preview into that plan and is the
+  // SINGLE source of it: Apply POSTs it, and "Schedule this look" snapshots it.
+  // Returns null when there's nothing to apply.
+  //
+  // Every Govee entry carries its `mac` alongside the live `ip`. A snapshot
+  // stored in a schedule can sit for weeks, and Govee IPs are DHCP — so the
+  // scheduler re-resolves ip from mac at fire time (backend
+  // `_freshen_scene_payload`). Without the mac a router reboot silently breaks
+  // saved scenes, exactly the failure MAC-keying fixed in v3.0.0. Hue entries
+  // key by the stable `light_id` and need nothing extra.
+  const buildScenePlan = () => {
+    if (!preview) return null;
     const entries = Object.entries(preview);
 
     // Group preview entries by destination so the backend can schedule each:
@@ -1529,8 +1540,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
       else cloudGroups.push({ parent, light, segs });
     });
 
-    const applyCount = hueEntries.length + goveeEntries.length + segmentEntries.length;
-    if (applyCount === 0) return;
+    if (hueEntries.length + goveeEntries.length + segmentEntries.length === 0) return null;
 
     // ─── Build the plan (the backend owns all timing) ───────────────────
     // Phase-1 base color: seed each cloud device with one of ITS OWN scene
@@ -1540,10 +1550,10 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     cloudGroups.forEach(({ light, segs }) => {
       if (!light) return;
       const seed = (segs[Math.floor(segs.length / 2)] || segs[0])?.color;
-      if (!seed) { base_seeds.push({ ip: light.ip, r: 255, g: 255, b: 255 }); return; }
+      if (!seed) { base_seeds.push({ ip: light.ip, mac: light.mac, r: 255, g: 255, b: 255 }); return; }
       base_seeds.push(seed.kelvin != null
-        ? { ip: light.ip, color_temp_kelvin: seed.kelvin, brightness: seed.brightness ?? brightness }
-        : { ip: light.ip, r: seed.r, g: seed.g, b: seed.b, brightness: seed.brightness ?? brightness });
+        ? { ip: light.ip, mac: light.mac, color_temp_kelvin: seed.kelvin, brightness: seed.brightness ?? brightness }
+        : { ip: light.ip, mac: light.mac, r: seed.r, g: seed.g, b: seed.b, brightness: seed.brightness ?? brightness });
     });
 
     // Hue: RGB, or true CT (mireds) for tunable-white lights in white mode.
@@ -1563,8 +1573,8 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
       const light = lightMap[key];
       if (!light) return;
       govee_whole.push(color.kelvin != null
-        ? { ip: light.ip, on: true, color_temp_kelvin: color.kelvin, brightness: color.brightness ?? brightness, label: nameForKey(key) }
-        : { ip: light.ip, on: true, r: color.r, g: color.g, b: color.b, brightness: color.brightness ?? brightness, label: nameForKey(key) });
+        ? { ip: light.ip, mac: light.mac, on: true, color_temp_kelvin: color.kelvin, brightness: color.brightness ?? brightness, label: nameForKey(key) }
+        : { ip: light.ip, mac: light.mac, on: true, r: color.r, g: color.g, b: color.b, brightness: color.brightness ?? brightness, label: nameForKey(key) });
     });
 
     // Razer: one bulk packet per device, full N segments (missing → black).
@@ -1578,7 +1588,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
         const f = color.brightness !== undefined ? color.brightness / 100 : 1;
         colors[idx] = [Math.round(color.r * f), Math.round(color.g * f), Math.round(color.b * f)];
       });
-      razer.push({ ip: light.ip, sku: light.sku, colors, brightness, label: nameForKey(parent) });
+      razer.push({ ip: light.ip, mac: light.mac, sku: light.sku, colors, brightness, label: nameForKey(parent) });
     });
 
     // Cloud_v2: batch segments by color so each distinct color is ONE V2 call.
@@ -1604,6 +1614,16 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
       });
     });
 
+    return { room: roomName, brightness, base_seeds, hue, govee_whole, razer, cloud };
+  };
+
+  const applyColors = () => {
+    if (!preview || applying) return;
+    const plan = buildScenePlan();
+    if (!plan) return;
+    const { base_seeds, hue, govee_whole, cloud } = plan;
+    const applyCount = Object.keys(preview).length;
+
     // Optimistic local progress + rough ETA until the first SSE event lands
     // (matches the backend's estimate so the countdown doesn't jump).
     const cloudGroupCount = cloud.reduce((s, d) => s + d.groups.length, 0);
@@ -1623,7 +1643,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     // streams progress back over SSE — so the browser can be closed now.
     api("/scenes/room-apply", {
       method: "POST",
-      body: JSON.stringify({ room: roomName, brightness, base_seeds, hue, govee_whole, razer, cloud }),
+      body: JSON.stringify(plan),
       headers: { "Content-Type": "application/json" },
     }).catch(e => {
       console.warn("[ColorMode] room-apply failed:", e);
@@ -2701,6 +2721,25 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
                   fontSize: 12, fontWeight: 700, cursor: "pointer",
                 }}
               >Cancel</button>
+            )}
+            {/* Capture this exact resolved look as a schedulable snapshot. The
+                scene math lives only here in the browser, so a schedule stores
+                the plan rather than the settings that produced it. */}
+            {onScheduleLook && (
+              <button onClick={() => {
+                  const plan = buildScenePlan();
+                  if (plan) onScheduleLook(plan);
+                }}
+                disabled={!preview || applying}
+                title="Save this look as a schedule you can run at a set time"
+                style={{
+                  padding: "6px 16px", borderRadius: 8, border: "1px solid #6366f1",
+                  background: "transparent",
+                  color: !preview || applying ? "#475569" : "#a5b4fc",
+                  fontSize: 12, fontWeight: 600,
+                  cursor: !preview || applying ? "not-allowed" : "pointer",
+                }}
+              >{isMobile ? "⏰ Schedule" : "⏰ Schedule this look"}</button>
             )}
           </div>
 

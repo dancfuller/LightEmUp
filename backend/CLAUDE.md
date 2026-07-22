@@ -221,6 +221,46 @@ which at 3am lights the whole house. On a **genuine fresh boot** the lifespan sc
   device-state resume, not scene resume** — resuming an active lightning storm is separate
   (task #46).
 
+## Time-based schedules (v3.8.0)
+`config["schedules"]` (a list) + `config["location"]` ({lat,lng}) — both additive, read
+via `.get`, no `schema_version` bump. A schedule pairs a **trigger** (`weekly` /
+`oneoff` / `sun`) with an **action** (`scene` / `white` / `color`) for one room.
+- **`_scheduler_loop()`** is one background task started in the lifespan. It sleeps to
+  just past the top of each minute via `asyncio.wait_for(_scheduler_stop.wait(), …)`
+  (the cooperative-sleep idiom from `scenes.py`), so shutdown is instant. Each tick it
+  fires every due schedule, stamps `last_fired`, disables fired one-offs, then
+  `schedule_save()` + `publish_event("config")` once.
+- **No catch-up.** A schedule missed while the Pi was off does NOT retro-fire — waking
+  to a 7am scene at 9am is worse than skipping it. Dedupe is `last_fired ==
+  now.strftime("%Y-%m-%d %H:%M")`, so a schedule fires at most once per minute-occurrence.
+- **`_schedule_due(sched, now, location, sun_resolver)` is PURE** — no lights, no I/O, and
+  `sun_resolver` is injectable. Keep it that way; it's the piece worth unit-testing (see
+  the 21-case scratch test written for v3.8.0). `now` is **naive Pi-local**
+  `datetime.now()`, so DST is handled by construction: 7 AM is always 7 AM.
+- **Sun triggers** use `astral` (pure-Python, in requirements.txt), imported **lazily**
+  inside `_sun_hhmm` so the module still loads on a dev box without it. Without
+  `config["location"]` sun schedules are simply inert (the UI warns).
+- **Scene actions are stored SNAPSHOTS, not recipes.** All scene math lives in the
+  browser (`color-mode.js`) — see "No server-side scene preview" — so a scene schedule
+  stores the fully-resolved room-apply payload captured by the frontend's
+  `buildScenePlan()`. `_fire_schedule` rebuilds a `SceneApplyRequest` from it and runs
+  the normal `_run_scene_apply` background task (cancelling any in-flight apply for that
+  room), so timing/progress/SSE are identical to a manual Apply.
+- **`_freshen_scene_payload` re-resolves Govee IPs from mac at fire time.** The snapshot
+  addresses devices by DHCP IP, and a schedule can sit for weeks — a router reboot would
+  silently break it (exactly what MAC-keying fixed in v3.0.0). So every stored Govee
+  entry carries `mac`/`device_mac`, and firing maps it through `gv_ip_for_slug(gv_slug(
+  mac))`; entries that no longer resolve are dropped + logged. **If you add a Govee list
+  to the apply payload, add it to the tuple in `_freshen_scene_payload` too.** Hue keys
+  by stable `light_id` and needs nothing.
+- `white`/`color` actions go through `_apply_room_white` / `_apply_room_color`, which
+  reuse `control_hue_light`/`control_govee` and mirror the frontend's per-vendor split
+  (Hue mireds + bri 1–254, Govee kelvin + bri 0–100).
+- Endpoints: `GET/POST /api/schedules` (POST upserts by id; **a body with only `id` +
+  `enabled` patches just that field**, which is how the list's toggle works — changing
+  `trigger` resets `last_fired` so a retimed schedule isn't blocked by the old dedupe),
+  `DELETE /api/schedules/{id}`, `GET/POST /api/location`.
+
 ## SSE live-sync (multi-session)
 - `_event_subscribers` queues; `publish_event(type, **fields)` fans out to all open
   clients via `GET /api/events`. Each event is tagged with the originating client

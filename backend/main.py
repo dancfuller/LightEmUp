@@ -105,6 +105,15 @@ DEFAULT_CONFIG = {
         "night_start": "22:00",          # 24h HH:MM — start of the "stay off overnight" window
         "night_end": "07:00",            # 24h HH:MM — end of it (window wraps past midnight)
     },
+    "schedules": [],      # time-based schedules; list of schedule objects. Each:
+                          #   { id, name, enabled, last_fired,
+                          #     trigger: { type: weekly|oneoff|sun, ... },
+                          #     action:  { type: scene|white|color, room, ... } }
+                          # Scene actions store a fully-resolved room-apply payload
+                          # (scene math is browser-only); the scheduler re-resolves
+                          # each Govee entry's IP from its mac at fire time. See
+                          # _scheduler_loop / _schedule_due / _fire_schedule.
+    "location": {},       # { lat, lng } — for sun-relative (sunrise/sunset) triggers
 }
 
 
@@ -773,6 +782,214 @@ async def _apply_power_recovery(clean_shutdown: bool):
         log.exception("Power recovery: apply failed")
 
 
+# ─── Time-based scheduler ──────────────────────────────────────────────────────
+# Fire a room "look" at a wall-clock time. The three trigger types (weekly,
+# one-off, sunrise/sunset) all resolve to a target HH:MM on a matching day and are
+# compared against naive Pi-local time — DST-safe by construction (7am is always
+# 7am). Color-scene assignment is browser-only, so a scheduled scene stores a
+# fully-resolved room-apply payload and we re-resolve each Govee entry's DHCP IP
+# from its stable mac at fire time (mirrors the v3.0 MAC-keying fix). No catch-up:
+# a schedule whose minute passed while the Pi was off does NOT retro-fire.
+
+_scheduler_task: "asyncio.Task | None" = None
+_scheduler_stop: "asyncio.Event | None" = None
+
+
+def _hhmm_matches(hhmm: str, now) -> bool:
+    """Does the given 'HH:MM' equal the minute of `now`?"""
+    h, m = _parse_hhmm(hhmm)
+    return h >= 0 and now.hour == h and now.minute == m
+
+
+def _sun_hhmm(event: str, d, lat, lng, offset_min: int = 0):
+    """Local wall-clock (hour, minute) of sunrise/sunset on date `d` at lat/lng,
+    shifted by `offset_min`. Returns None if astral is missing or inputs are bad.
+    astral is imported lazily so the module loads on dev boxes without it."""
+    try:
+        from astral import LocationInfo
+        from astral.sun import sun as _astral_sun
+        from datetime import datetime as _dt, timedelta
+        tz = _dt.now().astimezone().tzinfo   # the Pi's local zone
+        loc = LocationInfo(latitude=float(lat), longitude=float(lng))
+        t = _astral_sun(loc.observer, date=d, tzinfo=tz).get(event)
+        if t is None:
+            return None
+        t = t + timedelta(minutes=int(offset_min or 0))
+        return t.hour, t.minute
+    except Exception:
+        log.debug("Scheduler: sun time unavailable", exc_info=True)
+        return None
+
+
+def _schedule_due(sched: dict, now, location: dict = None, sun_resolver=None) -> bool:
+    """PURE (unit-testable): is this schedule due in the minute containing `now`?
+    Deduped against `last_fired` so it fires at most once per minute-occurrence.
+    `now` is naive Pi-local. `sun_resolver(event, date, offset) -> (h, m)|None` is
+    injectable for tests; it defaults to astral via _sun_hhmm."""
+    if not sched.get("enabled"):
+        return False
+    trig = sched.get("trigger") or {}
+    ttype = trig.get("type")
+    if sched.get("last_fired") == now.strftime("%Y-%m-%d %H:%M"):
+        return False   # already fired this exact minute-occurrence
+
+    if ttype == "weekly":
+        days = trig.get("days") or []
+        return now.weekday() in days and _hhmm_matches(trig.get("time"), now)
+
+    if ttype == "oneoff":
+        return (trig.get("date") == now.strftime("%Y-%m-%d")
+                and _hhmm_matches(trig.get("time"), now))
+
+    if ttype == "sun":
+        days = trig.get("days")
+        if days and now.weekday() not in days:
+            return False
+        loc = location or {}
+        lat, lng = loc.get("lat"), loc.get("lng")
+        if lat is None or lng is None:
+            return False
+        resolver = sun_resolver or (lambda ev, dt, off: _sun_hhmm(ev, dt, lat, lng, off))
+        hm = resolver(trig.get("event", "sunrise"), now.date(), trig.get("offset_min", 0))
+        return bool(hm) and now.hour == hm[0] and now.minute == hm[1]
+
+    return False
+
+
+def _freshen_scene_payload(payload: dict):
+    """Copy a stored scene room-apply payload with every Govee entry's IP
+    re-resolved from its mac (DHCP-robust). Govee entries whose device can't be
+    resolved (never seen / gone) are dropped; Hue entries are always kept (stable
+    light_id). Returns None if nothing addressable remains."""
+    if not payload:
+        return None
+    import copy
+    p = copy.deepcopy(payload)
+    for listname, mac_field in (("base_seeds", "mac"), ("govee_whole", "mac"),
+                                ("razer", "mac"), ("cloud", "device_mac")):
+        kept = []
+        for entry in p.get(listname, []) or []:
+            mac = entry.get(mac_field)
+            ip = gv_ip_for_slug(gv_slug(mac)) if mac else entry.get("ip")
+            if not ip:
+                continue   # unresolved — drop this device
+            entry["ip"] = ip
+            kept.append(entry)
+        p[listname] = kept
+    has_any = bool(p.get("hue")) or any(
+        p.get(k) for k in ("base_seeds", "govee_whole", "razer", "cloud"))
+    return p if has_any else None
+
+
+async def _apply_room_white(room_name: str, kelvin: int, brightness_pct: int):
+    """Set every light in a room to a white color temperature at a brightness %.
+    Mirrors the frontend setRoomWhite fan-out (Hue in mireds, Govee in kelvin)."""
+    room = config.get("rooms", {}).get(room_name)
+    if not room:
+        log.warning("Scheduler: white action — room %r not found", room_name)
+        return
+    mireds = max(153, min(500, round(1_000_000 / max(1, kelvin))))
+    bri254 = max(1, min(254, round(brightness_pct * 254 / 100)))
+    for light_id in room.get("hue_light_ids", []):
+        await control_hue_light(HueLightStateRequest(
+            light_id=str(light_id), on=True, brightness=bri254, color_temp=mireds))
+    for slug in room.get("govee_devices", []):
+        ip = gv_ip_for_slug(slug)
+        if ip:
+            await control_govee(GoveeCommandRequest(
+                ip=ip, mac=slug, on=True, brightness=brightness_pct,
+                color_temp_kelvin=kelvin))
+
+
+async def _apply_room_color(room_name: str, r: int, g: int, b: int, brightness_pct: int):
+    """Set every light in a room to one RGB color at a brightness %."""
+    room = config.get("rooms", {}).get(room_name)
+    if not room:
+        log.warning("Scheduler: color action — room %r not found", room_name)
+        return
+    bri254 = max(1, min(254, round(brightness_pct * 254 / 100)))
+    for light_id in room.get("hue_light_ids", []):
+        await control_hue_light(HueLightStateRequest(
+            light_id=str(light_id), on=True, brightness=bri254, r=r, g=g, b=b))
+    for slug in room.get("govee_devices", []):
+        ip = gv_ip_for_slug(slug)
+        if ip:
+            await control_govee(GoveeCommandRequest(
+                ip=ip, mac=slug, on=True, brightness=brightness_pct, r=r, g=g, b=b))
+
+
+async def _fire_schedule(sched: dict):
+    """Execute a due schedule's action, reusing the normal control paths."""
+    action = sched.get("action") or {}
+    atype = action.get("type")
+    room = action.get("room")
+    name = sched.get("name") or sched.get("id")
+    log.info("Scheduler: firing %r (action=%s room=%s)", name, atype, room)
+    try:
+        if atype == "scene":
+            payload = _freshen_scene_payload(action.get("payload") or {})
+            if payload is None:
+                log.warning("Scheduler: %r — scene has no resolvable devices, skipped", name)
+                return
+            req = SceneApplyRequest(**payload)
+            existing = _scene_tasks.get(req.room)
+            if existing and not existing.done():
+                existing.cancel()
+                try:
+                    await existing
+                except BaseException:
+                    pass
+            _scene_tasks[req.room] = asyncio.create_task(_run_scene_apply(req))
+        elif atype == "white":
+            await _apply_room_white(room, int(action.get("kelvin", 2700)),
+                                    int(action.get("brightness", 100)))
+        elif atype == "color":
+            rgb = action.get("rgb") or {}
+            await _apply_room_color(room, int(rgb.get("r", 255)), int(rgb.get("g", 255)),
+                                    int(rgb.get("b", 255)), int(action.get("brightness", 100)))
+        else:
+            log.warning("Scheduler: %r — unknown action type %r", name, atype)
+    except Exception:
+        log.exception("Scheduler: %r failed to fire", name)
+
+
+async def _scheduler_loop():
+    """Wake ~once a minute (aligned to the top of the minute) and fire due
+    schedules. Wakes instantly on shutdown via the stop event."""
+    global _scheduler_stop
+    _scheduler_stop = asyncio.Event()
+    from datetime import datetime
+    log.info("Scheduler started")
+    try:
+        while not _scheduler_stop.is_set():
+            now = datetime.now()   # Pi runs in the user's local timezone
+            location = config.get("location", {}) or {}
+            fired = False
+            for sched in list(config.get("schedules", []) or []):
+                try:
+                    if _schedule_due(sched, now, location):
+                        await _fire_schedule(sched)
+                        sched["last_fired"] = now.strftime("%Y-%m-%d %H:%M")
+                        if (sched.get("trigger") or {}).get("type") == "oneoff":
+                            sched["enabled"] = False   # one-off: fire once, then off
+                        fired = True
+                except Exception:
+                    log.exception("Scheduler: error on schedule %s", sched.get("id"))
+            if fired:
+                schedule_save()
+                publish_event("config")
+            # Sleep to just past the top of the next minute; wake early on stop.
+            delay = 60 - datetime.now().second + 0.5
+            try:
+                await asyncio.wait_for(_scheduler_stop.wait(), timeout=delay)
+            except asyncio.TimeoutError:
+                pass
+    except asyncio.CancelledError:
+        pass
+    finally:
+        log.info("Scheduler stopped")
+
+
 # ─── App ─────────────────────────────────────────────────────────────────────
 
 @asynccontextmanager
@@ -814,7 +1031,17 @@ async def lifespan(app: FastAPI):
         log.info("Not a fresh boot (uptime=%s) — skipping power recovery",
                  f"{_uptime:.0f}s" if _uptime is not None else "unknown")
 
+    # Time-based scheduler: fires room scenes / white / color at wall-clock times.
+    global _scheduler_task
+    _scheduler_task = asyncio.create_task(_scheduler_loop())
+
     yield
+
+    # Stop the scheduler loop promptly (it also honors CancelledError).
+    if _scheduler_stop is not None:
+        _scheduler_stop.set()
+    if _scheduler_task is not None:
+        _scheduler_task.cancel()
 
     # Mark this as a clean stop FIRST (before the flush, which could be slow), so
     # even if shutdown is force-killed after SIGTERM the marker is already down —
@@ -1905,6 +2132,8 @@ class SceneHueTarget(BaseModel):
 
 class SceneGoveeWhole(BaseModel):
     ip: str
+    mac: Optional[str] = None          # stable identity; lets a scheduled snapshot
+                                       # re-resolve the DHCP IP at fire time.
     on: bool = True
     r: Optional[int] = None
     g: Optional[int] = None
@@ -1916,6 +2145,7 @@ class SceneGoveeWhole(BaseModel):
 
 class SceneBaseSeed(BaseModel):
     ip: str
+    mac: Optional[str] = None          # stable identity (see SceneGoveeWhole.mac)
     r: Optional[int] = None
     g: Optional[int] = None
     b: Optional[int] = None
@@ -1925,6 +2155,7 @@ class SceneBaseSeed(BaseModel):
 
 class SceneRazer(BaseModel):
     ip: str
+    mac: Optional[str] = None          # stable identity (see SceneGoveeWhole.mac)
     sku: str
     colors: list[list[int]]            # full-brightness RGB per segment
     brightness: Optional[int] = 100
@@ -2300,6 +2531,8 @@ async def get_config():
         "segment_fill_modes": config.get("segment_fill_modes", {}),
         "ui_prefs": config.get("ui_prefs", {}),
         "power_recovery": config.get("power_recovery", {}),
+        "schedules": config.get("schedules", []),
+        "location": config.get("location", {}),
         "favorites": config.get("favorites") or DEFAULT_FAVORITES,
     }
 
@@ -2475,6 +2708,95 @@ async def set_power_recovery(req: PowerRecoveryRequest):
     save_config(config)
     publish_event("config")
     return {"success": True, "power_recovery": pr}
+
+
+# ─── Schedules + location ───────────────────────────────────────────────────
+
+class ScheduleRequest(BaseModel):
+    """Upsert one schedule. `id` absent ⇒ create (a uuid is minted)."""
+    id: Optional[str] = None
+    name: Optional[str] = None
+    enabled: Optional[bool] = None
+    trigger: Optional[dict] = None   # see DEFAULT_CONFIG["schedules"] for the shape
+    action: Optional[dict] = None
+
+
+class LocationRequest(BaseModel):
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+
+
+@app.get("/api/schedules")
+async def get_schedules():
+    return {"schedules": config.get("schedules", []),
+            "location": config.get("location", {})}
+
+
+@app.post("/api/schedules")
+async def upsert_schedule(req: ScheduleRequest):
+    """Create or update a schedule. A create needs trigger + action; an update
+    patches only the fields present, so the UI can flip `enabled` on its own."""
+    import uuid
+    schedules = config.setdefault("schedules", [])
+    existing = next((s for s in schedules if s.get("id") == req.id), None) if req.id else None
+
+    if existing is None:
+        if not req.trigger or not req.action:
+            raise HTTPException(400, "A new schedule needs both a trigger and an action")
+        sched = {
+            "id": req.id or str(uuid.uuid4()),
+            "name": req.name or "Schedule",
+            "enabled": True if req.enabled is None else bool(req.enabled),
+            "trigger": req.trigger,
+            "action": req.action,
+            "last_fired": None,
+        }
+        schedules.append(sched)
+    else:
+        sched = existing
+        if req.name is not None:
+            sched["name"] = req.name
+        if req.enabled is not None:
+            sched["enabled"] = bool(req.enabled)
+        if req.trigger is not None:
+            sched["trigger"] = req.trigger
+            sched["last_fired"] = None   # retimed — don't let the old dedupe block it
+        if req.action is not None:
+            sched["action"] = req.action
+
+    save_config(config)
+    publish_event("config")
+    return {"success": True, "schedule": sched}
+
+
+@app.delete("/api/schedules/{schedule_id}")
+async def delete_schedule(schedule_id: str):
+    schedules = config.get("schedules", [])
+    remaining = [s for s in schedules if s.get("id") != schedule_id]
+    if len(remaining) == len(schedules):
+        raise HTTPException(404, f"No schedule '{schedule_id}'")
+    config["schedules"] = remaining
+    save_config(config)
+    publish_event("config")
+    return {"success": True}
+
+
+@app.get("/api/location")
+async def get_location():
+    return config.get("location", {})
+
+
+@app.post("/api/location")
+async def set_location(req: LocationRequest):
+    """Lat/long for sun-relative triggers. Without it, sun schedules are inert."""
+    if req.lat is None or req.lng is None:
+        raise HTTPException(400, "Both lat and lng are required")
+    if not (-90 <= req.lat <= 90) or not (-180 <= req.lng <= 180):
+        raise HTTPException(400, "lat/lng out of range")
+    config["location"] = {"lat": round(req.lat, 5), "lng": round(req.lng, 5)}
+    save_config(config)
+    publish_event("config")
+    return {"success": True, "location": config["location"]}
 
 
 # ─── Room Layout Endpoints ──────────────────────────────────────────────────
