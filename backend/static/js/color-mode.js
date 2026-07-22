@@ -683,6 +683,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
           y: pos.y,
           parentKey: key,
           segIndex: i,
+          synthetic: true,   // no real per-segment layout — see computePalette
         });
       }
     } else {
@@ -873,8 +874,25 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
       return result;
     }
 
+    // Un-laid-out segments of a segmented device get SYNTHETIC positions (a
+    // short horizontal spread at the device's spot) purely so gradient/beacon
+    // vary. They carry no real spatial info, so feeding them to the graph
+    // colourer is actively harmful: two such devices sitting near each other
+    // (e.g. a globe + a rope both dropped at the same corner) produce ~30
+    // mutually-adjacent nodes that a small palette can't colour, and the relax
+    // fallback then emits an arbitrary-looking assignment. Instead we hold them
+    // OUT of the graph and give each device's strip its own positional cycle
+    // (ABCD…), exactly like a linear layout — the sensible default for a strip
+    // whose physical run the user hasn't drawn. Individually laid-out segments
+    // (real positions) stay anchored and graph-coloured normally.
+    const anchored = placedColorLights.filter(d => !d.synthetic);
+    const synthByParent = {};
+    placedColorLights.forEach(d => {
+      if (d.synthetic) (synthByParent[d.parentKey] ||= []).push(d);
+    });
+
     const rng = seededRng(`${roomName}|palette|${shuffleSeed}`);
-    const adj = buildAdjacency(placedColorLights);
+    const adj = buildAdjacency(anchored);
 
     // Precompute HSL for each palette color
     const hsl = colors.map(c => rgbToHsl(c.r, c.g, c.b));
@@ -917,7 +935,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     const SIMILARITY_THRESHOLD = 0.15;
 
     // Sort devices by number of neighbors (most constrained first)
-    const sorted = [...placedColorLights].sort((a, b) =>
+    const sorted = [...anchored].sort((a, b) =>
       (adj[b.key]?.size || 0) - (adj[a.key]?.size || 0)
     );
 
@@ -1130,6 +1148,18 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     const result = {};
     Object.entries(assignment).forEach(([key, ci]) => {
       result[key] = colors[ci];
+    });
+
+    // Overlay the un-laid-out strips: each device's segments cycle the palette
+    // in index order (ABCD…), so neighbours differ whenever N ≥ 2. Colours are
+    // pre-ordered so consecutive cycle positions are perceptually distinct
+    // (matters at N ≥ 4), and a per-device seeded phase means Shuffle re-rolls
+    // and two strips don't lock-step. This mirrors the isLinear branch above.
+    const cycleOrder = orderPaletteForCycle(colors);
+    Object.entries(synthByParent).forEach(([pk, segs]) => {
+      const strip = [...segs].sort((a, b) => a.segIndex - b.segIndex);
+      const offset = Math.floor(seededRng(`${roomName}|palette|${shuffleSeed}|${pk}`)() * N);
+      strip.forEach((d, i) => { result[d.key] = colors[cycleOrder[(i + offset) % N]]; });
     });
     return result;
   }, [placedColorLights, paletteColors, buildAdjacency, fixtures, roomName, shuffleSeed, isLinear]);
@@ -2615,11 +2645,22 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                 {Object.entries(preview)
                   .sort(([aKey], [bKey]) => {
-                    const aEntry = placedColorLights.find(p => p.key === aKey);
-                    const bEntry = placedColorLights.find(p => p.key === bKey);
-                    const aPos = aEntry || { x: 0, y: 0 };
-                    const bPos = bEntry || { x: 0, y: 0 };
-                    return aPos.x !== bPos.x ? aPos.x - bPos.x : aPos.y - bPos.y;
+                    // Group by DEVICE, ordered spatially, then by segment index
+                    // within a device — so a strip's segments stay contiguous
+                    // and in order (A,B,C…) instead of interleaving with another
+                    // device's segments that happen to share an x-coordinate.
+                    // (A per-entry x/y sort intermixed two strips dropped at the
+                    // same spot; the preview is a labelled swatch list, not a
+                    // map, so device grouping reads far clearer.)
+                    const parentOf = (k) => { const m = k.match(/^(.+):seg\d+$/); return m ? m[1] : k; };
+                    const segOf = (k) => { const m = k.match(/:seg(\d+)$/); return m ? parseInt(m[1]) : -1; };
+                    const apk = parentOf(aKey), bpk = parentOf(bKey);
+                    const ap = devices[apk] || { x: 0, y: 0 };
+                    const bp = devices[bpk] || { x: 0, y: 0 };
+                    if (ap.x !== bp.x) return ap.x - bp.x;
+                    if (ap.y !== bp.y) return ap.y - bp.y;
+                    if (apk !== bpk) return apk < bpk ? -1 : 1;
+                    return segOf(aKey) - segOf(bKey);
                   })
                   .map(([key, c]) => {
                     const sm = key.match(/^(.+):seg(\d+)$/);

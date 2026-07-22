@@ -142,6 +142,22 @@ Assigns colors/temperatures across a room's devices and applies them.
   "which colour is A/B/C" decision — which matters at N≥4 (a no-op for N≤3). Shuffle still
   rotates the starting phase so short strips re-roll which colours appear. Don't route
   linear palette back through the graph-colourer.
+- **Un-laid-out segments cycle too, even on a FLOOR PLAN (v3.8.1):** a segmented device
+  whose individual segments were never dragged onto the map gets SYNTHETIC positions (a
+  short horizontal spread at the device's spot in `placedColorLights`, flagged
+  `synthetic: true`) purely so gradient/beacon vary. Those positions carry no real spatial
+  info, so `computePalette` now holds them OUT of the graph-colourer (`buildAdjacency`/the
+  forward pass run over `anchored` = non-synthetic only) and instead lays a per-device
+  positional cycle (`ABCD…`, via `orderPaletteForCycle` + a phase seeded on
+  `…|${parentKey}`) over each strip afterward. Before this, two un-laid-out strips dropped
+  at the same corner (e.g. a globe at (14,1) + a rope at (14,2)) produced ~30 mutually-
+  adjacent nodes a small palette couldn't colour, so the relax fallback emitted an
+  arbitrary assignment (the reported "odd adjacency" bug). Laid-out segments (real
+  positions) stay anchored and graph-coloured normally — their cross-device borders still
+  matter. The **preview swatch list groups by device** (parent's map position, then
+  segIndex), NOT a per-entry x/y sort, so a strip's segments render contiguous and in
+  order instead of interleaving with another strip that shares an x-coordinate — the
+  preview is a labelled swatch list, not a spatial map.
 - **Selectable before layout (v2.17.0):** the mode/palette UI is gated on
   `hasColorLights`, not `hasLayout`, so a palette/scene can be chosen (and persisted)
   before the room map is laid out — a warning banner ("Finish setting up the room layout
