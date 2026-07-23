@@ -154,10 +154,16 @@ Assigns colors/temperatures across a room's devices and applies them.
   adjacent nodes a small palette couldn't colour, so the relax fallback emitted an
   arbitrary assignment (the reported "odd adjacency" bug). Laid-out segments (real
   positions) stay anchored and graph-coloured normally — their cross-device borders still
-  matter. The **preview swatch list groups by device** (parent's map position, then
-  segIndex), NOT a per-entry x/y sort, so a strip's segments render contiguous and in
-  order instead of interleaving with another strip that shares an x-coordinate — the
-  preview is a labelled swatch list, not a spatial map.
+  matter. **Preview swatch order (v3.8.2):** each swatch sorts by its entry's OWN placed
+  position (via `placedByKey`) so the list mirrors the physical run of lights — on a
+  LINEAR strip that means laid-out segments interleave with whole devices exactly as they
+  sit on the map (the true left-to-right order), and the cycle reads as a clean ABAB/ABCD
+  with no false adjacencies. ONLY a **synthetic** segment (a segmented device never
+  dragged out — its segments would otherwise share an x-coordinate and interleave
+  meaninglessly) collapses to its parent's spot so that strip stays contiguous + in
+  segIndex order. Ties break by device then segIndex. (v3.8.1 grouped EVERY segment by
+  device, which was right for synthetic floor-plan strips but reordered laid-out linear
+  strips and showed false adjacent repeats — don't go back to unconditional grouping.)
 - **Selectable before layout (v2.17.0):** the mode/palette UI is gated on
   `hasColorLights`, not `hasLayout`, so a palette/scene can be chosen (and persisted)
   before the room map is laid out — a warning banner ("Finish setting up the room layout

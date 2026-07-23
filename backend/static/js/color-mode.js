@@ -694,6 +694,10 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
   const hasLayout = placedColorLights.length > 0;
   const hasColorLights = allLights.some(l => l?.capabilities?.has_color);
 
+  // key → its placed entry (own x/y + synthetic flag), for the preview sort.
+  const placedByKey = {};
+  placedColorLights.forEach(p => { placedByKey[p.key] = p; });
+
   // The palette is a *pool*, not a per-light list: with more colors than lights,
   // the assignment (computePalette) picks a distinct subset sized to the room
   // and Shuffle re-rolls which colors are used. So we deliberately DON'T trim
@@ -2645,20 +2649,27 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                 {Object.entries(preview)
                   .sort(([aKey], [bKey]) => {
-                    // Group by DEVICE, ordered spatially, then by segment index
-                    // within a device — so a strip's segments stay contiguous
-                    // and in order (A,B,C…) instead of interleaving with another
-                    // device's segments that happen to share an x-coordinate.
-                    // (A per-entry x/y sort intermixed two strips dropped at the
-                    // same spot; the preview is a labelled swatch list, not a
-                    // map, so device grouping reads far clearer.)
+                    // Order the swatches to match the physical run of lights.
+                    // A LAID-OUT entry (every whole device, and any individually
+                    // placed segment) sorts by its OWN position — on a linear
+                    // strip that's the true left-to-right order, and segments
+                    // interleave with whole devices exactly as they do on the
+                    // map. A SYNTHETIC segment (a segmented device whose segments
+                    // were never dragged out — they'd otherwise share an
+                    // x-coordinate and interleave meaninglessly) collapses to its
+                    // parent's spot so the strip stays contiguous and in index
+                    // order. Then break ties by device, then segment index.
                     const parentOf = (k) => { const m = k.match(/^(.+):seg\d+$/); return m ? m[1] : k; };
                     const segOf = (k) => { const m = k.match(/:seg(\d+)$/); return m ? parseInt(m[1]) : -1; };
+                    const posOf = (k) => {
+                      const p = placedByKey[k];
+                      if (p && p.synthetic) return devices[parentOf(k)] || { x: 0, y: 0 };
+                      return p || devices[parentOf(k)] || { x: 0, y: 0 };
+                    };
+                    const pa = posOf(aKey), pb = posOf(bKey);
+                    if (pa.x !== pb.x) return pa.x - pb.x;
+                    if (pa.y !== pb.y) return pa.y - pb.y;
                     const apk = parentOf(aKey), bpk = parentOf(bKey);
-                    const ap = devices[apk] || { x: 0, y: 0 };
-                    const bp = devices[bpk] || { x: 0, y: 0 };
-                    if (ap.x !== bp.x) return ap.x - bp.x;
-                    if (ap.y !== bp.y) return ap.y - bp.y;
                     if (apk !== bpk) return apk < bpk ? -1 : 1;
                     return segOf(aKey) - segOf(bKey);
                   })
