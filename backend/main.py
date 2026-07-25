@@ -114,6 +114,10 @@ DEFAULT_CONFIG = {
                           # each Govee entry's IP from its mac at fire time. See
                           # _scheduler_loop / _schedule_due / _fire_schedule.
     "location": {},       # { lat, lng } — for sun-relative (sunrise/sunset) triggers
+    "zones": {},          # name-keyed groups of rooms: { zoneName: { rooms: [name,…] } }
+                          # A zone is a scheduling target that fans a white/color/power
+                          # action out over every device in every member room. Scenes
+                          # stay room-only (a scene is a device-specific snapshot).
 }
 
 
@@ -918,13 +922,42 @@ async def _apply_room_color(room_name: str, r: int, g: int, b: int, brightness_p
                 ip=ip, mac=slug, on=True, brightness=brightness_pct, r=r, g=g, b=b))
 
 
+async def _apply_room_power(room_name: str, on: bool):
+    """Turn a whole room on (resume last state) or off, via the normal room
+    control fan-out (Hue + Govee, incl. segment-clear on off)."""
+    try:
+        await control_room(RoomStateRequest(room_name=room_name, on=bool(on)))
+    except HTTPException:
+        log.warning("Scheduler: power action — room %r not found", room_name)
+
+
+async def _apply_action_to_room(room: str, action: dict):
+    """Fan a non-scene action (white / color / power) out to a single room.
+    Shared by room-targeted and zone-targeted schedules."""
+    atype = action.get("type")
+    if atype == "white":
+        await _apply_room_white(room, int(action.get("kelvin", 2700)),
+                                int(action.get("brightness", 100)))
+    elif atype == "color":
+        rgb = action.get("rgb") or {}
+        await _apply_room_color(room, int(rgb.get("r", 255)), int(rgb.get("g", 255)),
+                                int(rgb.get("b", 255)), int(action.get("brightness", 100)))
+    elif atype == "power":
+        await _apply_room_power(room, bool(action.get("on", True)))
+
+
 async def _fire_schedule(sched: dict):
-    """Execute a due schedule's action, reusing the normal control paths."""
+    """Execute a due schedule's action, reusing the normal control paths.
+
+    A scene action always targets one room (a scene is a device-specific
+    snapshot). white / color / power can target a single room OR a zone — a zone
+    fans the same action out over every member room."""
     action = sched.get("action") or {}
     atype = action.get("type")
     room = action.get("room")
+    zone = action.get("zone")
     name = sched.get("name") or sched.get("id")
-    log.info("Scheduler: firing %r (action=%s room=%s)", name, atype, room)
+    log.info("Scheduler: firing %r (action=%s room=%s zone=%s)", name, atype, room, zone)
     try:
         if atype == "scene":
             payload = _freshen_scene_payload(action.get("payload") or {})
@@ -940,13 +973,19 @@ async def _fire_schedule(sched: dict):
                 except BaseException:
                     pass
             _scene_tasks[req.room] = asyncio.create_task(_run_scene_apply(req))
-        elif atype == "white":
-            await _apply_room_white(room, int(action.get("kelvin", 2700)),
-                                    int(action.get("brightness", 100)))
-        elif atype == "color":
-            rgb = action.get("rgb") or {}
-            await _apply_room_color(room, int(rgb.get("r", 255)), int(rgb.get("g", 255)),
-                                    int(rgb.get("b", 255)), int(action.get("brightness", 100)))
+        elif atype in ("white", "color", "power"):
+            if zone:
+                z = (config.get("zones", {}) or {}).get(zone)
+                if not z:
+                    log.warning("Scheduler: %r — zone %r not found, skipped", name, zone)
+                    return
+                for member in z.get("rooms", []):
+                    if member in config.get("rooms", {}):
+                        await _apply_action_to_room(member, action)
+                    else:
+                        log.warning("Scheduler: %r — zone member %r missing, skipped", name, member)
+            else:
+                await _apply_action_to_room(room, action)
         else:
             log.warning("Scheduler: %r — unknown action type %r", name, atype)
     except Exception:
@@ -1637,10 +1676,16 @@ async def delete_room(room_name: str):
     removed = room_name in config.get("rooms", {})
     if removed:
         del config["rooms"][room_name]
-    for key in ("room_layouts", "room_color_state", "lightning_scenes"):
+    for key in ("room_layouts", "room_color_state", "lightning_scenes", "room_presets"):
         d = config.get(key)
         if isinstance(d, dict) and room_name in d:
             del d[room_name]
+            removed = True
+    # Drop the room from any zone it belonged to (membership is by name).
+    for zone in (config.get("zones", {}) or {}).values():
+        members = zone.get("rooms", [])
+        if room_name in members:
+            zone["rooms"] = [r for r in members if r != room_name]
             removed = True
     if removed:
         save_config(config)
@@ -2533,6 +2578,7 @@ async def get_config():
         "power_recovery": config.get("power_recovery", {}),
         "schedules": config.get("schedules", []),
         "location": config.get("location", {}),
+        "zones": config.get("zones", {}),
         "favorites": config.get("favorites") or DEFAULT_FAVORITES,
     }
 
@@ -2726,6 +2772,24 @@ class LocationRequest(BaseModel):
     lng: Optional[float] = None
 
 
+def _validate_schedule_action(action: dict):
+    """Reject impossible action shapes before they're stored. A scene targets one
+    room and carries a resolved payload; white/color/power target a room OR a zone
+    — but a scene can never target a zone (it's a device-specific snapshot)."""
+    if not isinstance(action, dict):
+        raise HTTPException(400, "action must be an object")
+    atype = action.get("type")
+    if atype not in ("scene", "white", "color", "power"):
+        raise HTTPException(400, f"unknown action type {atype!r}")
+    if action.get("zone"):
+        if atype == "scene":
+            raise HTTPException(400, "a scene can't target a zone — scenes are room-only")
+    elif not action.get("room"):
+        raise HTTPException(400, "action needs a room or a zone")
+    if atype == "scene" and not action.get("payload"):
+        raise HTTPException(400, "a scene action needs a captured payload")
+
+
 @app.get("/api/schedules")
 async def get_schedules():
     return {"schedules": config.get("schedules", []),
@@ -2743,6 +2807,7 @@ async def upsert_schedule(req: ScheduleRequest):
     if existing is None:
         if not req.trigger or not req.action:
             raise HTTPException(400, "A new schedule needs both a trigger and an action")
+        _validate_schedule_action(req.action)
         sched = {
             "id": req.id or str(uuid.uuid4()),
             "name": req.name or "Schedule",
@@ -2762,6 +2827,7 @@ async def upsert_schedule(req: ScheduleRequest):
             sched["trigger"] = req.trigger
             sched["last_fired"] = None   # retimed — don't let the old dedupe block it
         if req.action is not None:
+            _validate_schedule_action(req.action)
             sched["action"] = req.action
 
     save_config(config)
@@ -2797,6 +2863,90 @@ async def set_location(req: LocationRequest):
     save_config(config)
     publish_event("config")
     return {"success": True, "location": config["location"]}
+
+
+# ─── Zones ──────────────────────────────────────────────────────────────────
+# A zone is a named group of rooms (one level deep; a room may be in several).
+# It's a scheduling target only for now — a zone schedule fans a white/color/power
+# action out over every member room (see _fire_schedule). Scenes stay room-only.
+
+class ZoneRequest(BaseModel):
+    name: str
+    rooms: list[str] = []
+
+
+@app.get("/api/zones")
+async def get_zones():
+    return {"zones": config.get("zones", {})}
+
+
+@app.post("/api/zones")
+async def upsert_zone(req: ZoneRequest):
+    """Create or replace a zone (keyed by name). Unknown room names are dropped
+    so a zone never references a room that isn't there."""
+    name = req.name.strip()
+    if not name:
+        raise HTTPException(400, "Zone name is required")
+    known = config.get("rooms", {})
+    members = [r for r in req.rooms if r in known]
+    zones = config.setdefault("zones", {})
+    zones[name] = {"rooms": members}
+    save_config(config)
+    publish_event("config")
+    return {"success": True, "zone": {"name": name, **zones[name]}}
+
+
+@app.delete("/api/zones/{zone_name}")
+async def delete_zone(zone_name: str):
+    zones = config.get("zones", {})
+    if zone_name not in zones:
+        raise HTTPException(404, f"No zone '{zone_name}'")
+    del zones[zone_name]
+    save_config(config)
+    publish_event("config")
+    return {"success": True}
+
+
+# ─── Safe room rename ───────────────────────────────────────────────────────
+
+class RoomRenameRequest(BaseModel):
+    old_name: str
+    new_name: str
+
+
+@app.post("/api/rooms/rename")
+async def rename_room(req: RoomRenameRequest):
+    """Rename a room, migrating EVERY room-name-keyed structure and reference so
+    nothing is orphaned. (POST /api/rooms upserts by name, so a UI 'rename' there
+    would create a new empty room and strand the old one's layout/scenes/etc.)"""
+    old, new = req.old_name, req.new_name.strip()
+    rooms = config.get("rooms", {})
+    if old not in rooms:
+        raise HTTPException(404, f"Room '{old}' not found")
+    if not new:
+        raise HTTPException(400, "New room name is required")
+    if new == old:
+        return {"success": True}
+    if new in rooms:
+        raise HTTPException(409, f"A room named '{new}' already exists")
+
+    # Move the key in every room-name-keyed sidecar dict.
+    for key in ("rooms", "room_layouts", "room_color_state", "lightning_scenes", "room_presets"):
+        d = config.get(key)
+        if isinstance(d, dict) and old in d:
+            d[new] = d.pop(old)
+
+    # Repoint references held by value elsewhere.
+    for sched in config.get("schedules", []) or []:
+        action = sched.get("action") or {}
+        if action.get("room") == old:
+            action["room"] = new
+    for zone in (config.get("zones", {}) or {}).values():
+        zone["rooms"] = [new if r == old else r for r in zone.get("rooms", [])]
+
+    save_config(config)
+    publish_event("config")
+    return {"success": True, "old_name": old, "new_name": new}
 
 
 # ─── Room Layout Endpoints ──────────────────────────────────────────────────

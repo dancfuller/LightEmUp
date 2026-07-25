@@ -261,6 +261,32 @@ via `.get`, no `schema_version` bump. A schedule pairs a **trigger** (`weekly` /
   `trigger` resets `last_fired` so a retimed schedule isn't blocked by the old dedupe),
   `DELETE /api/schedules/{id}`, `GET/POST /api/location`.
 
+## Zones + safe room rename + Power action (v3.9.0)
+**Zones** (`config["zones"]`, additive `{ zoneName: { rooms: [name,…] } }`, name-keyed
+like `rooms`; a room may be in several) are a **scheduling target**, not a live-control
+surface (yet). CRUD: `GET/POST /api/zones` (`ZoneRequest`; upsert by name, drops unknown
+rooms), `DELETE /api/zones/{name}`. **No zone rename in v1** — delete + recreate.
+- **Schedule actions can target a room OR a zone.** `action.zone` (optional, mutually
+  exclusive with `action.room`) fans a **non-scene** action out over every member room.
+  A **scene is room-only** — it's a device-specific resolved snapshot, so it can't span a
+  zone. `_validate_schedule_action` enforces this at `upsert_schedule` (scene needs
+  `room`+`payload`; zone forbids scene; every action needs a room or a zone).
+- **New `power` action** `{type:"power", on:bool}` → `_apply_room_power` reuses
+  `control_room` (`RoomStateRequest(on=…)`). Works per-room and per-zone.
+- `_fire_schedule` dispatch: `scene` → one room (unchanged); `white`/`color`/`power` go
+  through `_apply_action_to_room` per target — for a zone, loop `config["zones"][z].rooms`
+  (missing zone or member is logged + skipped). **If you add a non-scene action type, add
+  it to `_apply_action_to_room` AND the validator's allow-list.**
+
+**Safe room rename** — `POST /api/rooms/rename` (`RoomRenameRequest {old_name,new_name}`;
+404 missing old / 409 existing new). `POST /api/rooms` upserts by name, so a UI "rename"
+there would create a new empty room and orphan the old one's sidecars. The rename endpoint
+migrates the key in **every room-name-keyed structure** — `rooms`, `room_layouts`,
+`room_color_state`, `lightning_scenes`, `room_presets` — and repoints references held by
+value: `schedules[].action.room` and `zones[].rooms`. `delete_room` was hardened to match
+(it now also prunes `room_presets` + zone membership). **When you add a new room-keyed
+config structure, add it to BOTH `rename_room` and `delete_room`.**
+
 ## SSE live-sync (multi-session)
 - `_event_subscribers` queues; `publish_event(type, **fields)` fans out to all open
   clients via `GET /api/events`. Each event is tagged with the originating client

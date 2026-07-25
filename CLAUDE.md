@@ -184,6 +184,12 @@ All endpoints are under `/api/`. Key groups:
   `DELETE /{id}`); `/api/location` — lat/lng for sunrise/sunset triggers. Config keys
   `schedules` + `location` are additive. The hub fires these on its own via a
   once-a-minute background loop — see `backend/CLAUDE.md` "Time-based schedules"
+- `/api/zones` — zone CRUD (GET list, POST upsert-by-name, `DELETE /{name}`). A zone is a
+  named group of rooms (config key `zones`, additive) used as a schedule target that fans
+  a white/color/power action over every member room (scenes stay room-only).
+- `/api/rooms/rename` — safe room rename that migrates every room-name-keyed structure +
+  schedule/zone references (a plain `POST /api/rooms` upsert would orphan them). See
+  `backend/CLAUDE.md` "Zones + safe room rename + Power action"
 - `/api/scenes/lightning/*` — lightning storm scene start/stop/settings
 - `/api/scenes/room-apply` — backend-driven room color-scene apply (staggered in a
   background task so the browser can close); `/cancel` to stop. Progress via SSE.

@@ -245,6 +245,8 @@ function App() {
   // Time-based schedules + the lat/lng sun-relative triggers need.
   const [schedules, setSchedules] = useState([]);
   const [location, setLocation] = useState({});
+  // Zones: named groups of rooms, used as scheduling targets.
+  const [zones, setZones] = useState({});
   // A look captured by "Schedule this look" in a room's Scenes panel, handed to
   // the Schedules tab to pre-fill a new schedule: {room, plan}. Cleared once
   // the editor consumes it.
@@ -339,6 +341,7 @@ function App() {
       }
       setSchedules(cfg.schedules || []);
       setLocation(cfg.location || {});
+      setZones(cfg.zones || {});
 
       // Fast initial paint: the CACHED Govee list (no LAN scan) plus the other
       // quick calls. The slow live scan (6–15s of UDP broadcast + per-device
@@ -513,6 +516,32 @@ function App() {
     setPendingScheduleScene({ room: roomName, plan });
     setActiveTab("schedules");
   }, []);
+
+  // ─── Zones ────────────────────────────────────────────────────────────
+  // Backend owns the zones dict (drops unknown rooms), so take its response.
+  const saveZone = useCallback(async (name, rooms) => {
+    const res = await api("/zones", { method: "POST", body: JSON.stringify({ name, rooms }) });
+    setZones(prev => ({ ...prev, [name]: { rooms: res.zone.rooms } }));
+  }, []);
+
+  const deleteZone = useCallback(async (name) => {
+    setZones(prev => { const next = { ...prev }; delete next[name]; return next; });   // optimistic
+    try {
+      await api(`/zones/${encodeURIComponent(name)}`, { method: "DELETE" });
+    } catch (e) {
+      console.warn("Failed to delete zone:", e);
+      loadAll();
+    }
+  }, [loadAll]);
+
+  // Safe room rename — migrates every reference server-side, so just resync from
+  // the response's config event (loadAll) rather than patching many local maps.
+  const renameRoom = useCallback(async (oldName, newName) => {
+    await api("/rooms/rename", {
+      method: "POST", body: JSON.stringify({ old_name: oldName, new_name: newName }),
+    });
+    await loadAll();
+  }, [loadAll]);
 
   const updateSegmentFillMode = useCallback(async (deviceKey, mode) => {
     setSegmentFillModes(prev => ({ ...prev, [deviceKey]: mode }));
@@ -1093,11 +1122,14 @@ function App() {
           <SchedulesTab
             schedules={schedules}
             rooms={Object.keys(rooms)}
+            zones={zones}
             location={location}
             favorites={favoriteColors}
             onFavoritesChange={updateFavorites}
             onSave={saveSchedule}
             onDelete={deleteSchedule}
+            onSaveZone={saveZone}
+            onDeleteZone={deleteZone}
             pendingScene={pendingScheduleScene}
             onConsumePending={() => setPendingScheduleScene(null)}
           />
@@ -1107,6 +1139,7 @@ function App() {
           <RoomAssignment
             hueLights={hueLights} goveeDevices={goveeDevices}
             rooms={rooms} onRoomsChange={handleRoomsChange}
+            onRenameRoom={renameRoom}
             nicknames={nicknames} onNicknameChange={updateNickname}
             onControlHue={controlHueLight} onControlGovee={controlGoveeDevice}
             favorites={favoriteColors} onFavoritesChange={updateFavorites}

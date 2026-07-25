@@ -179,12 +179,29 @@ function DevicePickerModal({ title, devices, onSelect, onClose, nicknames }) {
   );
 }
 
-function RoomCard({ roomName, devices, allRoomNames, unassigned, onMoveDevice, onRemoveDevice, onAddDevices, onDeleteRoom, isDefault, nicknames,
+function RoomCard({ roomName, devices, allRoomNames, unassigned, onMoveDevice, onRemoveDevice, onAddDevices, onDeleteRoom, onRenameRoom, isDefault, nicknames,
   onNicknameChange, onControlHue, onControlGovee, favorites, onFavoritesChange,
   segmentInfo, segmentState, roomLayouts, onLayoutChange, fixtures, onFixtureUpsert, onFixtureDelete }) {
   const isMobile = useIsMobile();
   const [showPicker, setShowPicker] = useState(false);
   const [mapExpanded, setMapExpanded] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+  const [draftName, setDraftName] = useState(roomName);
+  const [renameErr, setRenameErr] = useState(null);
+
+  // Rename migrates every reference server-side (layouts, scenes, schedules,
+  // zones) — see /api/rooms/rename. A plain re-save would orphan all of that.
+  const commitRename = async () => {
+    const next = draftName.trim();
+    if (!next || next === roomName) { setRenaming(false); setRenameErr(null); return; }
+    if (allRoomNames.includes(next)) { setRenameErr("A room with that name already exists."); return; }
+    try {
+      await onRenameRoom(roomName, next);
+      setRenaming(false); setRenameErr(null);
+    } catch (e) {
+      setRenameErr("Rename failed — " + (e?.message || "the hub didn't accept it."));
+    }
+  };
 
   // RoomMap builds its device list from the props it's given, so hand it only
   // this room's devices (split by vendor) — same contract as RoomSection.
@@ -199,12 +216,44 @@ function RoomCard({ roomName, devices, allRoomNames, unassigned, onMoveDevice, o
         border: "1px solid #334155", marginBottom: 16,
       }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <h3 style={{ fontSize: 16, fontWeight: 700, color: "#f1f5f9", margin: 0 }}>{roomName}</h3>
-            <span style={{
-              fontSize: 11, color: "#64748b", background: "#0f172a",
-              padding: "2px 8px", borderRadius: 10,
-            }}>{devices.length}</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            {renaming ? (
+              <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                <input
+                  autoFocus value={draftName}
+                  onChange={(e) => { setDraftName(e.target.value); setRenameErr(null); }}
+                  onKeyDown={(e) => { if (e.key === "Enter") commitRename(); if (e.key === "Escape") { setRenaming(false); setDraftName(roomName); setRenameErr(null); } }}
+                  style={{
+                    padding: "6px 10px", borderRadius: 8, border: "1px solid #6366f1",
+                    background: "#0f172a", color: "#f1f5f9", fontSize: 15, fontWeight: 700, width: 180,
+                  }}
+                />
+                <button onClick={commitRename} style={{
+                  padding: "6px 12px", borderRadius: 8, border: "none",
+                  background: "#6366f1", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer",
+                }}>Save</button>
+                <button onClick={() => { setRenaming(false); setDraftName(roomName); setRenameErr(null); }} style={{
+                  padding: "6px 12px", borderRadius: 8, border: "1px solid #334155",
+                  background: "transparent", color: "#94a3b8", fontSize: 12, fontWeight: 600, cursor: "pointer",
+                }}>Cancel</button>
+              </div>
+            ) : (
+              <>
+                <h3 style={{ fontSize: 16, fontWeight: 700, color: "#f1f5f9", margin: 0 }}>{roomName}</h3>
+                {onRenameRoom && (
+                  <button onClick={() => { setDraftName(roomName); setRenaming(true); }}
+                    title="Rename this room"
+                    style={{
+                      background: "transparent", border: "none", cursor: "pointer",
+                      color: "#64748b", fontSize: 14, padding: "2px 4px", lineHeight: 1,
+                    }}>✎</button>
+                )}
+                <span style={{
+                  fontSize: 11, color: "#64748b", background: "#0f172a",
+                  padding: "2px 8px", borderRadius: 10,
+                }}>{devices.length}</span>
+              </>
+            )}
           </div>
           <div style={{ display: "flex", gap: 6 }}>
             {unassigned.length > 0 && (
@@ -303,7 +352,7 @@ function RoomCard({ roomName, devices, allRoomNames, unassigned, onMoveDevice, o
   );
 }
 
-function RoomAssignment({ hueLights, goveeDevices, rooms, onRoomsChange, nicknames,
+function RoomAssignment({ hueLights, goveeDevices, rooms, onRoomsChange, onRenameRoom, nicknames,
   onNicknameChange, onControlHue, onControlGovee, favorites, onFavoritesChange,
   segmentInfo, segmentState, roomLayouts, onLayoutChange,
   fixtures, onFixtureUpsert, onFixtureDelete }) {
@@ -454,6 +503,7 @@ function RoomAssignment({ hueLights, goveeDevices, rooms, onRoomsChange, nicknam
           onRemoveDevice={removeDevice}
           onAddDevices={addDevicesToRoom}
           onDeleteRoom={deleteRoom}
+          onRenameRoom={onRenameRoom}
           isDefault={defaultRooms.includes(roomName)}
           nicknames={nicknames}
           onNicknameChange={onNicknameChange}

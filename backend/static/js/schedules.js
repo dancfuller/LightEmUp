@@ -70,7 +70,14 @@ function actionSummary(action) {
     const c = action.rgb || {};
     return `Color rgb(${c.r}, ${c.g}, ${c.b}) · ${action.brightness}%`;
   }
+  if (action.type === "power") return action.on === false ? "Turn off" : "Turn on";
   return "Unknown action";
+}
+
+// The room or zone a schedule targets, for the list row.
+function targetSummary(action) {
+  if (!action) return "";
+  return action.zone ? `Zone: ${action.zone}` : (action.room || "");
 }
 
 // Next fire time for weekly/one-off, purely client-side for the "next run" hint.
@@ -114,7 +121,7 @@ function todayISO() {
 
 // ─── Editor ─────────────────────────────────────────────────────────────────
 
-function ScheduleEditor({ initial, rooms, favorites, onFavoritesChange, onSave, onCancel, isMobile }) {
+function ScheduleEditor({ initial, rooms, zoneNames, favorites, onFavoritesChange, onSave, onCancel, isMobile }) {
   const [name, setName] = useState(initial?.name || "");
   const [trigger, setTrigger] = useState(initial?.trigger || { type: "weekly", time: "07:00", days: [0, 1, 2, 3, 4] });
   const [action, setAction] = useState(initial?.action || { type: "white", room: rooms[0] || "", kelvin: 2700, brightness: 100 });
@@ -124,8 +131,20 @@ function ScheduleEditor({ initial, rooms, favorites, onFavoritesChange, onSave, 
   // A captured scene can't be re-authored here — the look came from the color
   // tool. You can retarget everything else about it, just not rebuild it.
   const isScene = action.type === "scene";
+  // Target is a room OR a zone (a group of rooms). A scene is always room-only
+  // (it's a device-specific snapshot); a zone fans white/color/power out.
+  const isZone = !!action.zone;
   const patchTrigger = (p) => setTrigger(prev => ({ ...prev, ...p }));
   const patchAction = (p) => setAction(prev => ({ ...prev, ...p }));
+
+  // Switch the target between a single room and a zone, adding/removing the
+  // right key (patchAction only merges, so removal needs an explicit rebuild).
+  const setTargetKind = (kind) => setAction(prev => {
+    const { room, zone, ...rest } = prev;
+    return kind === "zone"
+      ? { ...rest, zone: zone || (zoneNames[0] || "") }
+      : { ...rest, room: room || (rooms[0] || "") };
+  });
 
   const toggleDay = (d) => {
     const days = trigger.days || [];
@@ -133,7 +152,8 @@ function ScheduleEditor({ initial, rooms, favorites, onFavoritesChange, onSave, 
   };
 
   const submit = async () => {
-    if (!action.room) { setError("Pick a room."); return; }
+    if (isZone) { if (!action.zone) { setError("Pick a zone."); return; } }
+    else if (!action.room) { setError("Pick a room."); return; }
     if (trigger.type !== "sun" && !/^\d{2}:\d{2}$/.test(trigger.time || "")) { setError("Pick a time."); return; }
     if (trigger.type === "oneoff" && !trigger.date) { setError("Pick a date."); return; }
     if (trigger.type !== "oneoff" && !(trigger.days || []).length) { setError("Pick at least one day."); return; }
@@ -141,7 +161,7 @@ function ScheduleEditor({ initial, rooms, favorites, onFavoritesChange, onSave, 
     try {
       await onSave({
         id: initial?.id || undefined,
-        name: name.trim() || `${action.room} ${trigger.type === "sun" ? trigger.event : prettyTime(trigger.time)}`,
+        name: name.trim() || `${action.zone || action.room} ${trigger.type === "sun" ? trigger.event : prettyTime(trigger.time)}`,
         enabled: initial ? initial.enabled : true,
         trigger, action,
       });
@@ -179,6 +199,35 @@ function ScheduleEditor({ initial, rooms, favorites, onFavoritesChange, onSave, 
           placeholder="Morning Ocean" style={field} />
       </div>
 
+      {/* ─── Target: room or zone ───────────────────────────────────── */}
+      <div style={{ marginBottom: 16 }}>
+        <div style={label}>Apply to</div>
+        {/* A scene is room-only, so the Room/Zone toggle is hidden for it. */}
+        {!isScene && (
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+            <button style={seg(!isZone)} onClick={() => setTargetKind("room")}>A room</button>
+            <button style={seg(isZone)}
+              onClick={() => setTargetKind("zone")}
+              disabled={zoneNames.length === 0}
+              title={zoneNames.length === 0 ? "Create a zone below first" : "A group of rooms"}>
+              A zone
+            </button>
+          </div>
+        )}
+        {isZone ? (
+          <select value={action.zone} onChange={e => patchAction({ zone: e.target.value })} style={field}>
+            {!action.zone && <option value="">Pick a zone…</option>}
+            {zoneNames.map(z => <option key={z} value={z}>{z}</option>)}
+          </select>
+        ) : (
+          <select value={action.room} onChange={e => patchAction({ room: e.target.value })}
+            disabled={isScene} style={{ ...field, opacity: isScene ? 0.6 : 1 }}>
+            {!action.room && <option value="">Pick a room…</option>}
+            {rooms.map(r => <option key={r} value={r}>{r}</option>)}
+          </select>
+        )}
+      </div>
+
       {/* ─── Action ─────────────────────────────────────────────────── */}
       <div style={{ marginBottom: 16 }}>
         <div style={label}>Do what</div>
@@ -190,6 +239,8 @@ function ScheduleEditor({ initial, rooms, favorites, onFavoritesChange, onSave, 
                 onClick={() => patchAction({ type: "white", kelvin: action.kelvin || 2700, brightness: action.brightness ?? 100 })}>White</button>
               <button style={seg(action.type === "color")}
                 onClick={() => patchAction({ type: "color", rgb: action.rgb || { r: 255, g: 180, b: 100 }, brightness: action.brightness ?? 100 })}>Color</button>
+              <button style={seg(action.type === "power")}
+                onClick={() => patchAction({ type: "power", on: action.on ?? true })}>On / Off</button>
             </>
           )}
         </div>
@@ -202,6 +253,13 @@ function ScheduleEditor({ initial, rooms, favorites, onFavoritesChange, onSave, 
             {actionSummary(action)} — captured from the color tool in{" "}
             <strong>{action.room}</strong>. To change the look, build it again in that
             room's Scenes panel and capture it fresh.
+          </div>
+        )}
+
+        {action.type === "power" && (
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
+            <button style={seg(action.on !== false)} onClick={() => patchAction({ on: true })}>Turn on</button>
+            <button style={seg(action.on === false)} onClick={() => patchAction({ on: false })}>Turn off</button>
           </div>
         )}
 
@@ -226,7 +284,7 @@ function ScheduleEditor({ initial, rooms, favorites, onFavoritesChange, onSave, 
           </div>
         )}
 
-        {!isScene && (
+        {(action.type === "white" || action.type === "color") && (
           <div style={{ marginBottom: 12 }}>
             <div style={label}>Brightness · {action.brightness}%</div>
             <input type="range" min={1} max={100} value={action.brightness}
@@ -234,13 +292,6 @@ function ScheduleEditor({ initial, rooms, favorites, onFavoritesChange, onSave, 
               style={{ width: "100%", accentColor: "#6366f1" }} />
           </div>
         )}
-
-        <div style={label}>In which room</div>
-        <select value={action.room} onChange={e => patchAction({ room: e.target.value })}
-          disabled={isScene} style={{ ...field, opacity: isScene ? 0.6 : 1 }}>
-          {!action.room && <option value="">Pick a room…</option>}
-          {rooms.map(r => <option key={r} value={r}>{r}</option>)}
-        </select>
       </div>
 
       {/* ─── Trigger ────────────────────────────────────────────────── */}
@@ -331,13 +382,152 @@ function ScheduleEditor({ initial, rooms, favorites, onFavoritesChange, onSave, 
   );
 }
 
+// ─── Zone manager ─────────────────────────────────────────────────────────
+// A zone is a named group of rooms, used as a scheduling target (fan a
+// white/color/power action out over every member room). Scenes stay room-only.
+// Live per-zone control isn't here yet — this only defines membership.
+
+function ZoneManager({ zones, rooms, onSaveZone, onDeleteZone, isMobile }) {
+  const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState(null);   // null | {name, rooms} draft
+  const [confirmDelete, setConfirmDelete] = useState(null);
+  const zoneNames = Object.keys(zones || {});
+
+  const startNew = () => setEditing({ name: "", rooms: [], _isNew: true });
+  const startEdit = (name) => setEditing({ name, rooms: [...(zones[name]?.rooms || [])] });
+  const toggleRoom = (r) => setEditing(e => ({
+    ...e, rooms: e.rooms.includes(r) ? e.rooms.filter(x => x !== r) : [...e.rooms, r],
+  }));
+  const saveDraft = async () => {
+    const nm = (editing.name || "").trim();
+    if (!nm) return;
+    await onSaveZone(nm, editing.rooms);
+    setEditing(null);
+  };
+
+  const card = {
+    background: "#1e293b", borderRadius: 16, padding: isMobile ? 12 : 16,
+    marginTop: 18, border: "1px solid #334155",
+  };
+  const chip = (active) => ({
+    padding: isMobile ? "6px 10px" : "6px 12px", borderRadius: 8,
+    border: active ? "1px solid #6366f1" : "1px solid #334155",
+    background: active ? "rgba(99,102,241,0.18)" : "transparent",
+    color: active ? "#c7d2fe" : "#94a3b8",
+    fontSize: isMobile ? 11 : 12, fontWeight: 600, cursor: "pointer",
+  });
+  const field = {
+    padding: "8px 10px", borderRadius: 8, border: "1px solid #334155",
+    background: "#0f172a", color: "#e2e8f0", fontSize: 13, width: "100%",
+  };
+
+  return (
+    <div style={card}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <button onClick={() => setOpen(o => !o)} style={{
+          background: "transparent", border: "none", cursor: "pointer", padding: 0,
+          display: "flex", alignItems: "center", gap: 8,
+        }}>
+          <span style={{ color: "#64748b", fontSize: 12 }}>{open ? "▾" : "▸"}</span>
+          <span style={{ fontSize: isMobile ? 15 : 16, fontWeight: 700, color: "#e2e8f0" }}>Zones</span>
+          <span style={{ fontSize: 12, color: "#64748b" }}>({zoneNames.length})</span>
+        </button>
+        {open && !editing && (
+          <button onClick={startNew} style={{
+            padding: "6px 12px", borderRadius: 8, border: "1px solid #6366f1",
+            background: "transparent", color: "#a5b4fc", fontSize: 12, fontWeight: 600, cursor: "pointer",
+          }}>+ New zone</button>
+        )}
+      </div>
+
+      {open && (
+        <div style={{ marginTop: 12 }}>
+          <div style={{ fontSize: 12, color: "#64748b", marginBottom: 12, lineHeight: 1.6 }}>
+            Group rooms so a schedule can act on all of them at once (e.g. an
+            <strong> Outdoor</strong> zone → "turn all outside lights on at sunset").
+            A room can be in several zones.
+          </div>
+
+          {editing && (
+            <div style={{
+              background: "#0f172a", borderRadius: 12, padding: 12, marginBottom: 12,
+              border: "1px solid #4338ca",
+            }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", marginBottom: 6 }}>
+                Zone name
+              </div>
+              <input value={editing.name} disabled={!editing._isNew}
+                onChange={e => setEditing({ ...editing, name: e.target.value })}
+                placeholder="Outdoor" style={{ ...field, opacity: editing._isNew ? 1 : 0.6, marginBottom: 12 }} />
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", marginBottom: 6 }}>
+                Rooms in this zone
+              </div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
+                {rooms.length === 0 && <span style={{ fontSize: 12, color: "#64748b" }}>No rooms yet.</span>}
+                {rooms.map(r => (
+                  <button key={r} style={chip(editing.rooms.includes(r))} onClick={() => toggleRoom(r)}>{r}</button>
+                ))}
+              </div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button onClick={saveDraft} disabled={!editing.name.trim()} style={{
+                  padding: "7px 16px", borderRadius: 8, border: "none",
+                  background: editing.name.trim() ? "#6366f1" : "#334155",
+                  color: editing.name.trim() ? "#fff" : "#64748b",
+                  fontSize: 12, fontWeight: 700, cursor: editing.name.trim() ? "pointer" : "default",
+                }}>Save zone</button>
+                <button onClick={() => setEditing(null)} style={{
+                  padding: "7px 16px", borderRadius: 8, border: "1px solid #334155",
+                  background: "transparent", color: "#94a3b8", fontSize: 12, fontWeight: 600, cursor: "pointer",
+                }}>Cancel</button>
+              </div>
+            </div>
+          )}
+
+          {zoneNames.length === 0 && !editing && (
+            <div style={{ fontSize: 12, color: "#64748b" }}>No zones yet.</div>
+          )}
+          {zoneNames.map(z => (
+            <div key={z} style={{
+              display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap",
+              padding: "8px 0", borderTop: "1px solid #1e293b",
+            }}>
+              <div style={{ flex: "1 1 180px", minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#e2e8f0" }}>{z}</div>
+                <div style={{ fontSize: 12, color: "#64748b" }}>
+                  {(zones[z]?.rooms || []).join(", ") || "no rooms"}
+                </div>
+              </div>
+              <button onClick={() => startEdit(z)} style={{
+                padding: "5px 10px", borderRadius: 8, border: "1px solid #334155",
+                background: "transparent", color: "#94a3b8", fontSize: 12, fontWeight: 600, cursor: "pointer",
+              }}>Edit</button>
+              {confirmDelete === z ? (
+                <button onClick={() => { onDeleteZone(z); setConfirmDelete(null); }} style={{
+                  padding: "5px 10px", borderRadius: 8, border: "none",
+                  background: "#ef4444", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer",
+                }}>Confirm</button>
+              ) : (
+                <button onClick={() => setConfirmDelete(z)} style={{
+                  padding: "5px 10px", borderRadius: 8, border: "1px solid #7f1d1d",
+                  background: "transparent", color: "#f87171", fontSize: 12, fontWeight: 600, cursor: "pointer",
+                }}>Delete</button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Tab ────────────────────────────────────────────────────────────────────
 
-function SchedulesTab({ schedules, rooms, location, favorites, onFavoritesChange,
-                        onSave, onDelete, pendingScene, onConsumePending }) {
+function SchedulesTab({ schedules, rooms, zones, location, favorites, onFavoritesChange,
+                        onSave, onDelete, onSaveZone, onDeleteZone, pendingScene, onConsumePending }) {
   const isMobile = useIsMobile();
   const [editing, setEditing] = useState(null);   // null | {} (new) | schedule
   const [confirmDelete, setConfirmDelete] = useState(null);
+  const zoneNames = Object.keys(zones || {});
 
   // A look captured by "Schedule this look" lands here: open the editor
   // pre-filled with that scene, then clear the handoff so a later tab visit
@@ -399,7 +589,8 @@ function SchedulesTab({ schedules, rooms, location, favorites, onFavoritesChange
       {editing && (
         <ScheduleEditor
           initial={editing.id || editing.action ? editing : null}
-          rooms={rooms} favorites={favorites} onFavoritesChange={onFavoritesChange}
+          rooms={rooms} zoneNames={zoneNames}
+          favorites={favorites} onFavoritesChange={onFavoritesChange}
           onSave={save} onCancel={() => setEditing(null)} isMobile={isMobile}
         />
       )}
@@ -426,7 +617,7 @@ function SchedulesTab({ schedules, rooms, location, favorites, onFavoritesChange
                 {triggerSummary(s.trigger)}
               </div>
               <div style={{ fontSize: 12, color: "#64748b", marginTop: 2 }}>
-                {s.action?.room} · {actionSummary(s.action)}
+                {targetSummary(s.action)} · {actionSummary(s.action)}
               </div>
               <div style={{ fontSize: 11, color: s.enabled ? "#34d399" : "#64748b", marginTop: 6 }}>
                 Next: {nextRunLabel(s)}
@@ -464,6 +655,9 @@ function SchedulesTab({ schedules, rooms, location, favorites, onFavoritesChange
           </div>
         </div>
       ))}
+
+      <ZoneManager zones={zones} rooms={rooms}
+        onSaveZone={onSaveZone} onDeleteZone={onDeleteZone} isMobile={isMobile} />
     </div>
   );
 }

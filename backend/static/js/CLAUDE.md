@@ -211,6 +211,17 @@ add/edit form; `LocationCard` renders in Settings.
 - Sun triggers can't be predicted client-side (no astral in the browser), so the list
   shows "At sunset" rather than a guessed clock time, and a banner points at
   Settings → Location when a sun schedule exists with no location set.
+- **Zones + Room/Zone target + Power action (v3.9.0):** the tab has a collapsible
+  **`ZoneManager`** (create/edit-membership/delete zones — a zone is a named group of
+  rooms). The editor gained a **Room / Zone** target toggle: a **zone** target binds
+  `action.zone` (clears `action.room`) and limits actions to **White / Color / Power**
+  (a captured *scene* is device-specific → room-only, so the toggle is hidden for scenes).
+  New **Power** action (`{type:"power", on}`) with On/Off. `setTargetKind` rebuilds the
+  action to add/remove the right `room`/`zone` key (patchAction only merges). `saveZone` /
+  `deleteZone` / `renameRoom` live in `app.js` and take the backend response as truth
+  (like `saveSchedule`). **The rename UI is a pencil on each Assign-Rooms `RoomCard`** →
+  `onRenameRoom` → `POST /api/rooms/rename`; it is NOT gated on `isDefault` (the seed room
+  "Outside" is default yet must be renamable — the backend migrates every reference).
 
 ## ct-calibration.js — RGB-space white calibration UI
 Drives the device by **RGB** while tuning (so it warms past Govee's blue CT floor),
