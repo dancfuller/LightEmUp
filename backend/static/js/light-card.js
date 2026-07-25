@@ -85,7 +85,8 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
 
   const saveEdit = () => {
     const val = editValue.trim();
-    if (onNicknameChange) {
+    // Blur fires on every dismissal, so skip the POST when nothing changed.
+    if (onNicknameChange && val !== nickname) {
       onNicknameChange(deviceKey, val);
     }
     setEditing(false);
@@ -115,11 +116,57 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
           boxShadow: isOn ? `0 0 8px ${dotColor}` : "none",
           border: isOn ? "none" : "1px solid #334155",
         }} />
-        <div style={{
-          flex: 1, minWidth: 0, fontSize: 14, fontWeight: 700,
-          color: isOn ? "#f8fafc" : "#94a3b8",
-          whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
-        }}>{displayName}</div>
+        {/* The NAME ITSELF is the rename affordance (v3.10.0). Renaming used to
+            live only inside the "Hue/Govee details" disclosure, whose label
+            promises model/IP metadata — so nobody found it and it felt like
+            Settings was the only place to rename. Clicking the title is the
+            universal pattern, and it matches room rename in Assign Rooms. */}
+        {editing ? (
+          <div style={{ flex: 1, minWidth: 0, display: "flex", gap: 6, alignItems: "center" }}>
+            <input
+              type="text" value={editValue}
+              onChange={(e) => setEditValue(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") saveEdit(); if (e.key === "Escape") setEditing(false); }}
+              onBlur={saveEdit}
+              // Select the whole name on open so typing REPLACES it — the
+              // rename-a-file behaviour people expect. Without this the caret
+              // lands at the end and typing appends to the old name.
+              onFocus={(e) => e.target.select()}
+              placeholder={friendlyName}
+              autoFocus
+              style={{
+                flex: 1, minWidth: 0, padding: "3px 8px", borderRadius: 6,
+                border: "1px solid #6366f1", background: "#0f172a",
+                color: "#f1f5f9", fontSize: 14, fontWeight: 700, outline: "none",
+              }}
+            />
+            {nickname && (
+              <button onMouseDown={(e) => { e.preventDefault(); clearNickname(); setEditing(false); }}
+                title="Reset to the default name"
+                style={{
+                  flexShrink: 0, background: "none", border: "none", cursor: "pointer",
+                  color: "#64748b", fontSize: 13, lineHeight: 1, padding: "0 2px",
+                }}>&#x2715;</button>
+            )}
+          </div>
+        ) : (
+          <button
+            onClick={startEdit}
+            title="Click to rename"
+            style={{
+              flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 6,
+              background: "none", border: "none", padding: 0, cursor: "pointer",
+              textAlign: "left", font: "inherit",
+            }}
+          >
+            <span style={{
+              minWidth: 0, fontSize: 14, fontWeight: 700,
+              color: isOn ? "#f8fafc" : "#94a3b8",
+              whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+            }}>{displayName}</span>
+            <span style={{ flexShrink: 0, fontSize: 11, color: "#475569", lineHeight: 1 }}>&#x270E;</span>
+          </button>
+        )}
         {isCalibrated && (
           <span title="White-balance calibrated" style={{
             flexShrink: 0, fontSize: 13, color: "#fbbf24", lineHeight: 1, cursor: "default",
@@ -364,8 +411,10 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
             </div>
           )}
 
-      {/* Details disclosure: model/IP/MAC metadata + nickname editing,
-          tucked away so the card stays slim by default. */}
+      {/* Details disclosure: model/IP/MAC metadata only. Nickname editing moved
+          OUT of here (v3.10.0) — it lived behind a label promising hardware
+          details, so it was effectively undiscoverable. Rename is now the card
+          title itself. Don't put naming back in here. */}
       <button
         onClick={() => setShowInfo(!showInfo)}
         style={{
@@ -379,58 +428,8 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
       </button>
       {showInfo && (
         <div style={{ marginTop: 8, borderTop: "1px solid rgba(51,65,85,0.5)", paddingTop: 8 }}>
-          {/* Nickname editor */}
-          {editing ? (
-            <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 8 }}>
-              <input
-                type="text" value={editValue}
-                onChange={(e) => setEditValue(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") saveEdit(); if (e.key === "Escape") setEditing(false); }}
-                placeholder="Enter a nickname..."
-                autoFocus
-                style={{
-                  flex: 1, padding: "4px 8px", borderRadius: 6,
-                  border: "1px solid #6366f1", background: "#0f172a",
-                  color: "#f1f5f9", fontSize: 13, fontWeight: 600, outline: "none", minWidth: 0,
-                }}
-              />
-              <button onClick={saveEdit} style={{
-                padding: "4px 8px", borderRadius: 6, border: "none",
-                background: "#6366f1", color: "#fff", fontSize: 11, fontWeight: 600, cursor: "pointer",
-              }}>Save</button>
-              <button onClick={() => setEditing(false)} style={{
-                padding: "4px 10px", borderRadius: 6, border: "1px solid #ef4444",
-                background: "transparent", color: "#ef4444", fontSize: 16, fontWeight: 700,
-                lineHeight: 1, cursor: "pointer",
-              }}>&#x2715;</button>
-            </div>
-          ) : nickname ? (
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-              <span style={{ fontSize: 11, color: "#64748b" }}>Nickname:</span>
-              <span style={{ fontSize: 12, fontWeight: 700, color: "#f1f5f9" }}>{nickname}</span>
-              <button onClick={startEdit} style={{
-                background: "none", border: "none", cursor: "pointer",
-                color: "#94a3b8", fontSize: 14, lineHeight: 1, padding: "0 2px",
-              }} title="Edit nickname">&#x270E;</button>
-              <button onClick={clearNickname} style={{
-                background: "none", border: "none", cursor: "pointer",
-                color: "#64748b", fontSize: 14, fontWeight: 700, lineHeight: 1, padding: "0 2px",
-              }} title="Remove nickname">&#x2715;</button>
-            </div>
-          ) : (
-            <button
-              onClick={startEdit}
-              style={{
-                display: "inline-flex", alignItems: "center", gap: 4,
-                padding: "3px 10px", borderRadius: 6, marginBottom: 8,
-                border: "1px dashed #475569", background: "transparent",
-                color: "#64748b", fontSize: 11, cursor: "pointer",
-              }}
-            >
-              <span>&#x270E;</span> Add nickname
-            </button>
-          )}
-          {/* Permanent friendly name + model line */}
+          {/* Permanent friendly name + model line. When a nickname is set, this
+              is where you can still see the real device name underneath it. */}
           <div style={{ fontSize: 12, fontWeight: 600, color: "#cbd5e1" }}>{friendlyName}</div>
           <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>
             {modelLine}

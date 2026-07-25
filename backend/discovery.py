@@ -711,10 +711,23 @@ async def govee_lan_command(ip: str, cmd: str, data: dict) -> Optional[dict]:
     return await loop.run_in_executor(None, _send)
 
 
-async def govee_lan_send(ip: str, cmd: str, data: dict) -> Optional[dict]:
+# A Govee control packet is unacknowledged UDP, so a single dropped datagram
+# silently loses the command (the classic symptom: one light in a room stays on).
+# Every control send is therefore repeated once after a short gap. The repeat is
+# scheduled as a background task rather than awaited, so it costs the caller ZERO
+# added latency — important because a room apply issues turn+brightness+color per
+# device and awaiting each duplicate would add seconds. The gap matters: two
+# datagrams sent back-to-back tend to be lost together (same buffer/radio blip).
+GOVEE_RESEND_DELAY_S = 0.12
+
+
+async def govee_lan_send(ip: str, cmd: str, data: dict, repeat: bool = True) -> Optional[dict]:
     """Fire-and-forget LAN control command. Govee control commands don't send a
     reply, so we don't wait for one — waiting blocked up to 3s per command,
-    making sliders/calibration brutally slow. Just send and return."""
+    making sliders/calibration brutally slow. Just send and return.
+
+    Sent twice by default (see GOVEE_RESEND_DELAY_S); pass repeat=False for
+    callers that already resend on their own cadence."""
     loop = asyncio.get_event_loop()
 
     def _send():
@@ -728,7 +741,20 @@ async def govee_lan_send(ip: str, cmd: str, data: dict) -> Optional[dict]:
         finally:
             sock.close()
 
-    return await loop.run_in_executor(None, _send)
+    result = await loop.run_in_executor(None, _send)
+
+    if repeat:
+        async def _resend():
+            try:
+                await asyncio.sleep(GOVEE_RESEND_DELAY_S)
+                await loop.run_in_executor(None, _send)
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass   # a lost duplicate must never surface as an error
+        asyncio.create_task(_resend())
+
+    return result
 
 
 async def govee_lan_turn(ip: str, on: bool) -> Optional[dict]:

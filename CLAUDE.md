@@ -89,6 +89,8 @@ backend/
       room-map.js         # RoomMap — interactive SVG floor plan & linear layout editor
       palette-data.js     # Static color datasets for Teams/NCAA/Flags modes (PRESET_TEAMS/NCAA/FLAGS)
       color-mode.js       # Room color tool — palette/gradient/beacon/custom/teams/ncaa/flags + apply pipeline
+      location-data.js    # GENERATED (tools/build-location-data.py) — ZIP3 + world city
+                          # coordinates for offline location entry. Never hand-edit.
       schedules.js        # SchedulesTab (time-based automation) + Settings LocationCard
       segment-reset-debug.js # Debug panel for segment reset behavior
       room-section.js     # RoomSection — room grouping with controls, map, lightning toggles
@@ -99,6 +101,9 @@ backend/
       app.js              # App component — state, routing, SSE client, API orchestration
     sounds/farts/       # 20 MP3 files for "funny mode" thunder replacement
 tools/
+  build-location-data.py # Regenerates backend/static/js/location-data.js from the
+                       # public-domain US Census ZCTA gazetteer (+ a curated city list).
+                       # Self-verifying: sanity/spot checks, exits non-zero on bad data.
   preview/             # Read-only harness to SEE the web UI without deploying:
                        # serves the working-tree frontend + proxies /api to the Pi,
                        # then screenshots it headlessly (Edge via Playwright). See

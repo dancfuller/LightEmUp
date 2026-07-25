@@ -894,9 +894,14 @@ async def _apply_room_white(room_name: str, kelvin: int, brightness_pct: int):
         return
     mireds = max(153, min(500, round(1_000_000 / max(1, kelvin))))
     bri254 = max(1, min(254, round(brightness_pct * 254 / 100)))
+    sent = {}
     for light_id in room.get("hue_light_ids", []):
-        await control_hue_light(HueLightStateRequest(
+        res = await control_hue_light(HueLightStateRequest(
             light_id=str(light_id), on=True, brightness=bri254, color_temp=mireds))
+        if res.get("success") and res.get("state"):
+            sent[str(light_id)] = res["state"]
+    if sent:
+        asyncio.create_task(_hue_verify_repair(sent))
     for slug in room.get("govee_devices", []):
         ip = gv_ip_for_slug(slug)
         if ip:
@@ -912,9 +917,14 @@ async def _apply_room_color(room_name: str, r: int, g: int, b: int, brightness_p
         log.warning("Scheduler: color action — room %r not found", room_name)
         return
     bri254 = max(1, min(254, round(brightness_pct * 254 / 100)))
+    sent = {}
     for light_id in room.get("hue_light_ids", []):
-        await control_hue_light(HueLightStateRequest(
+        res = await control_hue_light(HueLightStateRequest(
             light_id=str(light_id), on=True, brightness=bri254, r=r, g=g, b=b))
+        if res.get("success") and res.get("state"):
+            sent[str(light_id)] = res["state"]
+    if sent:
+        asyncio.create_task(_hue_verify_repair(sent))
     for slug in room.get("govee_devices", []):
         ip = gv_ip_for_slug(slug)
         if ip:
@@ -1558,7 +1568,65 @@ async def control_hue_light(req: HueLightStateRequest):
     if success:
         record_hue_state(req.light_id, state)  # last-known, for power recovery
     publish_event("hue", key=f"hue:{req.light_id}")
-    return {"success": success}
+    # `state` is echoed back so bulk callers can collect exactly what was sent and
+    # hand it to _hue_verify_repair (which re-sends this dict verbatim on a miss).
+    return {"success": success, "state": state}
+
+
+# ─── Hue verify-and-repair (bulk operations) ────────────────────────────────
+# The bridge returns HTTP 200 as soon as it QUEUES a command, so a Zigbee
+# delivery failure downstream is completely invisible at the HTTP layer — the
+# classic symptom is one lamp in a room staying on after "all off" while every
+# PUT logged 200. Retrying on a non-200 therefore fixes nothing; you have to read
+# the state back. After a bulk op we do ONE GET of all lights (a single request
+# regardless of light count) and re-send only to the lights that didn't take.
+HUE_VERIFY_SETTLE_S = 0.6      # let the mesh apply before reading back
+HUE_VERIFY_BRI_TOLERANCE = 3   # bridge rounds brightness; don't chase 1-2 off
+
+
+async def _hue_verify_repair(expectations: dict, settle_s: float = HUE_VERIFY_SETTLE_S):
+    """expectations: {light_id: state_dict_as_sent}. Re-sends to any light whose
+    reported state disagrees with what we asked for.
+
+    Only `on` and `bri` are compared. Color (xy/ct) is deliberately NOT checked:
+    the bridge gamut-clamps and rounds it, so an exact comparison would report
+    permanent false mismatches and re-send forever."""
+    if not expectations:
+        return
+    ip = config.get("hue_bridge_ip")
+    username = config.get("hue_username")
+    if not ip or not username:
+        return
+    try:
+        await asyncio.sleep(settle_s)
+        lights = await get_hue_lights(ip, username)
+        actual = {l["id"]: l.get("state", {}) for l in lights}
+
+        repaired = []
+        for light_id, sent in expectations.items():
+            cur = actual.get(str(light_id))
+            if not cur or not cur.get("reachable", True):
+                continue   # unreachable/unknown: a re-send won't land either
+            want_on = sent.get("on")
+            if want_on is not None and bool(cur.get("on")) != bool(want_on):
+                repaired.append(light_id)
+                continue
+            # Brightness only matters while the light is on.
+            want_bri = sent.get("bri")
+            if want_bri is not None and cur.get("on") and want_on is not False:
+                if abs(int(cur.get("brightness") or 0) - int(want_bri)) > HUE_VERIFY_BRI_TOLERANCE:
+                    repaired.append(light_id)
+
+        for light_id in repaired:
+            log.info("Hue verify: light %s didn't take — re-sending", light_id)
+            try:
+                await set_hue_light_state(ip, username, str(light_id), expectations[light_id])
+            except Exception as e:
+                log.warning("Hue verify: re-send failed for %s: %s", light_id, e)
+        if repaired:
+            publish_event("config")
+    except Exception:
+        log.exception("Hue verify-and-repair failed")
 
 
 # ─── Govee Control Endpoints ────────────────────────────────────────────────
@@ -1706,6 +1774,7 @@ async def control_room(req: RoomStateRequest):
     results = {"hue": [], "govee": []}
 
     # Control Hue lights in the room
+    hue_sent = {}
     if ip and username:
         for light_id in room.get("hue_light_ids", []):
             state = {}
@@ -1721,6 +1790,7 @@ async def control_room(req: RoomStateRequest):
             success = await set_hue_light_state(ip, username, light_id, state)
             if success:
                 record_hue_state(str(light_id), state)  # last-known, for power recovery
+                hue_sent[str(light_id)] = state
             results["hue"].append({"light_id": light_id, "success": success})
 
     # Control Govee devices in the room (membership is by mac slug; resolve the
@@ -1745,6 +1815,11 @@ async def control_room(req: RoomStateRequest):
             r=req.r, g=req.g, b=req.b,
         )
         results["govee"].append({"ip": device_ip, "slug": slug, "success": True})
+
+    # Read the Hue lights back and repair any that silently didn't take. Runs as
+    # a background task so the caller isn't held for the settle delay.
+    if hue_sent:
+        asyncio.create_task(_hue_verify_repair(hue_sent))
 
     publish_event("room", room=req.room_name)
     return {"results": results}
@@ -2300,14 +2375,19 @@ async def _run_scene_apply(req: SceneApplyRequest):
         _scene_emit(room, phase="applying", total=apply_total, done=0, active=True, end_at=end_at_ms)
 
         async def do_hue():
+            sent = {}
             for t in req.hue:
                 try:
-                    await control_hue_light(HueLightStateRequest(
+                    res = await control_hue_light(HueLightStateRequest(
                         light_id=t.light_id, on=t.on, r=t.r, g=t.g, b=t.b,
                         color_temp=t.color_temp, brightness=t.brightness))
+                    if res.get("success") and res.get("state"):
+                        sent[str(t.light_id)] = res["state"]
                 except Exception as e:
                     log.warning("scene hue failed %s: %s", t.light_id, e)
                 await tick("applying", apply_total, t.label)
+            if sent:
+                asyncio.create_task(_hue_verify_repair(sent))
 
         async def do_govee_whole():
             for i, t in enumerate(req.govee_whole):

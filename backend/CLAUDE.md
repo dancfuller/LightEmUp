@@ -90,6 +90,33 @@ is built to tolerate that, and to treat IP as ephemeral:
     those orphaned references are lost. A DHCP reservation per light is still nice-to-have
     but no longer required.
 
+## Send reliability: Govee double-send + Hue verify-and-repair (v3.10.0)
+A bulk "room off" once left a single lamp on **while its PUT logged HTTP 200**. That's
+the key insight: the bridge returns 200 as soon as it *queues* a command, so a Zigbee
+delivery failure downstream is invisible at the HTTP layer — **retrying on a non-200
+fixes nothing.** The two vendors need opposite treatments:
+- **Govee = blind repeat.** `govee_lan_send` (discovery.py) is unacknowledged UDP, so a
+  dropped datagram silently loses the command. Every control packet is now sent **twice**,
+  `GOVEE_RESEND_DELAY_S` (0.12s) apart. The duplicate is scheduled as a background task and
+  **not awaited**, so callers pay zero added latency (a room apply issues turn+brightness+
+  color per device; awaiting duplicates would add seconds). The gap is deliberate —
+  back-to-back datagrams tend to be lost together. `repeat=False` opts out. **Razer segment
+  sends (`_govee_lan_send`) are deliberately excluded** — `razer_keeper` already resends
+  frames on its own cadence, so doubling there is pure waste.
+- **Hue = read it back.** `_hue_verify_repair(expectations)` (main.py) waits
+  `HUE_VERIFY_SETTLE_S`, does **one** `get_hue_lights()` (a single request no matter how
+  many lights), and re-sends only to lights that didn't take. **Only `on` and `bri` are
+  compared** — colour (xy/ct) is NOT, because the bridge gamut-clamps and rounds it, so
+  exact comparison would false-repair forever. Unreachable lights are skipped (a re-send
+  wouldn't land either). `control_hue_light` echoes back the `state` it sent so bulk
+  callers collect faithful expectations, and the repair re-sends that **full** dict — so a
+  repaired light keeps its colour, not just on/brightness.
+- Wired into the bulk paths only: `control_room`, `_run_scene_apply`'s `do_hue`, and the
+  scheduler's `_apply_room_white`/`_apply_room_color`, each dispatched as a background task
+  so no caller waits out the settle. **Single-light control and slider drags are NOT
+  verified** — they'd add a GET per tick and flood the bridge. **When you add a new bulk Hue
+  path, collect `res["state"]` and hand it to `_hue_verify_repair`.**
+
 ## White-temperature calibration (Govee renders CT bluer than Hue)
 Two mechanisms; `ct_rgb` takes precedence over legacy `ct_correction`:
 - `ct_correction` {in→out Kelvin}: remaps a requested Kelvin to a warmer Kelvin still

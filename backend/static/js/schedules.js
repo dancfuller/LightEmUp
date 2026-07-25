@@ -666,46 +666,96 @@ function SchedulesTab({ schedules, rooms, zones, location, favorites, onFavorite
 // Only sun-relative triggers need this, so it says so rather than looking like
 // a mandatory setup step.
 
-function LocationCard({ location, onChange, isMobile }) {
-  const [lat, setLat] = useState(location?.lat ?? "");
-  const [lng, setLng] = useState(location?.lng ?? "");
-  const [status, setStatus] = useState(null);
+// Four ways in, because "type your latitude" is an expert-only ask. All of them
+// converge on the same onChange(lat,lng) → POST /api/location. No geocoding API is
+// used anywhere: ZIP and city resolve against the offline tables in
+// location-data.js, so this works with no internet and no API key.
+const LOCATION_METHODS = [
+  { id: "auto", label: "Use my location" },
+  { id: "zip", label: "US ZIP code" },
+  { id: "city", label: "Nearest city" },
+  { id: "maps", label: "Google Maps" },
+];
 
-  useEffect(() => {
-    setLat(location?.lat ?? "");
-    setLng(location?.lng ?? "");
-  }, [location?.lat, location?.lng]);
+function LocationCard({ location, onChange, isMobile }) {
+  const [method, setMethod] = useState("auto");
+  const [status, setStatus] = useState(null);
+  const [zip, setZip] = useState("");
+  const [city, setCity] = useState("");
+  const [paste, setPaste] = useState("");
+
+  const has = location?.lat != null && location?.lng != null;
+
+  const commit = (la, ln, note) => {
+    onChange(Number(la.toFixed(5)), Number(ln.toFixed(5)));
+    setStatus(note || "Saved.");
+  };
 
   const locate = () => {
     if (!navigator.geolocation) { setStatus("This browser can't share a location."); return; }
     setStatus("Locating…");
     navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const la = Number(pos.coords.latitude.toFixed(5));
-        const ln = Number(pos.coords.longitude.toFixed(5));
-        setLat(la); setLng(ln);
-        onChange(la, ln);
-        setStatus("Saved.");
-      },
-      () => setStatus("Couldn't get your location — enter it manually."),
+      (pos) => commit(pos.coords.latitude, pos.coords.longitude, "Saved from your device."),
+      () => setStatus("Couldn't get your location — try one of the other options."),
       { timeout: 10000 },
     );
   };
 
-  const saveManual = () => {
-    const la = Number(lat), ln = Number(lng);
+  // ZIP resolves on the 3-digit prefix (see location-data.js): accurate to the
+  // ZIP region, which is far tighter than sunrise/sunset needs.
+  const applyZip = () => {
+    const digits = (zip || "").replace(/\D/g, "");
+    if (digits.length < 3) { setStatus("Enter at least the first 3 digits of a US ZIP."); return; }
+    const hit = typeof ZIP3_COORDS !== "undefined" ? ZIP3_COORDS[digits.slice(0, 3)] : null;
+    if (!hit) { setStatus(`No match for ZIP ${digits} — try the city list.`); return; }
+    commit(hit[0], hit[1], `Set to the ${digits.slice(0, 3)}xx area.`);
+  };
+
+  const applyCity = (value) => {
+    setCity(value);
+    const idx = Number(value);
+    const row = typeof WORLD_CITIES !== "undefined" ? WORLD_CITIES[idx] : null;
+    if (!row) return;
+    commit(row[2], row[3], `Set to ${row[1]}.`);
+  };
+
+  // Accepts what Google Maps actually puts on the clipboard: "41.878, -87.629".
+  const applyPaste = () => {
+    const m = (paste || "").match(/(-?\d+(?:\.\d+)?)\s*[,\s]\s*(-?\d+(?:\.\d+)?)/);
+    if (!m) { setStatus("Paste coordinates like  41.878, -87.629"); return; }
+    const la = Number(m[1]), ln = Number(m[2]);
     if (!isFinite(la) || !isFinite(ln) || Math.abs(la) > 90 || Math.abs(ln) > 180) {
-      setStatus("That doesn't look like a valid latitude/longitude.");
+      setStatus("Those numbers aren't a valid latitude/longitude.");
       return;
     }
-    onChange(la, ln);
-    setStatus("Saved.");
+    commit(la, ln);
   };
 
   const field = {
     padding: "8px 10px", borderRadius: 8, border: "1px solid #334155",
     background: "#0f172a", color: "#e2e8f0", fontSize: 13, width: "100%",
   };
+  const tab = (active) => ({
+    padding: isMobile ? "7px 10px" : "7px 14px", borderRadius: 8,
+    border: active ? "1px solid #6366f1" : "1px solid #334155",
+    background: active ? "rgba(99,102,241,0.18)" : "transparent",
+    color: active ? "#c7d2fe" : "#94a3b8",
+    fontSize: isMobile ? 11 : 12, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap",
+  });
+  const primaryBtn = {
+    padding: "8px 16px", borderRadius: 8, border: "none",
+    background: "#6366f1", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer",
+  };
+
+  // Group the city list by country for a scannable <optgroup> select.
+  const cityGroups = [];
+  if (typeof WORLD_CITIES !== "undefined") {
+    WORLD_CITIES.forEach((row, i) => {
+      const last = cityGroups[cityGroups.length - 1];
+      if (last && last.country === row[0]) last.items.push([i, row[1]]);
+      else cityGroups.push({ country: row[0], items: [[i, row[1]]] });
+    });
+  }
 
   return (
     <div style={{
@@ -715,33 +765,107 @@ function LocationCard({ location, onChange, isMobile }) {
       <div style={{ fontSize: isMobile ? 15 : 17, fontWeight: 700, color: "#e2e8f0", marginBottom: 4 }}>
         Location
       </div>
-      <div style={{ fontSize: 12, color: "#64748b", marginBottom: 14, lineHeight: 1.6 }}>
+      <div style={{ fontSize: 12, color: "#64748b", marginBottom: 12, lineHeight: 1.6 }}>
         Used only to compute sunrise and sunset for sun-relative schedules. It stays on
-        your hub — nothing is sent anywhere.
+        your hub — nothing is sent anywhere. Rough is fine: being a few miles off moves
+        sunset by well under a minute.
       </div>
 
-      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
-        <div style={{ flex: "1 1 140px" }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: "#94a3b8", marginBottom: 6 }}>Latitude</div>
-          <input value={lat} onChange={e => setLat(e.target.value)} placeholder="41.88" style={field} />
-        </div>
-        <div style={{ flex: "1 1 140px" }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: "#94a3b8", marginBottom: 6 }}>Longitude</div>
-          <input value={lng} onChange={e => setLng(e.target.value)} placeholder="-87.63" style={field} />
-        </div>
+      {/* Current value — the card should answer "is this set?" at a glance. */}
+      <div style={{
+        display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
+        padding: "8px 12px", borderRadius: 10, marginBottom: 14,
+        background: has ? "rgba(52,211,153,0.10)" : "rgba(251,191,36,0.10)",
+        border: `1px solid ${has ? "#047857" : "#b45309"}`,
+      }}>
+        <span style={{ fontSize: 12, color: has ? "#6ee7b7" : "#fcd34d", fontWeight: 600 }}>
+          {has ? `Set to ${location.lat}, ${location.lng}` : "Not set — sun schedules won't fire"}
+        </span>
       </div>
 
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-        <button onClick={locate} style={{
-          padding: "8px 16px", borderRadius: 8, border: "1px solid #6366f1",
-          background: "transparent", color: "#a5b4fc", fontSize: 12, fontWeight: 600, cursor: "pointer",
-        }}>📍 Use my location</button>
-        <button onClick={saveManual} style={{
-          padding: "8px 16px", borderRadius: 8, border: "none",
-          background: "#6366f1", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer",
-        }}>Save</button>
-        {status && <span style={{ fontSize: 12, color: "#94a3b8" }}>{status}</span>}
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
+        {LOCATION_METHODS.map(m => (
+          <button key={m.id} style={tab(method === m.id)}
+            onClick={() => { setMethod(m.id); setStatus(null); }}>{m.label}</button>
+        ))}
       </div>
+
+      {method === "auto" && (
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <button onClick={locate} style={primaryBtn}>📍 Use my location</button>
+          <span style={{ fontSize: 11, color: "#64748b" }}>
+            Asks the browser for this device's position.
+          </span>
+        </div>
+      )}
+
+      {method === "zip" && (
+        <div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
+            <div style={{ flex: "1 1 160px" }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#94a3b8", marginBottom: 6 }}>US ZIP code</div>
+              <input value={zip} inputMode="numeric" maxLength={10}
+                onChange={e => { setZip(e.target.value); setStatus(null); }}
+                onKeyDown={e => { if (e.key === "Enter") applyZip(); }}
+                placeholder="60601" style={field} />
+            </div>
+            <button onClick={applyZip} style={primaryBtn}>Use this ZIP</button>
+          </div>
+          <div style={{ fontSize: 11, color: "#64748b", marginTop: 8, lineHeight: 1.6 }}>
+            Resolved offline from the ZIP's region — accurate to within a few miles, which
+            is plenty for sunrise and sunset.
+          </div>
+        </div>
+      )}
+
+      {method === "city" && (
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#94a3b8", marginBottom: 6 }}>Nearest city</div>
+          <select value={city} onChange={e => applyCity(e.target.value)} style={field}>
+            <option value="">Pick the closest city…</option>
+            {cityGroups.map(g => (
+              <optgroup key={g.country} label={g.country}>
+                {g.items.map(([i, name]) => <option key={i} value={i}>{name}</option>)}
+              </optgroup>
+            ))}
+          </select>
+          <div style={{ fontSize: 11, color: "#64748b", marginTop: 8, lineHeight: 1.6 }}>
+            Not exhaustive — if your city isn't listed, pick the nearest one or use the
+            Google Maps option.
+          </div>
+        </div>
+      )}
+
+      {method === "maps" && (
+        <div>
+          <div style={{ fontSize: 12, color: "#cbd5e1", lineHeight: 1.7, marginBottom: 10 }}>
+            <a href="https://www.google.com/maps" target="_blank" rel="noopener noreferrer"
+              style={{ color: "#a5b4fc", fontWeight: 700 }}>Open Google Maps ↗</a>
+            <div style={{ marginTop: 8, color: "#94a3b8" }}>
+              <div>1. Find your home on the map.</div>
+              <div>2. <strong>Right-click it</strong> (long-press on a phone).</div>
+              <div>3. The first item in the menu <em>is</em> the latitude and longitude — click it to copy.</div>
+              <div>4. Paste it below.</div>
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
+            <div style={{ flex: "1 1 200px" }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#94a3b8", marginBottom: 6 }}>
+                Pasted coordinates
+              </div>
+              <input value={paste}
+                onChange={e => { setPaste(e.target.value); setStatus(null); }}
+                onKeyDown={e => { if (e.key === "Enter") applyPaste(); }}
+                placeholder="41.878, -87.629" style={field} />
+            </div>
+            <button onClick={applyPaste} style={primaryBtn}>Use these</button>
+          </div>
+        </div>
+      )}
+
+      {status && (
+        <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 12 }}>{status}</div>
+      )}
     </div>
   );
 }

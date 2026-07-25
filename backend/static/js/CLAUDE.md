@@ -85,6 +85,21 @@ sliders, hex) converge on the same `onColorSelect(r,g,b)`. `HexColorInput` is al
   guards the `currentColor`→local sync effect so an SSE refresh mid-edit can't clobber an
   unapplied pick. The bar reads "Pick a color to apply" until a color is known/applied.
 
+## light-card.js — rename by clicking the name (v3.10.0)
+The card **title itself is the rename control** — click it (a faint ✎ sits beside it) and
+it becomes an inline input; Enter or blur saves, Escape abandons, and an `×` clears the
+nickname back to the device's real name. `onFocus` **selects the whole name** so typing
+replaces it (the rename-a-file behaviour); without that the caret lands at the end and
+you silently append to the old name. `saveEdit` skips the POST when the value is
+unchanged, because blur fires on every dismissal.
+- **Why it moved:** renaming used to live *only* inside the collapsed
+  "Hue details / Govee details" disclosure. That label promises model/IP/MAC, so nobody
+  looked there and it felt like Settings was the only place to rename. The disclosure is
+  now metadata-only — **don't put naming back into it.** Settings
+  (`SettingsDeviceRow`) keeps its Rename button; both hit the same `POST /api/nicknames`.
+- This matches room rename in `room-assignment.js`, so the app has one rule: **click the
+  name (or its pencil) to rename it.**
+
 ## color-mode.js — the room color tool (most complex file)
 Assigns colors/temperatures across a room's devices and applies them.
 - **Deterministic assignment:** all assignment randomness goes through
@@ -208,6 +223,22 @@ add/edit form; `LocationCard` renders in Settings.
   rule): the backend mints the id and owns the list, so `saveSchedule` awaits the
   response and takes `res.schedule`. A schedule that silently failed to save is worse
   than a slow save — it just never fires, with nothing on screen to say so.
+- **Location card: four ways in, all offline (v3.10.0).** "Type your latitude" is an
+  expert-only ask, so `LocationCard` has a method switcher: **Use my location**
+  (`navigator.geolocation`), **US ZIP code**, **Nearest city**, and **Google Maps** (link +
+  the right-click-to-copy steps, with a paste box that parses `41.878, -87.629`). All four
+  converge on the same `onChange(lat,lng)` → `POST /api/location`, and a banner at the top
+  states whether location is set at all. **No geocoding API is used** — ZIP and city resolve
+  against `location-data.js`, so it works with no internet and no key. Free-form address
+  autocomplete was considered and **deliberately dropped**: it requires a paid API.
+- **`location-data.js` is GENERATED — never hand-edit it.** Regenerate with
+  `python tools/build-location-data.py` (which sanity-checks bounds + spot-checks known
+  prefixes and exits non-zero rather than shipping a bad table). It holds `ZIP3_COORDS`
+  (US ZIP **3-digit prefix** → [lat,lng], from the public-domain US Census ZCTA gazetteer)
+  and `WORLD_CITIES` (`[country, city, lat, lng]`). The ZIP table is deliberately prefix-
+  level: ~900 entries/~20KB instead of ~600KB for all 33k ZCTAs, and a prefix centroid is
+  ~25–50 km out, which moves sunrise/sunset by only a couple of minutes. It must load
+  **before** `schedules.js` in index.html.
 - Sun triggers can't be predicted client-side (no astral in the browser), so the list
   shows "At sunset" rather than a guessed clock time, and a banner points at
   Settings → Location when a sun schedule exists with no location set.
