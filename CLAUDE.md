@@ -20,13 +20,21 @@ instead of spelunking, and **update them when you change how something works.**
   - **Y (minor)**: meaningful new user-visible feature or capability.
   - **X (major)**: breaking config-schema change, removed/renamed endpoint, UX rework.
 - Include the new version in the commit subject as a `(vX.Y.Z)` suffix.
+- **Non-functional commits don't bump and carry no suffix** — a docs-only edit, a
+  comment fix, or a workflow-rule change ships as e.g. `Update commit trailer rule…`
+  with no `(vX.Y.Z)`. Only a change to shipped behavior earns a version.
 
 ### Commits
 - Subject: imperative summary + ` (vX.Y.Z)`, e.g.
   `Batch cloud_v2 segment apply by color to stop dropped segments (v2.10.0)`.
 - Body: explain the **why** (the problem) and the approach.
-- Always end with this trailer exactly:
-  `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`
+- Always end with exactly one co-author trailer, naming **the model actually writing
+  the commit** — this varies by session, so use the current one rather than copying
+  the previous commit's:
+  `Co-Authored-By: Claude <model name> <noreply@anthropic.com>`
+  e.g. `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>`. The history is
+  therefore intentionally mixed (Opus 4.8 through v3.10.0, Opus 5 from v3.10.1) — an
+  accurate attribution beats a uniform one. Nothing else goes in the trailer block.
 - **Never commit**: `backend/config.json` (gitignored — local IPs/creds), the
   untracked `mockups/` directory, or any secret/.env. Stage only the files your change
   touched — don't `git add -A` blindly.
