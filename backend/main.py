@@ -17,7 +17,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, StreamingResponse, HTMLResponse
+from fastapi.responses import FileResponse, StreamingResponse, HTMLResponse, Response
 from pydantic import BaseModel
 from typing import Optional
 
@@ -1054,21 +1054,28 @@ async def _scheduler_loop():
 
 # ─── App ─────────────────────────────────────────────────────────────────────
 
+def reload_segment_state():
+    """Rehydrate the in-memory segment store from config.
+
+    config's segment_state is mac-slug keyed; the in-memory store is IP-keyed
+    (that's the live address). Resolve slug→current IP on load (persist maps back).
+    Shared by startup and config import so the two can't drift apart."""
+    raw = config.get("segment_state", {}) or {}
+    resolved = {}
+    for k, v in raw.items():
+        if k.startswith("govee:"):
+            ip = gv_ip_for_slug(k[len("govee:"):])
+            if ip:
+                resolved[f"govee:{ip}"] = v
+        else:
+            resolved[k] = v
+    segment_state.load(resolved)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("🔆 LightEmUp starting up...")
-    # config's segment_state is mac-slug keyed; the in-memory store is IP-keyed
-    # (that's the live address). Resolve slug→current IP on load (persist maps back).
-    _seg_raw = config.get("segment_state", {})
-    _seg_resolved = {}
-    for _k, _v in _seg_raw.items():
-        if _k.startswith("govee:"):
-            _ip = gv_ip_for_slug(_k[len("govee:"):])
-            if _ip:
-                _seg_resolved[f"govee:{_ip}"] = _v
-        else:
-            _seg_resolved[_k] = _v
-    segment_state.load(_seg_resolved)
+    reload_segment_state()
 
     # Was our last stop clean (planned reboot) or abrupt (power outage)? Consume
     # the marker now so a later outage — which won't run the shutdown hook — is
@@ -2725,6 +2732,204 @@ async def get_config():
         "zones": config.get("zones", {}),
         "favorites": config.get("favorites") or DEFAULT_FAVORITES,
     }
+
+
+# ─── Backup / restore (export + import every setting) ───────────────────────
+# Everything the user has built — rooms, layouts, nicknames, calibration,
+# schedules, zones, fixtures — lives in ONE file on the Pi's microSD card, and
+# those cards wear out and die. A backup that sits on the same card is worthless
+# for the failure it's meant to survive, so export hands the BROWSER a download:
+# the file leaves the machine. (The rolling config.json*.bak files protect
+# against a bad write, not against losing the card.)
+EXPORT_FORMAT = 1        # envelope version — not the config's schema_version
+SUPPORTED_SCHEMA = 2     # highest config schema_version this build understands
+
+# Credentials, not preferences. hue_username is a bridge token: without it a
+# restore can't talk to the bridge until someone physically presses its button.
+_CREDENTIAL_KEYS = ("hue_username", "govee_api_key")
+
+
+def _deep_copy(obj):
+    """JSON round-trip copy — config is plain JSON data, and this guarantees the
+    export can't alias (or accidentally mutate) the live dict."""
+    return json.loads(json.dumps(obj))
+
+
+def _export_envelope(include_credentials: bool = True) -> dict:
+    """Wrap the live config in a self-describing envelope.
+
+    The envelope — rather than a raw config.json — is what lets import recognise a
+    genuine LightEmUp backup, refuse one written by a NEWER build whose schema we'd
+    silently mangle, and state up front whether credentials are inside."""
+    import socket
+    from datetime import datetime
+    cfg = _deep_copy(config)
+    had_creds = any(cfg.get(k) for k in _CREDENTIAL_KEYS)
+    if not include_credentials:
+        for k in _CREDENTIAL_KEYS:
+            cfg[k] = None
+    return {
+        "lightemup_export": EXPORT_FORMAT,
+        "app_version": APP_VERSION,
+        "schema_version": cfg.get("schema_version", 1),
+        "exported_at": datetime.now().isoformat(timespec="seconds"),
+        "hostname": socket.gethostname(),
+        "includes_credentials": bool(include_credentials and had_creds),
+        "config": cfg,
+    }
+
+
+def _config_summary(cfg: dict) -> dict:
+    """Counts for the pre-import preview, so replacing everything is never a leap
+    of faith. Room/zone NAMES are listed (not just counted) because that's what
+    makes a wrong-backup mistake obvious at a glance."""
+    rooms = cfg.get("rooms", {}) or {}
+    known = (cfg.get("known_devices") or {}).get("govee") or {}
+    return {
+        "rooms": sorted(rooms.keys()),
+        "hue_lights": sum(len(r.get("hue_light_ids") or []) for r in rooms.values()),
+        "govee_devices": sum(len(r.get("govee_devices") or []) for r in rooms.values()),
+        "nicknames": len(cfg.get("nicknames") or {}),
+        "room_layouts": len(cfg.get("room_layouts") or {}),
+        "schedules": len(cfg.get("schedules") or []),
+        "zones": sorted((cfg.get("zones") or {}).keys()),
+        "fixtures": len(cfg.get("fixtures") or {}),
+        "known_govee": len(known),
+        "lightning_scenes": len(cfg.get("lightning_scenes") or {}),
+        "room_presets": len(cfg.get("room_presets") or {}),
+        "hue_paired": bool(cfg.get("hue_username")),
+        "govee_api_key_set": bool(cfg.get("govee_api_key")),
+        "hue_bridge_ip": cfg.get("hue_bridge_ip"),
+    }
+
+
+def _unwrap_import(payload: dict) -> tuple[dict, dict]:
+    """Accept either a full export envelope or a bare config.json — people do pull
+    the latter straight off the card — and validate it before anything is touched.
+    Raises HTTPException with a plain-language reason rather than half-importing."""
+    if not isinstance(payload, dict):
+        raise HTTPException(400, "That file isn't a JSON object.")
+
+    if "lightemup_export" in payload or "config" in payload:
+        cfg = payload.get("config")
+        if not isinstance(cfg, dict):
+            raise HTTPException(400, "That export file has no 'config' object in it.")
+        meta = {k: payload.get(k) for k in (
+            "lightemup_export", "app_version", "schema_version",
+            "exported_at", "hostname", "includes_credentials")}
+    else:
+        # Bare config.json fallback. Require a recognisable key so an unrelated
+        # JSON file can't be imported as settings.
+        if not any(k in payload for k in ("rooms", "nicknames", "hue_bridge_ip")):
+            raise HTTPException(400, "This doesn't look like a LightEmUp backup or config file.")
+        cfg = payload
+        meta = {"lightemup_export": None, "app_version": None,
+                "schema_version": payload.get("schema_version"),
+                "exported_at": None, "hostname": None,
+                "includes_credentials": bool(payload.get("hue_username"))}
+
+    schema = cfg.get("schema_version", meta.get("schema_version")) or 1
+    if isinstance(schema, int) and schema > SUPPORTED_SCHEMA:
+        raise HTTPException(400,
+            f"That backup uses config schema v{schema}, but this build only understands "
+            f"v{SUPPORTED_SCHEMA}. Update LightEmUp first, then import.")
+    return cfg, meta
+
+
+@app.get("/api/config/export")
+async def export_config(include_credentials: bool = True):
+    """Download every setting as one JSON file. Served as an attachment so it
+    lands on the user's machine, not on the Pi's card."""
+    from datetime import datetime
+    env = _export_envelope(include_credentials)
+    stamp = datetime.now().strftime("%Y-%m-%d")
+    fname = f"lightemup-config-{env['hostname']}-{stamp}.json"
+    # indent=2: a backup you can read, diff and hand-edit is worth the bytes.
+    return Response(
+        content=json.dumps(env, indent=2),
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+class ConfigImportRequest(BaseModel):
+    payload: dict            # export envelope, or a bare config.json
+    dry_run: bool = False    # preview only — touches nothing
+    keep_credentials: bool = True   # see below
+
+
+@app.post("/api/config/import")
+async def import_config(req: ConfigImportRequest):
+    """Replace ALL settings with a backup. Destructive by design."""
+    new_cfg, meta = _unwrap_import(req.payload)
+
+    # Preview first: the UI shows current-vs-incoming before anything happens.
+    if req.dry_run:
+        return {"dry_run": True, "meta": meta,
+                "current": _config_summary(config),
+                "incoming": _config_summary(new_cfg)}
+
+    # Merge over defaults so a backup predating a key still yields a complete
+    # config; unknown/newer keys in the backup survive verbatim.
+    merged = _deep_copy(DEFAULT_CONFIG)
+    merged.update(_deep_copy(new_cfg))
+
+    # A credential-free backup would otherwise UNPAIR the bridge, and re-pairing
+    # needs a physical button press on the hardware. Carry the live credentials
+    # over when the incoming file has none.
+    if req.keep_credentials:
+        for k in _CREDENTIAL_KEYS:
+            if not merged.get(k) and config.get(k):
+                merged[k] = config[k]
+
+    # Dedicated pre-import snapshot. _config_backups() globs config.json*.bak, so
+    # this automatically joins the pool load_config() restores from. If we can't
+    # protect the current settings, don't proceed.
+    if CONFIG_PATH.exists():
+        import shutil
+        from datetime import datetime
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        try:
+            shutil.copy2(CONFIG_PATH, CONFIG_PATH.with_name(
+                f"{CONFIG_PATH.name}.pre-import-{stamp}.bak"))
+        except Exception:
+            log.exception("Could not write pre-import backup")
+            raise HTTPException(500, "Couldn't write a pre-import backup, so the import "
+                                     "was aborted and your current settings are untouched.")
+
+    # Quiesce anything still driving lights from the OLD config — a running storm
+    # or staggered scene apply would keep addressing devices this import may have
+    # renamed or removed.
+    for task in list(_scene_tasks.values()):
+        task.cancel()
+    _scene_tasks.clear()
+    for room_name in list(config.get("rooms", {})):
+        try:
+            if scene_manager.is_active(room_name):
+                await scene_manager.stop_lightning(room_name)
+        except Exception:
+            log.exception("Import: could not stop lightning in %r", room_name)
+    razer_keeper.cancel_all()
+
+    # Swap IN PLACE. Rebinding the global would leave anything holding a reference
+    # to the old dict silently reading stale settings.
+    config.clear()
+    config.update(merged)
+
+    # An older backup may still be IP-keyed (pre-v3.0.0); migrate it like a boot would.
+    migrate_govee_to_mac(config)
+    save_config(config)          # write through now, not via the coalescing scheduler
+    reload_segment_state()       # in-memory store must match the config we just loaded
+    publish_event("config")      # every open browser resyncs
+
+    summary = _config_summary(config)
+    log.warning("Config imported (from %s, app %s, exported %s): %d rooms, %d schedules, "
+                "%d nicknames", meta.get("hostname") or "unknown",
+                meta.get("app_version") or "unknown", meta.get("exported_at") or "unknown",
+                len(summary["rooms"]), summary["schedules"], summary["nicknames"])
+    # No restart needed: bridge creds/IP are read per-call, the scheduler re-reads
+    # config["schedules"] every tick, and the segment store was just rebuilt.
+    return {"success": True, "meta": meta, "summary": summary, "restart_required": False}
 
 
 # ─── Fixture Endpoints ──────────────────────────────────────────────────────

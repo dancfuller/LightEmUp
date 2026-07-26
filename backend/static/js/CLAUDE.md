@@ -8,8 +8,9 @@ rules that apply to every UI change. **Keep this file current when behavior chan
 
 ## Load order (from index.html)
 utils → audio → components-shared → light-card → lightning-panel → room-map →
-palette-data → color-mode → schedules → segment-reset-debug → room-section →
-room-assignment → setup-wizard → server-logs → ct-calibration → app
+palette-data → color-mode → location-data → schedules → segment-reset-debug →
+room-section → room-assignment → setup-wizard → server-logs → ct-calibration →
+backup-restore → app
 
 A new file must be added to index.html in the correct slot (after its dependencies).
 
@@ -253,6 +254,23 @@ add/edit form; `LocationCard` renders in Settings.
   (like `saveSchedule`). **The rename UI is a pencil on each Assign-Rooms `RoomCard`** →
   `onRenameRoom` → `POST /api/rooms/rename`; it is NOT gated on `isDefault` (the seed room
   "Outside" is default yet must be renamable — the backend migrates every reference).
+
+## backup-restore.js — Settings → Backup & Restore (v3.11.0)
+`BackupRestoreCard` renders in the Settings tab (below `LocationCard`), with
+`onImported={() => loadAll()}` so a restore refreshes app state **without a page reload**.
+- **Export must leave the Pi.** It uses a raw `fetch` (not the `api()` wrapper, which parses
+  JSON) to pull the file as a **blob**, then triggers a download via an object URL + a
+  synthetic `<a download>`. The filename comes from the server's `Content-Disposition`
+  (it carries hostname + date). A backup written onto the Pi would die with the card it's
+  meant to survive — don't change this to a server-side file.
+- **Import always previews.** The file is read and `JSON.parse`d locally, POSTed with
+  `dry_run: true`, and the response drives a current→incoming diff (`BackupDiffRow`, which
+  tints a value amber only when it actually changes). Room *names* gained/removed are listed
+  explicitly — that's the check that catches "wrong backup file" at a glance, which counts
+  is too weak to do. Only then does the red **Replace all settings** button appear.
+- A `SyntaxError` from `JSON.parse` is reported as "That file isn't valid JSON"; every other
+  failure surfaces the backend's `detail` (schema too new, not a LightEmUp file, …) via
+  `api()`'s error path. Drag-and-drop hits the same `loadFile` as the picker.
 
 ## ct-calibration.js — RGB-space white calibration UI
 Drives the device by **RGB** while tuning (so it warms past Govee's blue CT floor),

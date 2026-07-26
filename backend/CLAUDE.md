@@ -146,6 +146,47 @@ coroutine gets its own context copy) and normal concurrent UI requests are unaff
 **When you add a new bulk Hue path, collect `res["state"]`, set `_in_bulk_hue`, and hand the
 batch to `schedule_hue_verify`.**
 
+## Backup / restore — export + import every setting (v3.11.0)
+Everything the user has built (rooms, layouts, nicknames, calibration, fixtures, scenes,
+schedules, zones) lives in ONE file on the Pi's microSD card, and those cards wear out.
+**The rolling `config.json*.bak` files protect against a bad write, not against losing the
+card** — so `GET /api/config/export` serves the config as a **browser download**
+(`Content-Disposition: attachment`), getting the backup *off the machine*. That's the whole
+point; don't "improve" this into writing a backup file on the Pi.
+- **It's an envelope, not raw config.json**: `{lightemup_export, app_version,
+  schema_version, exported_at, hostname, includes_credentials, config}`. The wrapper is what
+  lets import recognise a real backup, **refuse one written by a newer build**
+  (`schema_version > SUPPORTED_SCHEMA`) whose keys we'd silently mangle, and state up front
+  whether credentials are inside. `_unwrap_import` still accepts a **bare config.json**
+  (people pull that straight off the card), requiring a recognisable key so an unrelated
+  JSON file can't be imported as settings.
+- **Credentials are included by default** (`?include_credentials=false` strips
+  `hue_username` + `govee_api_key`). `hue_username` is a bridge token: without it a restore
+  can't talk to the bridge until someone **physically presses the button** on it. The
+  exported file can therefore control the lights — the UI says so. Conversely, importing a
+  credential-free backup keeps the **live** credentials (`keep_credentials`, default True)
+  rather than silently unpairing the bridge.
+- **`POST /api/config/import` is destructive by design** and replaces everything, including
+  *removing* rooms the backup doesn't have. `dry_run: true` returns
+  `{current, incoming}` summaries and touches nothing — the UI always previews first.
+- Import order matters: validate → merge over `DEFAULT_CONFIG` (so a backup predating a key
+  still yields a complete config, and unknown keys survive verbatim) → carry credentials →
+  **write `config.json.pre-import-<stamp>.bak`** (aborts with 500 if that fails; the name
+  matches the `config.json*.bak` glob so it automatically joins the pool `load_config()`
+  restores from) → **quiesce** in-flight work (cancel `_scene_tasks`, stop any active
+  lightning, `razer_keeper.cancel_all()`) so nothing keeps driving devices the import may
+  have removed → **swap the config dict IN PLACE** (`clear()`+`update()`; rebinding the
+  global would leave anything holding a reference reading stale settings) →
+  `migrate_govee_to_mac` (an old backup may still be IP-keyed) → `save_config` →
+  `reload_segment_state()` → `publish_event("config")`.
+- **No restart is required** — bridge creds/IP are read per call, the scheduler re-reads
+  `config["schedules"]` every tick, and the segment store is rebuilt by
+  `reload_segment_state()` (factored out of `lifespan` precisely so startup and import can't
+  drift apart). **If you add runtime state derived from config at startup, add it there.**
+- Restoring onto a **different/re-imaged Pi** works because Govee identity is MAC-keyed
+  (v3.0.0): the IPs in the backup are stale but re-resolve after a scan. The Hue bridge IP
+  may genuinely differ and need re-discovery.
+
 ## White-temperature calibration (Govee renders CT bluer than Hue)
 Two mechanisms; `ct_rgb` takes precedence over legacy `ct_correction`:
 - `ct_correction` {in→out Kelvin}: remaps a requested Kelvin to a warmer Kelvin still

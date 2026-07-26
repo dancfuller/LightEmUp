@@ -106,6 +106,8 @@ backend/
       setup-wizard.js     # SetupWizard — Hue Bridge discovery and pairing
       server-logs.js      # ServerLogs — live server log viewer
       ct-calibration.js   # CTCalibrationPanel — RGB-space white calibration UI
+      backup-restore.js   # BackupRestoreCard — Settings export/import of every setting
+                          # (downloads to the browser; import previews then replaces)
       app.js              # App component — state, routing, SSE client, API orchestration
     sounds/farts/       # 20 MP3 files for "funny mode" thunder replacement
 tools/
@@ -181,6 +183,11 @@ Open `http://localhost:8420`. Internet required on first load only (CDN scripts)
 
 All endpoints are under `/api/`. Key groups:
 - `/api/config` — full config read
+- `/api/config/export` — download EVERY setting as one JSON envelope (browser attachment,
+  so the backup leaves the Pi — its SD card is the thing you're insuring against);
+  `?include_credentials=false` strips the bridge token. `/api/config/import` replaces all
+  settings from such a file (`dry_run` previews; writes a `config.json.pre-import-*.bak`
+  first; no restart needed). See `backend/CLAUDE.md` "Backup / restore"
 - `/api/discover/govee`, `/api/discover/hue` — device discovery (live LAN/network scan)
 - `/api/discover/govee/cached` — instant Govee list from `known_devices` + last-known
   `device_state`, **no LAN scan** (used for the fast initial paint; the client then

@@ -1345,6 +1345,8 @@ function App() {
 
             <LocationCard location={location} onChange={updateLocation} isMobile={isMobile} />
 
+            <BackupRestoreCard onImported={() => loadAll()} isMobile={isMobile} />
+
             <div style={{ background: "#1e293b", borderRadius: 16, padding: 20, border: "1px solid #334155", marginBottom: 16 }}>
               <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 12, color: "#e2e8f0" }}>About</h3>
               <div style={{ fontSize: 13, color: "#94a3b8" }}>
