@@ -103,19 +103,48 @@ fixes nothing.** The two vendors need opposite treatments:
   back-to-back datagrams tend to be lost together. `repeat=False` opts out. **Razer segment
   sends (`_govee_lan_send`) are deliberately excluded** — `razer_keeper` already resends
   frames on its own cadence, so doubling there is pure waste.
-- **Hue = read it back.** `_hue_verify_repair(expectations)` (main.py) waits
-  `HUE_VERIFY_SETTLE_S`, does **one** `get_hue_lights()` (a single request no matter how
-  many lights), and re-sends only to lights that didn't take. **Only `on` and `bri` are
+- **Hue = read it back.** `_hue_verify_repair(expectations)` (main.py) does **one**
+  `get_hue_lights()` (a single request no matter how many lights) and re-sends only to
+  lights that didn't take. **Only `on` and `bri` are
   compared** — colour (xy/ct) is NOT, because the bridge gamut-clamps and rounds it, so
   exact comparison would false-repair forever. Unreachable lights are skipped (a re-send
-  wouldn't land either). `control_hue_light` echoes back the `state` it sent so bulk
+  wouldn't land either). **`bri` is only compared while the light is ON** — verified live
+  that most bulbs simply refuse a level change while off (a brightness-only command to a
+  dark room left 7 of 9 lights unchanged, *identically* across 3 retries — deterministic
+  device behavior, not packet loss), so checking `bri` on an off light would re-send
+  forever for no gain. `control_hue_light` echoes back the `state` it sent so bulk
   callers collect faithful expectations, and the repair re-sends that **full** dict — so a
   repaired light keeps its colour, not just on/brightness.
-- Wired into the bulk paths only: `control_room`, `_run_scene_apply`'s `do_hue`, and the
-  scheduler's `_apply_room_white`/`_apply_room_color`, each dispatched as a background task
-  so no caller waits out the settle. **Single-light control and slider drags are NOT
-  verified** — they'd add a GET per tick and flood the bridge. **When you add a new bulk Hue
-  path, collect `res["state"]` and hand it to `_hue_verify_repair`.**
+
+### Coalescing + what gets verified (v3.10.1)
+Callers never invoke `_hue_verify_repair` directly — they call **`schedule_hue_verify(
+{light_id: state_as_sent})`**, which is synchronous and cheap: it merges into a module-level
+`_hue_verify_pending` map and ensures the single `_hue_verify_drain` task is running. The
+drain waits `HUE_VERIFY_SETTLE_S`, verifies **everything queued in one pass**, then loops if
+more arrived meanwhile. So *any* number of commands landing in a settle window share **one**
+GET, and no caller ever waits out the settle. This matters because `app.js` fans room and
+"Unassigned" controls out **client-side** through `/api/hue/light` — one request per light —
+which without coalescing would cost a GET per light. A later expectation for the same light
+overwrites the earlier one (more recent intent wins).
+
+**`control_hue_light` now self-verifies, but only when `on` is present in the request.**
+That's an exact proxy for "discrete, settled action" in this UI: the card's toggle sends
+`{on}` and a colour/CT pick sends `{on:true, …}`, whereas the brightness and colour-wheel
+**drags** send `{brightness}` / `{r,g,b}` with no `on`. Drags commit every 180ms
+(`useThrottledControl`), so verifying them would mean a GET per tick against a bridge with a
+~10 cmd/sec ceiling. Two consequences worth knowing: a colour-only change is **unverifiable**
+by design (xy/ct aren't compared), so a colour pick only confirms the light turned *on*; and
+the repair re-sends via `set_hue_light_state` directly, never `control_hue_light`, so it
+cannot recursively re-register — exactly one repair attempt per pass.
+
+Bulk paths (`control_room`, `_run_scene_apply`'s `do_hue`, the scheduler's
+`_apply_room_white`/`_apply_room_color`) register **one batch** for the whole run and set the
+`_in_bulk_hue` ContextVar so their inner `control_hue_light` calls skip self-verifying. Without
+that guard the *staggered* scene apply would trigger a read-back every settle window for the
+entire apply. It's a ContextVar, so per-task: `do_hue` runs under `asyncio.gather` (each
+coroutine gets its own context copy) and normal concurrent UI requests are unaffected.
+**When you add a new bulk Hue path, collect `res["state"]`, set `_in_bulk_hue`, and hand the
+batch to `schedule_hue_verify`.**
 
 ## White-temperature calibration (Govee renders CT bluer than Hue)
 Two mechanisms; `ct_rgb` takes precedence over legacy `ct_correction`:

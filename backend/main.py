@@ -564,6 +564,13 @@ _current_client_id: ContextVar[str] = ContextVar("client_id", default="")
 # never affects normal concurrent requests.
 _suppress_publish: ContextVar[bool] = ContextVar("suppress_publish", default=False)
 
+# Set by bulk paths that drive control_hue_light in a loop AND register their own
+# verify batch at the end. Without it, a staggered scene apply would register each
+# light as it goes and trigger a read-back every settle window for the whole run;
+# the batch at the end covers them all in one. Per-task, so single-light requests
+# from the UI are unaffected and still self-verify.
+_in_bulk_hue: ContextVar[bool] = ContextVar("in_bulk_hue", default=False)
+
 
 def publish_event(event_type: str, **fields):
     """Broadcast a change signal to all connected sessions. Best-effort:
@@ -895,13 +902,16 @@ async def _apply_room_white(room_name: str, kelvin: int, brightness_pct: int):
     mireds = max(153, min(500, round(1_000_000 / max(1, kelvin))))
     bri254 = max(1, min(254, round(brightness_pct * 254 / 100)))
     sent = {}
-    for light_id in room.get("hue_light_ids", []):
-        res = await control_hue_light(HueLightStateRequest(
-            light_id=str(light_id), on=True, brightness=bri254, color_temp=mireds))
-        if res.get("success") and res.get("state"):
-            sent[str(light_id)] = res["state"]
-    if sent:
-        asyncio.create_task(_hue_verify_repair(sent))
+    _in_bulk_hue.set(True)
+    try:
+        for light_id in room.get("hue_light_ids", []):
+            res = await control_hue_light(HueLightStateRequest(
+                light_id=str(light_id), on=True, brightness=bri254, color_temp=mireds))
+            if res.get("success") and res.get("state"):
+                sent[str(light_id)] = res["state"]
+    finally:
+        _in_bulk_hue.set(False)
+    schedule_hue_verify(sent)
     for slug in room.get("govee_devices", []):
         ip = gv_ip_for_slug(slug)
         if ip:
@@ -918,13 +928,16 @@ async def _apply_room_color(room_name: str, r: int, g: int, b: int, brightness_p
         return
     bri254 = max(1, min(254, round(brightness_pct * 254 / 100)))
     sent = {}
-    for light_id in room.get("hue_light_ids", []):
-        res = await control_hue_light(HueLightStateRequest(
-            light_id=str(light_id), on=True, brightness=bri254, r=r, g=g, b=b))
-        if res.get("success") and res.get("state"):
-            sent[str(light_id)] = res["state"]
-    if sent:
-        asyncio.create_task(_hue_verify_repair(sent))
+    _in_bulk_hue.set(True)
+    try:
+        for light_id in room.get("hue_light_ids", []):
+            res = await control_hue_light(HueLightStateRequest(
+                light_id=str(light_id), on=True, brightness=bri254, r=r, g=g, b=b))
+            if res.get("success") and res.get("state"):
+                sent[str(light_id)] = res["state"]
+    finally:
+        _in_bulk_hue.set(False)
+    schedule_hue_verify(sent)
     for slug in room.get("govee_devices", []):
         ip = gv_ip_for_slug(slug)
         if ip:
@@ -1567,26 +1580,73 @@ async def control_hue_light(req: HueLightStateRequest):
     success = await set_hue_light_state(ip, username, req.light_id, state)
     if success:
         record_hue_state(req.light_id, state)  # last-known, for power recovery
+        # Verify discrete actions only. Presence of `on` is an exact proxy for
+        # "settled click" in this UI: the card's toggle sends {on}, a colour/CT
+        # pick sends {on:true, …}, while the brightness and colour-wheel DRAGS
+        # send {brightness} / {r,g,b} with no `on`. Drags commit every 180ms
+        # (useThrottledControl), so verifying those would mean a GET per tick.
+        # Bulk callers opt out — they register one batch for the whole run.
+        if "on" in state and not _in_bulk_hue.get():
+            schedule_hue_verify({req.light_id: state})
     publish_event("hue", key=f"hue:{req.light_id}")
     # `state` is echoed back so bulk callers can collect exactly what was sent and
-    # hand it to _hue_verify_repair (which re-sends this dict verbatim on a miss).
+    # hand it to schedule_hue_verify (which re-sends this dict verbatim on a miss).
     return {"success": success, "state": state}
 
 
-# ─── Hue verify-and-repair (bulk operations) ────────────────────────────────
+# ─── Hue verify-and-repair ──────────────────────────────────────────────────
 # The bridge returns HTTP 200 as soon as it QUEUES a command, so a Zigbee
 # delivery failure downstream is completely invisible at the HTTP layer — the
 # classic symptom is one lamp in a room staying on after "all off" while every
 # PUT logged 200. Retrying on a non-200 therefore fixes nothing; you have to read
-# the state back. After a bulk op we do ONE GET of all lights (a single request
-# regardless of light count) and re-send only to the lights that didn't take.
+# the state back: ONE GET of all lights (a single request regardless of light
+# count), then re-send only to the lights that didn't take.
 HUE_VERIFY_SETTLE_S = 0.6      # let the mesh apply before reading back
 HUE_VERIFY_BRI_TOLERANCE = 3   # bridge rounds brightness; don't chase 1-2 off
 
+# Verification is COALESCED: callers register expectations here rather than each
+# spawning its own read-back, and a single drain task services them. Without this,
+# a room press that fans out client-side through /api/hue/light (app.js does
+# exactly that for room + "Unassigned" controls) would cost one GET per light.
+# Now any number of commands landing within a settle window share ONE GET.
+_hue_verify_pending: dict = {}
+_hue_verify_task: Optional[asyncio.Task] = None
 
-async def _hue_verify_repair(expectations: dict, settle_s: float = HUE_VERIFY_SETTLE_S):
+
+def schedule_hue_verify(expectations: dict):
+    """Queue {light_id: state_as_sent} for read-back. Cheap and synchronous —
+    merges into the pending map and ensures the drain task is running. A later
+    expectation for the same light wins (it's the more recent intent)."""
+    global _hue_verify_task
+    if not expectations:
+        return
+    if not config.get("hue_bridge_ip") or not config.get("hue_username"):
+        return
+    _hue_verify_pending.update({str(k): v for k, v in expectations.items()})
+    if _hue_verify_task is None or _hue_verify_task.done():
+        _hue_verify_task = asyncio.create_task(_hue_verify_drain())
+
+
+async def _hue_verify_drain(settle_s: float = HUE_VERIFY_SETTLE_S):
+    """Wait out the settle, then verify everything queued in one pass. Loops so
+    commands that arrive *during* a pass get their own pass rather than being
+    dropped — but still only one GET per settle window."""
+    try:
+        while _hue_verify_pending:
+            await asyncio.sleep(settle_s)
+            batch = dict(_hue_verify_pending)
+            _hue_verify_pending.clear()
+            await _hue_verify_repair(batch)
+    except asyncio.CancelledError:
+        pass
+    except Exception:
+        log.exception("Hue verify drain failed")
+
+
+async def _hue_verify_repair(expectations: dict):
     """expectations: {light_id: state_dict_as_sent}. Re-sends to any light whose
-    reported state disagrees with what we asked for.
+    reported state disagrees with what we asked for. Assumes the caller has
+    already waited for the mesh to settle.
 
     Only `on` and `bri` are compared. Color (xy/ct) is deliberately NOT checked:
     the bridge gamut-clamps and rounds it, so an exact comparison would report
@@ -1598,7 +1658,6 @@ async def _hue_verify_repair(expectations: dict, settle_s: float = HUE_VERIFY_SE
     if not ip or not username:
         return
     try:
-        await asyncio.sleep(settle_s)
         lights = await get_hue_lights(ip, username)
         actual = {l["id"]: l.get("state", {}) for l in lights}
 
@@ -1816,10 +1875,9 @@ async def control_room(req: RoomStateRequest):
         )
         results["govee"].append({"ip": device_ip, "slug": slug, "success": True})
 
-    # Read the Hue lights back and repair any that silently didn't take. Runs as
-    # a background task so the caller isn't held for the settle delay.
-    if hue_sent:
-        asyncio.create_task(_hue_verify_repair(hue_sent))
+    # Read the Hue lights back and repair any that silently didn't take. The
+    # drain runs as a background task so the caller isn't held for the settle.
+    schedule_hue_verify(hue_sent)
 
     publish_event("room", room=req.room_name)
     return {"results": results}
@@ -2376,18 +2434,24 @@ async def _run_scene_apply(req: SceneApplyRequest):
 
         async def do_hue():
             sent = {}
-            for t in req.hue:
-                try:
-                    res = await control_hue_light(HueLightStateRequest(
-                        light_id=t.light_id, on=t.on, r=t.r, g=t.g, b=t.b,
-                        color_temp=t.color_temp, brightness=t.brightness))
-                    if res.get("success") and res.get("state"):
-                        sent[str(t.light_id)] = res["state"]
-                except Exception as e:
-                    log.warning("scene hue failed %s: %s", t.light_id, e)
-                await tick("applying", apply_total, t.label)
-            if sent:
-                asyncio.create_task(_hue_verify_repair(sent))
+            # This loop is staggered by tick(); without the bulk guard each light
+            # would register its own read-back as it went, costing a GET every
+            # settle window for the length of the apply. One batch at the end.
+            _in_bulk_hue.set(True)
+            try:
+                for t in req.hue:
+                    try:
+                        res = await control_hue_light(HueLightStateRequest(
+                            light_id=t.light_id, on=t.on, r=t.r, g=t.g, b=t.b,
+                            color_temp=t.color_temp, brightness=t.brightness))
+                        if res.get("success") and res.get("state"):
+                            sent[str(t.light_id)] = res["state"]
+                    except Exception as e:
+                        log.warning("scene hue failed %s: %s", t.light_id, e)
+                    await tick("applying", apply_total, t.label)
+            finally:
+                _in_bulk_hue.set(False)
+            schedule_hue_verify(sent)
 
         async def do_govee_whole():
             for i, t in enumerate(req.govee_whole):
