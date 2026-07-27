@@ -1,6 +1,6 @@
 // ─── Light Card Component ───────────────────────────────────────────────────
 
-function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, onNicknameChange, roomName, segmentColors, segmentInfo, segmentBrightness, onSegmentStateRefresh, controlMode, onControlModeChange, segmentFillMode, onSegmentFillModeChange, onSegmentCountChange, ctCorrection }) {
+function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, onNicknameChange, roomName, segmentColors, segmentInfo, segmentBrightness, onSegmentStateRefresh, controlMode, onControlModeChange, segmentFillMode, onSegmentFillModeChange, onSegmentCountChange, ctCorrection, onRecheck }) {
   const isMobile = useIsMobile();
   const deviceBrightness = light.type === "hue"
     ? Math.round((light.state?.brightness || 0) / 254 * 100)
@@ -43,6 +43,7 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
   }, [light.state?.on, light.state?.brightness, light.state?.hue, light.state?.saturation, light.state?.xy, light.state?.color?.r, light.state?.color?.g, light.state?.color?.b, segmentBrightness]);
   const isOn = light.state?.on ?? false;
   const isReachable = light.state?.reachable ?? true;
+  const [rechecking, setRechecking] = useState(false);
   const hasColor = light.capabilities?.has_color;
   // Any color light can offer a White (color-temperature) mode. Lights with
   // native tunable white (Hue extended-color, Govee LAN) send a true CT command;
@@ -172,9 +173,31 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
             flexShrink: 0, fontSize: 13, color: "#fbbf24", lineHeight: 1, cursor: "default",
           }}>&#x25D0;</span>
         )}
-        {!isReachable && (
+        {/* The OFFLINE badge is itself the recheck control. A Hue light on a wall
+            switch reports unreachable while the switch is off; flip it back and the
+            bridge sees it at once, but the app only finds out when it asks again.
+            Putting the action on the badge means the fix sits exactly where the
+            problem is visible — same idiom as click-the-name-to-rename — instead of
+            making you hunt for a button in Settings. Falls back to a plain label
+            when no handler was passed. */}
+        {!isReachable && (onRecheck ? (
+          <button
+            onClick={(e) => { e.stopPropagation(); setRechecking(true); Promise.resolve(onRecheck(light)).finally(() => setRechecking(false)); }}
+            disabled={rechecking}
+            title={light.type === "hue"
+              ? "Ask the bridge again — use this after switching the light back on at the wall"
+              : "Re-scan the LAN for this device"}
+            style={{
+              fontSize: 9, color: "#f87171", fontWeight: 700, textTransform: "uppercase",
+              flexShrink: 0, background: "rgba(248,113,113,0.12)",
+              border: "1px solid rgba(248,113,113,0.35)", borderRadius: 6,
+              padding: "2px 6px", cursor: rechecking ? "wait" : "pointer",
+              display: "inline-flex", alignItems: "center", gap: 4, lineHeight: 1.4,
+            }}
+          >offline <span style={{ fontSize: 10 }}>{rechecking ? "…" : "↻"}</span></button>
+        ) : (
           <span style={{ fontSize: 9, color: "#f87171", fontWeight: 700, textTransform: "uppercase", flexShrink: 0 }}>offline</span>
-        )}
+        ))}
         <button
           onClick={() => onControl(light, { on: !isOn })}
           style={{

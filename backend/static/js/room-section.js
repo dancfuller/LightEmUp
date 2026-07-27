@@ -167,7 +167,7 @@ function ControlSurface({ view, views, onView, onClose, roomName, isMobile, chil
   );
 }
 
-function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGovee, onControlRoom, favorites, onFavoritesChange, nicknames, onNicknameChange, lightningActive, onLightningStart, onLightningStop, segmentInfo, segmentState, onSegmentStateRefresh, deviceModes, onDeviceModeChange, onDeviceModesBulkChange, segmentFillModes, onSegmentFillModeChange, onSegmentCountChange, roomLayouts, onLayoutChange, fixtures, onFixtureUpsert, onFixtureDelete, minSatEnabled, minSatPct, savedColorState, ctCorrection, onScheduleLook, lastApplied }) {
+function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGovee, onControlRoom, favorites, onFavoritesChange, nicknames, onNicknameChange, lightningActive, onLightningStart, onLightningStop, segmentInfo, segmentState, onSegmentStateRefresh, deviceModes, onDeviceModeChange, onDeviceModesBulkChange, segmentFillModes, onSegmentFillModeChange, onSegmentCountChange, roomLayouts, onLayoutChange, fixtures, onFixtureUpsert, onFixtureDelete, minSatEnabled, minSatPct, savedColorState, ctCorrection, onScheduleLook, lastApplied, onRecheck }) {
   const isMobile = useIsMobile();
   const [collapsed, setCollapsed] = useState(true);
   // Single overlay surface state — replaces the old per-panel show* booleans.
@@ -517,6 +517,7 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
                 segmentFillMode={segmentFillModes?.[devKey]}
                 onSegmentFillModeChange={(m) => onSegmentFillModeChange && onSegmentFillModeChange(devKey, m)}
                 onSegmentCountChange={onSegmentCountChange}
+                onRecheck={onRecheck}
                 ctCorrection={ctCorrection}
               />
             );

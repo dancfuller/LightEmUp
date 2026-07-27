@@ -187,6 +187,7 @@ function App() {
   // (forget) button. Re-scan is the section's main Re-scan button.
   const [missingGovee, setMissingGovee] = useState([]);
   const [rescanning, setRescanning] = useState(false);
+  const [hueRescanning, setHueRescanning] = useState(false);
   const [rooms, setRooms] = useState({});
   const [loading, setLoading] = useState(true);
   // Progressive status shown on the initial loading screen. Govee LAN discovery
@@ -613,6 +614,36 @@ function App() {
       setRescanning(false);
     }
   }, []);
+
+  // Re-read the Hue lights from the bridge. Unlike Govee there is nothing to
+  // "discover" — the bridge already knows every paired light — but a light on a
+  // wall switch goes `reachable: false` when the switch is cut and comes back
+  // when it's restored, and the app only learns that by asking again. This is
+  // the targeted version of the header's ↻ (which reloads everything): one
+  // bridge round-trip, so it's cheap enough to press repeatedly while waiting
+  // for a light to rejoin the mesh.
+  const rescanHue = useCallback(async () => {
+    setHueRescanning(true);
+    try {
+      const [lights, groups] = await Promise.all([
+        api("/hue/lights").catch(() => ({ lights: [] })),
+        api("/hue/groups").catch(() => ({ groups: [] })),
+      ]);
+      setHueLights(lights.lights || []);
+      setHueGroups(groups.groups || []);
+    } catch (e) {
+      console.warn("Hue re-scan failed:", e);
+    } finally {
+      setHueRescanning(false);
+    }
+  }, []);
+
+  // One handler for the offline badge on any card — each vendor's "check again"
+  // means something different (ask the bridge vs re-scan the LAN), so dispatch on
+  // the device type rather than making every call site know.
+  const recheckDevice = useCallback((light) => (
+    light?.type === "hue" ? rescanHue() : rescanGovee()
+  ), [rescanHue, rescanGovee]);
 
   const forgetGoveeDevice = useCallback(async (mac) => {
     try {
@@ -1047,6 +1078,7 @@ function App() {
                   savedColorState={roomColorState[roomName]}
                   lastApplied={roomLastApplied[roomName]}
                   ctCorrection={ctCalibrated}
+                  onRecheck={recheckDevice}
                   onScheduleLook={handleScheduleLook}
                 />
               );
@@ -1065,6 +1097,7 @@ function App() {
                 favorites={favoriteColors} onFavoritesChange={updateFavorites}
                 nicknames={nicknames} onNicknameChange={updateNickname}
                 ctCorrection={ctCalibrated}
+                onRecheck={recheckDevice}
               />
             )}
           </>
@@ -1082,6 +1115,7 @@ function App() {
                 <LightCard key={`hue-${light.id}`} light={light} onControl={controlHueLight}
                   favorites={favoriteColors} onFavoritesChange={updateFavorites}
                   nicknames={nicknames} onNicknameChange={updateNickname}
+                  onRecheck={recheckDevice}
                   roomName={deviceRoomMap[`hue:${light.id}`]} />
               ))}
               {goveeDevices.map(device => {
@@ -1106,6 +1140,7 @@ function App() {
                     }}
                     favorites={favoriteColors} onFavoritesChange={updateFavorites}
                     nicknames={nicknames} onNicknameChange={updateNickname}
+                    onRecheck={recheckDevice}
                     roomName={deviceRoomMap[devKey]}
                     segmentInfo={segmentInfo}
                     segmentColors={Object.keys(segColors).length > 0 ? segColors : null}
@@ -1173,6 +1208,17 @@ function App() {
                     }} />
                     {config?.hue_paired ? "Paired" : "Not paired"}
                   </span>
+                  {/* Parity with the Govee section. A light on a wall switch
+                      reports unreachable while the switch is off; when it's
+                      restored the bridge sees it immediately but the app won't
+                      until it asks again. */}
+                  {config?.hue_paired && (
+                    <button
+                      onClick={rescanHue} disabled={hueRescanning}
+                      title="Re-check which Hue lights the bridge can reach"
+                      style={{ padding: "4px 12px", borderRadius: 6, border: "1px solid #334155", background: "transparent", color: hueRescanning ? "#475569" : "#a5b4fc", fontSize: 11, fontWeight: 600, cursor: hueRescanning ? "wait" : "pointer" }}
+                    >{hueRescanning ? "Checking…" : "Re-scan"}</button>
+                  )}
                   <button onClick={() => setShowHueSetup(true)}
                     style={{ padding: "4px 12px", borderRadius: 6, border: "1px solid #334155", background: "transparent", color: "#a5b4fc", fontSize: 11, fontWeight: 600, cursor: "pointer" }}
                   >{config?.hue_paired ? "Re-pair" : "Set up"}</button>
@@ -1184,9 +1230,22 @@ function App() {
               </div>
               {hueLights.length > 0 ? (
                 <div style={{ borderTop: "1px solid #334155", paddingTop: 10 }}>
-                  <div style={{ fontSize: 11, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>
-                    {hueLights.length} lights
-                  </div>
+                  {/* Call out unreachable lights the way the Govee section calls
+                      out non-responding ones — otherwise the only clue is a small
+                      badge partway down the list. */}
+                  {(() => {
+                    const out = hueLights.filter(l => l.state?.reachable === false).length;
+                    return (
+                      <div style={{ fontSize: 11, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>
+                        {hueLights.length - out} of {hueLights.length} reachable
+                        {out > 0 && (
+                          <span style={{ color: "#f87171", marginLeft: 8 }}>
+                            · {out} unreachable — check the wall switch, then Re-scan
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })()}
                   {hueLights.map(light => {
                     const dk = `hue:${light.id}`;
                     const friendlyName = light.product_name || light.name || light.model || `Light ${light.id}`;

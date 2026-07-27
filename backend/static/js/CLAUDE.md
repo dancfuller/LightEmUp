@@ -86,6 +86,26 @@ sliders, hex) converge on the same `onColorSelect(r,g,b)`. `HexColorInput` is al
   guards the `currentColor`→local sync effect so an SSE refresh mid-edit can't clobber an
   unapplied pick. The bar reads "Pick a color to apply" until a color is known/applied.
 
+## Recovering an unreachable light (v3.14.0)
+A Hue light wired to a wall switch reports `state.reachable: false` while the switch is
+off. Flip it back and the **bridge** sees it immediately — but the app only learns by
+asking again, and nothing said so, which read as "you must reload the page".
+- **Nothing was broken.** `/api/hue/lights` is a live bridge query with no caching, and
+  `loadAll()` calls it on **every** run (not just the first), so the header's ↻ already
+  recovered a returning light. The gap was purely discoverability: ↻ is an unlabelled
+  global icon, while Govee had an explicit **Re-scan** button. Don't "fix" this by adding
+  caching or a bridge-side rescan — there is nothing to discover, the bridge already
+  knows every paired light.
+- **The OFFLINE badge on a LightCard IS the recheck control** (`onRecheck`). That puts the
+  fix where the problem is visible rather than in Settings — the same idiom as
+  click-the-name-to-rename. It falls back to a plain label when no handler is passed.
+- `onRecheck` is dispatched by device type in app.js (`recheckDevice`): Hue re-queries the
+  bridge (`rescanHue` — `/hue/lights` + `/hue/groups`, one round-trip, far cheaper than a
+  full `loadAll`), Govee re-runs the LAN scan (`rescanGovee`). **A new LightCard render
+  site should pass `onRecheck`**, or its offline devices become dead ends.
+- Settings → Hue Bridge has a **Re-scan** button mirroring Govee's, and the list header
+  reads "N of M reachable" with an unreachable count, so the state is visible there too.
+
 ## light-card.js — rename by clicking the name (v3.10.0)
 The card **title itself is the rename control** — click it (a faint ✎ sits beside it) and
 it becomes an inline input; Enter or blur saves, Escape abandons, and an `×` clears the
