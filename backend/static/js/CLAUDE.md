@@ -137,6 +137,25 @@ Assigns colors/temperatures across a room's devices and applies them.
   fallbacks resolve it. Each custom seed
   slot can be Color (hue) or White (a `kelvin` temperature); `applyMinSat` must not
   saturation-clamp `kelvin` entries.
+- **Curated palettes are VARIABLE length (4–8) — never pad to a fixed count (v3.13.0).**
+  Every library palette used to be exactly 8 colours, so any theme with fewer real ideas
+  was filled out with tints of colours already in it: "Watermelon" was 2 hues across 8
+  slots (four reds, four greens), and an audit found near-duplicates in **152 of 160**
+  palettes ("Fourth of July" listed `#f0f0f0` twice). Since the palette is a *pool* the
+  room draws from, those tints surfaced as "one light is just a paler version of that
+  other one". The library was re-cut with a **hue-family** test — not overall perceptual
+  distance, which can't see the problem (a red and a lighter red have zero hue difference,
+  so any hue-weighted metric scores them "far apart" on lightness alone). Two colours
+  within ~15° of hue earn separate slots only with a real tonal gap (~0.15 lightness);
+  near-neutrals are judged on lightness alone; floor of 4. Deliberately monochromatic
+  themes (Cranberry, Noir, Snowfall) are legitimate — they're just shorter now.
+  **When adding a palette, list only genuinely distinct colours.**
+- **Picking a library palette adopts ITS length**, replacing both `paletteColors` and
+  `paletteSource`. It used to keep whatever count was showing and pad the difference via
+  `extendPalette` — whose first extension round is a *lighter tint* of an existing colour,
+  which would re-create exactly what the re-cut removed. The +/− stepper still grows a
+  palette deliberately (and still generates tints when it runs out of real colours —
+  that's the user asking for more slots, not the library deciding for them).
 - **Palette is a shuffle pool, not a per-light list (v2.17.0):** do NOT trim the palette
   down to the light/segment count. `computePalette` already picks a distinct, room-sized
   subset from the full `paletteColors` and Shuffle (`shuffleSeed`) re-rolls which colors
