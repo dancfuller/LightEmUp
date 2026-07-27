@@ -255,6 +255,29 @@ add/edit form; `LocationCard` renders in Settings.
   `onRenameRoom` → `POST /api/rooms/rename`; it is NOT gated on `isDefault` (the seed room
   "Outside" is default yet must be renamable — the backend migrates every reference).
 
+## room-section.js — "Now showing" strip (v3.12.0)
+`RoomLastApplied` renders what the room was last set to — swatch dots + the look's name +
+a relative time — directly under the room name. It sits **OUTSIDE the `collapsed` gate**
+on purpose: rooms start collapsed, so a strip that only appeared when expanded would miss
+the exact moment it's wanted (opening the app in a new session and asking "what's this room
+set to?").
+- Data is `lastApplied={roomLastApplied[roomName]}` from app.js, sourced from
+  `config.room_last_applied` — **backend-recorded**, so it also reflects schedules that
+  fired while nobody had the app open. See `backend/CLAUDE.md` "Now showing" for why this
+  is separate from `savedColorState`/`room_color_state`.
+- A **schedule**-sourced entry gets a `⏰ <schedule name>` badge; an in-app change gets no
+  badge, because "you did this" is the boring default and doesn't need saying.
+- White entries carry `kelvin` instead of swatches and the chip is rendered here via
+  `kelvinToRGB`. Swatch dots use a fairly strong white rim — a navy/near-black team colour
+  is otherwise indistinguishable from the panel behind it.
+- `describeLook()` in **color-mode.js** names the look and is returned as `label` from
+  `buildScenePlan()` (so Apply and "Schedule this look" can't disagree). Mode display names
+  live in `MODE_LOOK_NAMES` — never render the internal mode keys.
+- **The "Set room to" white shortcuts fan out CLIENT-side**, so no room endpoint sees them;
+  `setRoomWhite` POSTs `/api/rooms/last-applied` explicitly, guarded on `isRealRoom` because
+  "Unassigned" isn't a room the backend knows. **Any new client-side whole-room fan-out
+  must do the same, or the header will keep advertising the previous look.**
+
 ## backup-restore.js — Settings → Backup & Restore (v3.11.0)
 `BackupRestoreCard` renders in the Settings tab (below `LocationCard`), with
 `onImported={() => loadAll()}` so a restore refreshes app state **without a page reload**.

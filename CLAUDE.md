@@ -194,6 +194,10 @@ All endpoints are under `/api/`. Key groups:
   refreshes with the live `/api/discover/govee` in the background)
 - `/api/hue/light`, `/api/govee/control` — individual device control
 - `/api/rooms`, `/api/rooms/control` — room CRUD and bulk control
+- `/api/rooms/last-applied` — record what a room is "Now showing" (the strip in each room
+  header). The backend records this itself on every whole-room path incl. schedule fires;
+  this endpoint is only for looks the frontend fans out client-side. Config key
+  `room_last_applied`. See `backend/CLAUDE.md` "Now showing"
 - `/api/room-layouts` — floor plan / line layout CRUD (auto-saved from frontend)
 - `/api/nicknames` — device nickname CRUD
 - `/api/identify` — flash a device to locate it (Hue native `alert`; Govee on/off blink then restore)

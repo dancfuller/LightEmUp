@@ -213,6 +213,9 @@ function App() {
   const [roomLayouts, setRoomLayouts] = useState({});
   const [fixtures, setFixtures] = useState({});
   const [roomColorState, setRoomColorState] = useState({});
+  // What each room was last set to (backend-recorded, incl. schedule fires) —
+  // drives the "Now showing" strip in each room header.
+  const [roomLastApplied, setRoomLastApplied] = useState({});
   const [ctCorrection, setCtCorrection] = useState({});
   // ctRgb: RGB-space white calibration (takes precedence over ctCorrection).
   const [ctRgb, setCtRgb] = useState({});
@@ -324,6 +327,7 @@ function App() {
       setRoomLayouts(cfg.room_layouts || {});
       setFixtures(cfg.fixtures || {});
       setRoomColorState(cfg.room_color_state || {});
+      setRoomLastApplied(cfg.room_last_applied || {});
       setCtCorrection(cfg.ct_correction || {});
       setCtRgb(cfg.ct_rgb || {});
       setDeviceModes(cfg.device_modes || {});
@@ -1041,6 +1045,7 @@ function App() {
                   minSatEnabled={minSatEnabled}
                   minSatPct={minSatPct}
                   savedColorState={roomColorState[roomName]}
+                  lastApplied={roomLastApplied[roomName]}
                   ctCorrection={ctCalibrated}
                   onScheduleLook={handleScheduleLook}
                 />

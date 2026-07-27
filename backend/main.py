@@ -113,6 +113,15 @@ DEFAULT_CONFIG = {
                           # (scene math is browser-only); the scheduler re-resolves
                           # each Govee entry's IP from its mac at fire time. See
                           # _scheduler_loop / _schedule_due / _fire_schedule.
+    "room_last_applied": {},  # room name → what that room was last set to, for the
+                          # "Now showing" strip in the room header:
+                          #   { kind, label, swatches: [[r,g,b],…], kelvin, at,
+                          #     source: "app"|"schedule", source_detail }
+                          # DISTINCT from room_color_state, which stores the Scenes
+                          # panel's *recipe* so its controls rehydrate. This stores the
+                          # resolved RESULT, is written by every whole-room path
+                          # (including schedules firing server-side), and is the only
+                          # one that can answer "what is this room set to right now".
     "location": {},       # { lat, lng } — for sun-relative (sunrise/sunset) triggers
     "zones": {},          # name-keyed groups of rooms: { zoneName: { rooms: [name,…] } }
                           # A zone is a scheduling target that fans a white/color/power
@@ -892,7 +901,18 @@ def _freshen_scene_payload(payload: dict):
     return p if has_any else None
 
 
-async def _apply_room_white(room_name: str, kelvin: int, brightness_pct: int):
+def _white_label(kelvin: int) -> str:
+    """Name a white temperature the way the room header's shortcuts do, so a
+    schedule firing 2700K reads the same as pressing Soft White."""
+    if kelvin <= 2800:
+        return f"Soft White · {kelvin}K"
+    if kelvin >= 5000:
+        return f"Cool White · {kelvin}K"
+    return f"White · {kelvin}K"
+
+
+async def _apply_room_white(room_name: str, kelvin: int, brightness_pct: int,
+                            source: str = "app", source_detail: Optional[str] = None):
     """Set every light in a room to a white color temperature at a brightness %.
     Mirrors the frontend setRoomWhite fan-out (Hue in mireds, Govee in kelvin)."""
     room = config.get("rooms", {}).get(room_name)
@@ -918,9 +938,14 @@ async def _apply_room_white(room_name: str, kelvin: int, brightness_pct: int):
             await control_govee(GoveeCommandRequest(
                 ip=ip, mac=slug, on=True, brightness=brightness_pct,
                 color_temp_kelvin=kelvin))
+    # No swatch: the frontend renders the chip from `kelvin` via kelvinToRGB, so
+    # the backend doesn't need discovery's colour math just for a label.
+    record_room_applied(room_name, "white", _white_label(kelvin), kelvin=kelvin,
+                        source=source, source_detail=source_detail)
 
 
-async def _apply_room_color(room_name: str, r: int, g: int, b: int, brightness_pct: int):
+async def _apply_room_color(room_name: str, r: int, g: int, b: int, brightness_pct: int,
+                            source: str = "app", source_detail: Optional[str] = None):
     """Set every light in a room to one RGB color at a brightness %."""
     room = config.get("rooms", {}).get(room_name)
     if not room:
@@ -943,30 +968,41 @@ async def _apply_room_color(room_name: str, r: int, g: int, b: int, brightness_p
         if ip:
             await control_govee(GoveeCommandRequest(
                 ip=ip, mac=slug, on=True, brightness=brightness_pct, r=r, g=g, b=b))
+    record_room_applied(room_name, "color", "Solid color", swatches=[[r, g, b]],
+                        source=source, source_detail=source_detail)
 
 
-async def _apply_room_power(room_name: str, on: bool):
+async def _apply_room_power(room_name: str, on: bool,
+                            source: str = "app", source_detail: Optional[str] = None):
     """Turn a whole room on (resume last state) or off, via the normal room
     control fan-out (Hue + Govee, incl. segment-clear on off)."""
     try:
         await control_room(RoomStateRequest(room_name=room_name, on=bool(on)))
+        if source != "app":
+            # control_room already recorded this, but as an in-app action. Restamp
+            # it so the header credits the schedule that actually did it.
+            record_room_applied(room_name, "power",
+                                "Resumed last lighting" if on else "Turned off",
+                                source=source, source_detail=source_detail)
     except HTTPException:
         log.warning("Scheduler: power action — room %r not found", room_name)
 
 
-async def _apply_action_to_room(room: str, action: dict):
+async def _apply_action_to_room(room: str, action: dict,
+                                source: str = "app", source_detail: Optional[str] = None):
     """Fan a non-scene action (white / color / power) out to a single room.
     Shared by room-targeted and zone-targeted schedules."""
     atype = action.get("type")
     if atype == "white":
         await _apply_room_white(room, int(action.get("kelvin", 2700)),
-                                int(action.get("brightness", 100)))
+                                int(action.get("brightness", 100)), source, source_detail)
     elif atype == "color":
         rgb = action.get("rgb") or {}
         await _apply_room_color(room, int(rgb.get("r", 255)), int(rgb.get("g", 255)),
-                                int(rgb.get("b", 255)), int(action.get("brightness", 100)))
+                                int(rgb.get("b", 255)), int(action.get("brightness", 100)),
+                                source, source_detail)
     elif atype == "power":
-        await _apply_room_power(room, bool(action.get("on", True)))
+        await _apply_room_power(room, bool(action.get("on", True)), source, source_detail)
 
 
 async def _fire_schedule(sched: dict):
@@ -988,6 +1024,12 @@ async def _fire_schedule(sched: dict):
                 log.warning("Scheduler: %r — scene has no resolvable devices, skipped", name)
                 return
             req = SceneApplyRequest(**payload)
+            # Attribute the room's "Now showing" to this schedule rather than to
+            # someone in the app. The snapshot may predate labels, hence the fallback.
+            req.source = "schedule"
+            req.source_detail = name
+            if not req.label:
+                req.label = "Scheduled scene"
             existing = _scene_tasks.get(req.room)
             if existing and not existing.done():
                 existing.cancel()
@@ -1004,11 +1046,11 @@ async def _fire_schedule(sched: dict):
                     return
                 for member in z.get("rooms", []):
                     if member in config.get("rooms", {}):
-                        await _apply_action_to_room(member, action)
+                        await _apply_action_to_room(member, action, "schedule", name)
                     else:
                         log.warning("Scheduler: %r — zone member %r missing, skipped", name, member)
             else:
-                await _apply_action_to_room(room, action)
+                await _apply_action_to_room(room, action, "schedule", name)
         else:
             log.warning("Scheduler: %r — unknown action type %r", name, atype)
     except Exception:
@@ -1810,7 +1852,8 @@ async def delete_room(room_name: str):
     removed = room_name in config.get("rooms", {})
     if removed:
         del config["rooms"][room_name]
-    for key in ("room_layouts", "room_color_state", "lightning_scenes", "room_presets"):
+    for key in ("room_layouts", "room_color_state", "lightning_scenes", "room_presets",
+                "room_last_applied"):
         d = config.get(key)
         if isinstance(d, dict) and room_name in d:
             del d[room_name]
@@ -1885,6 +1928,17 @@ async def control_room(req: RoomStateRequest):
     # Read the Hue lights back and repair any that silently didn't take. The
     # drain runs as a background task so the caller isn't held for the settle.
     schedule_hue_verify(hue_sent)
+
+    # Note what the room is now showing. A brightness-ONLY call is deliberately not
+    # recorded: that's the room slider, which fires repeatedly while dragging and
+    # would otherwise churn the record (and overwrite the scene name) on every tick.
+    if req.on is False:
+        record_room_applied(req.room_name, "power", "Turned off")
+    elif req.r is not None and req.g is not None and req.b is not None:
+        record_room_applied(req.room_name, "color", "Solid color",
+                            swatches=[[req.r, req.g, req.b]])
+    elif req.on is True and req.brightness is None:
+        record_room_applied(req.room_name, "power", "Resumed last lighting")
 
     publish_event("room", room=req.room_name)
     return {"results": results}
@@ -1966,6 +2020,8 @@ async def start_lightning(req: LightningStartRequest):
     success = await scene_manager.start_lightning(
         req.room_name, room_config, hue_ip, hue_username, settings
     )
+    if success:
+        record_room_applied(req.room_name, "lightning", "Lightning storm")
     return {"success": success}
 
 
@@ -2372,6 +2428,14 @@ class SceneApplyRequest(BaseModel):
     govee_whole: list[SceneGoveeWhole] = []
     razer: list[SceneRazer] = []
     cloud: list[SceneCloudDevice] = []
+    # Human name for the look ("Palette · Sunset", "Chicago Bears"). Only the
+    # browser knows it — the scene math lives there — so it rides along with the
+    # resolved plan and is stored verbatim for the room header's "Now showing".
+    label: Optional[str] = None
+    # Set when the scheduler replays a stored snapshot, so the header can say the
+    # room was changed by a schedule rather than by someone in the app.
+    source: Optional[str] = None
+    source_detail: Optional[str] = None
 
 
 class SceneCancelRequest(BaseModel):
@@ -2504,6 +2568,13 @@ async def _run_scene_apply(req: SceneApplyRequest):
 
         await asyncio.gather(do_hue(), do_govee_whole(), do_razer(), do_cloud())
 
+        # Record only on COMPLETION — a cancelled apply left the room half-set, so
+        # claiming it's "now showing" that look would be a lie.
+        record_room_applied(
+            room, "scene", req.label or "Custom scene",
+            swatches=_scene_swatches(req),
+            source=req.source or "app", source_detail=req.source_detail,
+        )
         _scene_emit(room, phase="done", total=apply_total, done=apply_total, label="", active=False)
     except asyncio.CancelledError:
         _scene_emit(room, phase="canceled", active=False, label="")
@@ -2646,6 +2717,113 @@ async def set_room_color_state(req: RoomColorStateRequest):
     return {"success": True}
 
 
+# ─── "Now showing": what each room was last set to ──────────────────────────
+# room_color_state stores the Scenes panel's *recipe* so its controls rehydrate.
+# It is only written when someone presses Apply in that panel — so it says nothing
+# about a schedule that fired overnight, a white shortcut, or the room being turned
+# off, and a second session reading it can be badly out of date. This records the
+# resolved RESULT instead, from EVERY whole-room path, so the room header can
+# answer "what is this room set to, when, and who did it" without opening anything.
+ROOM_SWATCH_LIMIT = 10   # enough to read a palette at a glance; a strip, not a list
+
+
+def _dedupe_swatches(colors: list) -> list:
+    """Distinct RGB triples in first-seen order, capped. Order is preserved because
+    a palette reads as a sequence — sorting it would destroy the look's identity."""
+    out, seen = [], set()
+    for c in colors:
+        if not c or len(c) != 3:
+            continue
+        try:
+            t = (max(0, min(255, int(c[0]))), max(0, min(255, int(c[1]))), max(0, min(255, int(c[2]))))
+        except (TypeError, ValueError):
+            continue
+        if t in seen:
+            continue
+        seen.add(t)
+        out.append(list(t))
+        if len(out) >= ROOM_SWATCH_LIMIT:
+            break
+    return out
+
+
+def _scene_swatches(req: "SceneApplyRequest") -> list:
+    """Pull the representative colors out of an already-resolved apply payload.
+
+    The scene math lives in the browser, but the payload it sends is fully
+    resolved — so the swatches are derivable here and don't need to be sent
+    separately (or recomputed, which the backend can't do)."""
+    colors = []
+    for h in req.hue:
+        if h.r is not None:
+            colors.append([h.r, h.g, h.b])
+    for g in req.govee_whole:
+        if g.r is not None:
+            colors.append([g.r, g.g, g.b])
+    for rz in req.razer:
+        colors.extend(rz.colors or [])
+    for cd in req.cloud:
+        for grp in cd.groups:
+            if grp.r is not None:
+                colors.append([grp.r, grp.g, grp.b])
+    return _dedupe_swatches(colors)
+
+
+def record_room_applied(room: str, kind: str, label: str,
+                        swatches: Optional[list] = None,
+                        kelvin: Optional[int] = None,
+                        source: str = "app",
+                        source_detail: Optional[str] = None):
+    """Record what `room` was just set to. Best-effort display metadata — it must
+    never break a light command, so callers don't need to guard it."""
+    try:
+        entry = {
+            "kind": kind,               # scene | white | color | power | lightning
+            "label": label,
+            "at": _now_iso(),
+            "source": source,           # "app" | "schedule"
+        }
+        if swatches:
+            entry["swatches"] = swatches[:ROOM_SWATCH_LIMIT]
+        if kelvin is not None:
+            entry["kelvin"] = int(kelvin)
+        if source_detail:
+            entry["source_detail"] = source_detail
+        config.setdefault("room_last_applied", {})[room] = entry
+        schedule_save()
+        # Publish UNSOURCED (source=None overrides the ContextVar via **fields) so
+        # the session that caused this refreshes too — clients ignore their own
+        # echoes, and the actor is exactly who most wants to see the new strip.
+        # Also lift _suppress_publish for this one event: a scene apply sets it for
+        # the whole run, which would otherwise swallow the very record that says
+        # the scene finished.
+        token = _suppress_publish.set(False)
+        try:
+            publish_event("room-applied", room=room, source=None)
+        finally:
+            _suppress_publish.reset(token)
+    except Exception:
+        log.exception("Could not record last-applied look for %r", room)
+
+
+class RoomAppliedRequest(BaseModel):
+    """For looks the frontend fans out CLIENT-side (the "Set room to" white
+    shortcuts drive each device directly, so no room endpoint sees them)."""
+    room_name: str
+    kind: str
+    label: str
+    swatches: Optional[list] = None
+    kelvin: Optional[int] = None
+
+
+@app.post("/api/rooms/last-applied")
+async def set_room_last_applied(req: RoomAppliedRequest):
+    record_room_applied(req.room_name, req.kind, req.label,
+                        swatches=_dedupe_swatches(req.swatches or []),
+                        kelvin=req.kelvin)
+    return {"success": True}
+
+
 class CTCalibrationRequest(BaseModel):
     device_key: str  # "govee:<ip>"
     points: list  # [{ in: requestedK, out: correctedK }, ...]; [] clears calibration
@@ -2721,6 +2899,7 @@ async def get_config():
         "fixtures": config.get("fixtures", {}),
         "device_state": config.get("device_state", {}),
         "room_color_state": config.get("room_color_state", {}),
+        "room_last_applied": config.get("room_last_applied", {}),
         "ct_correction": config.get("ct_correction", {}),
         "ct_rgb": config.get("ct_rgb", {}),
         "device_modes": config.get("device_modes", {}),
@@ -3280,7 +3459,8 @@ async def rename_room(req: RoomRenameRequest):
         raise HTTPException(409, f"A room named '{new}' already exists")
 
     # Move the key in every room-name-keyed sidecar dict.
-    for key in ("rooms", "room_layouts", "room_color_state", "lightning_scenes", "room_presets"):
+    for key in ("rooms", "room_layouts", "room_color_state", "lightning_scenes",
+                "room_presets", "room_last_applied"):
         d = config.get(key)
         if isinstance(d, dict) and old in d:
             d[new] = d.pop(old)

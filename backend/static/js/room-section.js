@@ -1,5 +1,98 @@
 // ─── Room Section ──────────────────────────────────────────────────────────
 
+// "Now showing" — what this room was last set to, in the header so it's readable
+// WITHOUT opening the Scenes panel and even while the room is collapsed. The
+// point is cross-session recall: set a look on your phone, open a laptop later,
+// and the room still tells you what it's wearing. The record is written by the
+// BACKEND on every whole-room change (see record_room_applied), so it also covers
+// schedules that fired while nobody had the app open — which is exactly the case
+// the old room_color_state couldn't answer.
+function relativeTime(iso) {
+  if (!iso) return "";
+  const then = new Date(iso.endsWith("Z") || iso.includes("+") ? iso : iso + "Z");
+  const secs = Math.floor((Date.now() - then.getTime()) / 1000);
+  if (!isFinite(secs)) return "";
+  if (secs < 45) return "just now";
+  if (secs < 3600) return `${Math.round(secs / 60)}m ago`;
+  if (secs < 86400) return `${Math.round(secs / 3600)}h ago`;
+  const days = Math.round(secs / 86400);
+  return days === 1 ? "yesterday" : `${days}d ago`;
+}
+
+function RoomLastApplied({ entry, isMobile }) {
+  if (!entry || !entry.label) return null;
+
+  // White is stored as a Kelvin value rather than swatches, so the backend never
+  // needs colour math just to label a temperature — render the chip here.
+  let swatches = entry.swatches || [];
+  if (!swatches.length && entry.kelvin) {
+    const c = kelvinToRGB(entry.kelvin);
+    if (c) swatches = [[c.r, c.g, c.b]];
+  }
+  const off = entry.kind === "power" && /off/i.test(entry.label);
+  const when = relativeTime(entry.at);
+  const bySchedule = entry.source === "schedule";
+  const dot = isMobile ? 13 : 15;
+
+  return (
+    <div
+      title={`${entry.label}${bySchedule && entry.source_detail ? ` — set by schedule "${entry.source_detail}"` : ""}${when ? ` · ${when}` : ""}`}
+      style={{
+        display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
+        padding: isMobile ? "6px 9px" : "6px 11px", borderRadius: 9,
+        background: "rgba(15,27,46,0.75)", border: "1px solid #24334a",
+      }}
+    >
+      <span style={{ fontSize: 9, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.7 }}>
+        Now showing
+      </span>
+
+      {swatches.length > 0 && (
+        <span style={{ display: "flex", alignItems: "center", gap: 3 }}>
+          {swatches.map((c, i) => (
+            <span key={i} style={{
+              width: dot, height: dot, borderRadius: "50%",
+              background: `rgb(${c[0]},${c[1]},${c[2]})`,
+              // Fairly strong rim: a very dark swatch (navy, near-black team
+              // colors) is otherwise indistinguishable from the panel behind it.
+              border: "1px solid rgba(255,255,255,0.3)", flexShrink: 0,
+            }} />
+          ))}
+        </span>
+      )}
+      {off && (
+        <span style={{
+          width: dot, height: dot, borderRadius: "50%", background: "#0f172a",
+          border: "1px solid #334155", flexShrink: 0,
+        }} />
+      )}
+      {entry.kind === "lightning" && <span style={{ fontSize: dot }}>⚡</span>}
+
+      <span style={{
+        fontSize: isMobile ? 11 : 12, fontWeight: 600,
+        color: off ? "#94a3b8" : "#e2e8f0",
+        minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+      }}>{entry.label}</span>
+
+      {/* Attribution only when it wasn't a person in the app — "you did this" is
+          the boring default and doesn't need saying. */}
+      {bySchedule && (
+        <span style={{
+          fontSize: 10, fontWeight: 700, color: "#a5b4fc",
+          background: "rgba(99,102,241,0.14)", border: "1px solid rgba(99,102,241,0.3)",
+          borderRadius: 6, padding: "1px 6px", whiteSpace: "nowrap",
+        }}>⏰ {entry.source_detail || "Schedule"}</span>
+      )}
+
+      {when && (
+        <span style={{ fontSize: 10, color: "#64748b", marginLeft: "auto", whiteSpace: "nowrap" }}>
+          {when}
+        </span>
+      )}
+    </div>
+  );
+}
+
 // Overlay control surface: a right-side drawer on desktop, a bottom sheet on
 // mobile. Holds the per-room Lightning / Scenes / Controls / Debug panels so
 // opening one no longer reflows the light-card grid below.
@@ -74,7 +167,7 @@ function ControlSurface({ view, views, onView, onClose, roomName, isMobile, chil
   );
 }
 
-function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGovee, onControlRoom, favorites, onFavoritesChange, nicknames, onNicknameChange, lightningActive, onLightningStart, onLightningStop, segmentInfo, segmentState, onSegmentStateRefresh, deviceModes, onDeviceModeChange, onDeviceModesBulkChange, segmentFillModes, onSegmentFillModeChange, onSegmentCountChange, roomLayouts, onLayoutChange, fixtures, onFixtureUpsert, onFixtureDelete, minSatEnabled, minSatPct, savedColorState, ctCorrection, onScheduleLook }) {
+function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGovee, onControlRoom, favorites, onFavoritesChange, nicknames, onNicknameChange, lightningActive, onLightningStart, onLightningStop, segmentInfo, segmentState, onSegmentStateRefresh, deviceModes, onDeviceModeChange, onDeviceModesBulkChange, segmentFillModes, onSegmentFillModeChange, onSegmentCountChange, roomLayouts, onLayoutChange, fixtures, onFixtureUpsert, onFixtureDelete, minSatEnabled, minSatPct, savedColorState, ctCorrection, onScheduleLook, lastApplied }) {
   const isMobile = useIsMobile();
   const [collapsed, setCollapsed] = useState(true);
   // Single overlay surface state — replaces the old per-panel show* booleans.
@@ -136,13 +229,25 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
   // Both shortcuts force full brightness. Brightness scale is vendor-specific:
   // Hue's `bri` is 1–254, Govee's is 0–100, so 100% is 254 vs 100 respectively.
   const SOFT_WHITE_K = 2700, COOL_WHITE_K = 6500;
-  const setRoomWhite = (kelvin) => {
+  const setRoomWhite = (kelvin, label) => {
     hueLights.forEach(l => onControlHue(l, { on: true, brightness: 254, color_temp: kelvinToMired(kelvin) }));
     goveeDevices.forEach(d => onControlGovee(d, { on: true, brightness: 100, color_temp_kelvin: kelvin }));
+    // This fan-out is CLIENT-side, so no room endpoint sees it — tell the backend
+    // what the room now shows, or the header would still advertise the old scene.
+    // Only for real rooms: "Unassigned" isn't a room the backend knows about.
+    if (isRealRoom) {
+      api("/rooms/last-applied", {
+        method: "POST",
+        body: JSON.stringify({
+          room_name: name, kind: "white",
+          label: `${label} · ${kelvin}K`, kelvin,
+        }),
+      }).catch(e => console.warn("[RoomSection] last-applied save failed:", e));
+    }
   };
   const whiteBtn = (label, kelvin, fg, bg, border) => (
     <button
-      onClick={() => setRoomWhite(kelvin)}
+      onClick={() => setRoomWhite(kelvin, label)}
       title={`Set every light in this room to ${kelvin}K white at full brightness`}
       style={{
         padding: isMobile ? "6px 12px" : "6px 16px", borderRadius: 8,
@@ -338,6 +443,11 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
             </button>
           </div>
         </div>
+
+        {/* What the room is currently set to. Sits directly under the name and
+            OUTSIDE the `collapsed` gate, so a collapsed room still answers "what
+            did I set this to?" at a glance — the whole point of the feature. */}
+        <RoomLastApplied entry={lastApplied} isMobile={isMobile} />
 
         {/* Surface openers */}
         <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 6 : 8, flexWrap: "wrap" }}>

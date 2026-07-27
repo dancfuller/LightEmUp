@@ -146,6 +146,43 @@ coroutine gets its own context copy) and normal concurrent UI requests are unaff
 **When you add a new bulk Hue path, collect `res["state"]`, set `_in_bulk_hue`, and hand the
 batch to `schedule_hue_verify`.**
 
+## "Now showing" — what each room was last set to (v3.12.0)
+`config["room_last_applied"][room]` = `{kind, label, swatches, kelvin, at, source,
+source_detail}` (additive). It powers the strip in each room header, so opening a fresh
+session on another device answers "what did I set this room to?" without opening the
+Scenes panel.
+- **This is NOT `room_color_state`, and the difference is the whole point.**
+  `room_color_state` stores the Scenes panel's *recipe* so its controls rehydrate, and it
+  is only written when someone presses Apply in that panel. It therefore says nothing
+  about a schedule that fired overnight, a white shortcut, or the room being switched off
+  — a second session reading it can be confidently wrong. `room_last_applied` stores the
+  resolved **result** and is written by **every whole-room path**. Keep both; they answer
+  different questions.
+- `record_room_applied(...)` is the single writer and is **best-effort** — it swallows its
+  own exceptions so a display record can never break a light command. Call sites:
+  `_run_scene_apply` (**only on completion** — a cancelled apply left the room half-set, so
+  claiming it's showing that look would be a lie), `control_room`, the scheduler's
+  `_apply_room_white`/`_apply_room_color`/`_apply_room_power`, and `start_lightning`.
+- **`control_room` deliberately ignores a brightness-ONLY call.** That's the room slider,
+  which fires repeatedly while dragging; recording it would churn the record and overwrite
+  the scene's name with "brightness".
+- **Swatches are derived server-side by `_scene_swatches`** from the already-resolved apply
+  payload — the backend can't compute scene colours (that math is browser-only) but the
+  payload it receives is fully resolved, so nothing extra has to be sent. Duplicates
+  collapse, order is preserved (a palette reads as a sequence), capped at
+  `ROOM_SWATCH_LIMIT`. White stores `kelvin` and **no** swatch: the frontend renders that
+  chip via `kelvinToRGB`, so the backend needs no colour math for a temperature.
+- **The `label` comes from the browser** (`describeLook()` in color-mode.js) on
+  `SceneApplyRequest.label`, because only the browser knows which mode produced the colors.
+  `source`/`source_detail` mark a schedule fire so the header can credit it instead of
+  implying a person did it.
+- **The event is published UNSOURCED** (`publish_event(..., source=None)`) and temporarily
+  lifts `_suppress_publish`. Clients ignore their own echoes, but the session that just
+  applied a look is exactly the one that wants the new strip; and a scene apply sets
+  `_suppress_publish` for its whole run, which would otherwise swallow the record saying it
+  finished.
+- It is room-name-keyed, so it's in **both** `rename_room` and `delete_room`.
+
 ## Backup / restore — export + import every setting (v3.11.0)
 Everything the user has built (rooms, layouts, nicknames, calibration, fixtures, scenes,
 schedules, zones) lives in ONE file on the Pi's microSD card, and those cards wear out.

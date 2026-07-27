@@ -100,6 +100,17 @@ function orderPaletteForCycle(cols) {
   return seq;
 }
 
+// Display names for the spatial modes, used to name an applied look for the room
+// header's "Now showing" strip (see describeLook in buildScenePlan). The mode keys
+// themselves are internal ("beacon"), so don't render those to the user directly.
+const MODE_LOOK_NAMES = {
+  palette: "Palette",
+  gradient: "Gradient",
+  tonal: "Tonal",
+  custom: "Custom",
+  beacon: "Beacon",
+};
+
 // ─── Gradient Direction Picker with Mini Map ──────────────────────────────
 function GradientDirectionPicker({ direction, onDirectionChange, availableDirections, placedLights, layout, preview, lightMap, nicknames, isLinear }) {
   const isMobile = useIsMobile();
@@ -1648,8 +1659,32 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
       });
     });
 
-    return { room: roomName, brightness, base_seeds, hue, govee_whole, razer, cloud };
+    return { room: roomName, brightness, base_seeds, hue, govee_whole, razer, cloud,
+             label: describeLook() };
   };
+
+  // Human name for the look being applied, stored by the backend and shown in the
+  // room header's "Now showing" strip. Only the browser knows what mode produced
+  // these colors — the backend just receives resolved RGB — so the name has to
+  // ride along with the plan. Lives inside buildScenePlan's scope so Apply and
+  // "Schedule this look" always agree on the name.
+  function describeLook() {
+    if (mode === "teams") return selectedTeam || "Team colors";
+    if (mode === "ncaa") return selectedNcaa || "College colors";
+    if (mode === "flags") return selectedFlag || "Flag colors";
+    if (colorSpace === "white") {
+      // Palette-in-white uses a named CT range; the other modes sweep up to maxKelvin.
+      if (mode === "palette") {
+        const p = CT_PALETTES[ctPreset] || CT_PALETTES[0];
+        return p ? `White · ${p.name}` : "White";
+      }
+      return `White · ${MODE_LOOK_NAMES[mode] || mode}`;
+    }
+    const base = MODE_LOOK_NAMES[mode] || mode;
+    if (mode === "palette") return `${base} · ${paletteColors.length} colors`;
+    if (mode === "custom") return `${base} · ${customColors.length} colors`;
+    return base;
+  }
 
   const applyColors = () => {
     if (!preview || applying) return;
