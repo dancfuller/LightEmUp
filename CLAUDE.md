@@ -44,7 +44,19 @@ instead of spelunking, and **update them when you change how something works.**
 - Runs on a Raspberry Pi as the `lightemup` systemd service.
 - To deploy after pushing, the user runs (in their PowerShell):
   `ssh -t pi@lightemup '~/lightemup/deploy/update.sh'`
-  (git pull --ff-only → pip install → reinstall unit if changed → restart service).
+  (git pull --ff-only → pip install → reinstall unit if changed → restart → verify).
+- **The restart needs sudo, and that has bitten twice.** Run it from a real terminal;
+  the `!` prefix in Claude Code is NOT a terminal, so `ssh -t` can't allocate a PTY and
+  sudo has nothing to prompt on. One-time fix so it works unattended:
+  `ssh -t pi@lightemup 'sudo ~/lightemup/deploy/install-sudoers.sh'` — installs a
+  narrowly-scoped `/etc/sudoers.d/lightemup` (restart / daemon-reload / status only;
+  writing the unit file still needs a password, since that's equivalent to root).
+- `update.sh` **checks it can finish before it changes anything** (v3.15.1). A deploy
+  that pulls new files and then can't restart leaves the worst state — new frontend on
+  disk, old backend running, so the browser calls endpoints that don't exist yet. It
+  also ends by printing `/api/version` next to the expected git hash, so a stale process
+  is obvious rather than silent. **Always confirm the deployed version afterwards** —
+  a deploy has raced a push and landed a commit short before.
 - **After every code change, state the deploy impact:** frontend `static/js/*` change
   = the running deploy just needs a normal page load; any backend `*.py` change = server
   restart required. Emit the ssh command only when a restart is needed, and only after
@@ -112,6 +124,12 @@ backend/
                           # (downloads to the browser; import previews then replaces)
       app.js              # App component — state, routing, SSE client, API orchestration
     sounds/farts/       # 20 MP3 files for "funny mode" thunder replacement
+deploy/
+  update.sh            # Pull → pip → reinstall unit if changed → restart → verify.
+                       # Aborts BEFORE pulling if it can't sudo (no TTY), so a deploy
+                       # never half-lands.
+  install-sudoers.sh   # One-time: narrow NOPASSWD rule so deploys need no terminal.
+  lightemup.service    # systemd unit
 tools/
   build-location-data.py # Regenerates backend/static/js/location-data.js from the
                        # public-domain US Census ZCTA gazetteer (+ a curated city list).

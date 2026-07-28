@@ -89,10 +89,24 @@ If the Hue bridge's IP differs on the Pi's view of the LAN (unlikely — same ne
 After committing + pushing changes from Windows:
 
 ```powershell
-ssh lightemup '~/lightemup/deploy/update.sh'
+ssh -t lightemup '~/lightemup/deploy/update.sh'
 ```
 
-That pulls main, refreshes deps if `requirements.txt` changed, and restarts the service. ~3 seconds end-to-end.
+That pulls main, refreshes deps if `requirements.txt` changed, restarts the service, and prints the running version next to the expected git hash so a stale process is obvious. ~3 seconds end-to-end.
+
+**The restart needs `sudo`, so it will ask for your password** — hence `-t`, which gives ssh a terminal to prompt on. If there's no terminal (running it through a script, a task runner, or Claude Code's `!` prefix), `update.sh` **stops before pulling anything** rather than half-deploying: new files on disk with the old server still running is a genuinely bad state, because the browser then calls endpoints that don't exist yet.
+
+### Make deploys passwordless (one time)
+
+```powershell
+ssh -t lightemup 'sudo ~/lightemup/deploy/install-sudoers.sh'
+```
+
+Installs `/etc/sudoers.d/lightemup` allowing only `systemctl restart lightemup`, `daemon-reload`, and `status` without a password. After that `ssh lightemup '~/lightemup/deploy/update.sh'` works with no terminal at all.
+
+Installing the systemd **unit file** is deliberately left out of that rule: being able to write an arbitrary unit and reload it is equivalent to handing over root, and the unit changes about once a year. On the rare deploy that does change it, `update.sh` warns and still restarts so your code change goes live — re-run from a terminal to pick up the unit itself.
+
+Undo with `sudo rm /etc/sudoers.d/lightemup`.
 
 ## How auto-start works
 
@@ -106,6 +120,7 @@ That pulls main, refreshes deps if `requirements.txt` changed, and restarts the 
 |---|---|
 | `install.sh` | First-time setup. Run once on the Pi. |
 | `update.sh` | Deploy script. Run after every push. |
+| `install-sudoers.sh` | Optional, once: passwordless service control so deploys need no terminal. |
 | `lightemup.service` | systemd unit (installed to `/etc/systemd/system/`). |
 | `lightemup.avahi.service` | mDNS advertisement (installed to `/etc/avahi/services/`). |
 
@@ -116,3 +131,5 @@ That pulls main, refreshes deps if `requirements.txt` changed, and restarts the 
 - **Hue bridge pairing fails** — bridge must be on the same subnet as the Pi, and you must press the physical button within 30s of clicking pair.
 - **Service won't start** — `journalctl -u lightemup -n 100` for the last 100 log lines.
 - **Need to roll back** — `cd ~/lightemup && git log --oneline -10`, then `git reset --hard <sha> && sudo systemctl restart lightemup`.
+- **`sudo: a terminal is required to read the password`** — you ran `update.sh` without a TTY. Use `ssh -t`, or install the passwordless rule above. (Older builds got part-way through here and left the new files on disk with the old server running; `update.sh` now refuses up front instead.)
+- **Deploy finished but the version didn't change** — the service didn't actually restart, or the pull raced a push and landed a commit short. `update.sh` prints the running version and the expected hash at the end; compare them. `curl -s localhost:8420/api/version` checks any time.
