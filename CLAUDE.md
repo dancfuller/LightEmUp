@@ -100,6 +100,8 @@ backend/
       location-data.js    # GENERATED (tools/build-location-data.py) — ZIP3 + world city
                           # coordinates for offline location entry. Never hand-edit.
       schedules.js        # SchedulesTab (time-based automation) + Settings LocationCard
+      zones.js            # ZoneBar (live On/Off per zone, in the global bar on every
+                          # tab) + ZoneManager (create/edit, in Assign Rooms)
       segment-reset-debug.js # Debug panel for segment reset behavior
       room-section.js     # RoomSection — room grouping with controls, map, lightning toggles
       room-assignment.js  # RoomAssignment — device-to-room assignment UI
@@ -209,8 +211,12 @@ All endpoints are under `/api/`. Key groups:
   `schedules` + `location` are additive. The hub fires these on its own via a
   once-a-minute background loop — see `backend/CLAUDE.md` "Time-based schedules"
 - `/api/zones` — zone CRUD (GET list, POST upsert-by-name, `DELETE /{name}`). A zone is a
-  named group of rooms (config key `zones`, additive) used as a schedule target that fans
-  a white/color/power action over every member room (scenes stay room-only).
+  named group of rooms (config key `zones`, additive) that fans a white/color/power action
+  over every member room (scenes stay room-only). `POST /api/zones/control` drives one
+  live — the "all downstairs off" button in the global bar — via the same
+  `_apply_action_to_room` path a zone schedule uses. `POST /api/zones/rename` migrates the
+  key plus every reference (schedules + "Now showing" attribution); a plain upsert would
+  orphan them.
 - `/api/rooms/rename` — safe room rename that migrates every room-name-keyed structure +
   schedule/zone references (a plain `POST /api/rooms` upsert would orphan them). See
   `backend/CLAUDE.md` "Zones + safe room rename + Power action"

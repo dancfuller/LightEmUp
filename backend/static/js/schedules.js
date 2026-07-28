@@ -382,143 +382,11 @@ function ScheduleEditor({ initial, rooms, zoneNames, favorites, onFavoritesChang
   );
 }
 
-// ─── Zone manager ─────────────────────────────────────────────────────────
-// A zone is a named group of rooms, used as a scheduling target (fan a
-// white/color/power action out over every member room). Scenes stay room-only.
-// Live per-zone control isn't here yet — this only defines membership.
-
-function ZoneManager({ zones, rooms, onSaveZone, onDeleteZone, isMobile }) {
-  const [open, setOpen] = useState(false);
-  const [editing, setEditing] = useState(null);   // null | {name, rooms} draft
-  const [confirmDelete, setConfirmDelete] = useState(null);
-  const zoneNames = Object.keys(zones || {});
-
-  const startNew = () => setEditing({ name: "", rooms: [], _isNew: true });
-  const startEdit = (name) => setEditing({ name, rooms: [...(zones[name]?.rooms || [])] });
-  const toggleRoom = (r) => setEditing(e => ({
-    ...e, rooms: e.rooms.includes(r) ? e.rooms.filter(x => x !== r) : [...e.rooms, r],
-  }));
-  const saveDraft = async () => {
-    const nm = (editing.name || "").trim();
-    if (!nm) return;
-    await onSaveZone(nm, editing.rooms);
-    setEditing(null);
-  };
-
-  const card = {
-    background: "#1e293b", borderRadius: 16, padding: isMobile ? 12 : 16,
-    marginTop: 18, border: "1px solid #334155",
-  };
-  const chip = (active) => ({
-    padding: isMobile ? "6px 10px" : "6px 12px", borderRadius: 8,
-    border: active ? "1px solid #6366f1" : "1px solid #334155",
-    background: active ? "rgba(99,102,241,0.18)" : "transparent",
-    color: active ? "#c7d2fe" : "#94a3b8",
-    fontSize: isMobile ? 11 : 12, fontWeight: 600, cursor: "pointer",
-  });
-  const field = {
-    padding: "8px 10px", borderRadius: 8, border: "1px solid #334155",
-    background: "#0f172a", color: "#e2e8f0", fontSize: 13, width: "100%",
-  };
-
-  return (
-    <div style={card}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-        <button onClick={() => setOpen(o => !o)} style={{
-          background: "transparent", border: "none", cursor: "pointer", padding: 0,
-          display: "flex", alignItems: "center", gap: 8,
-        }}>
-          <span style={{ color: "#64748b", fontSize: 12 }}>{open ? "▾" : "▸"}</span>
-          <span style={{ fontSize: isMobile ? 15 : 16, fontWeight: 700, color: "#e2e8f0" }}>Zones</span>
-          <span style={{ fontSize: 12, color: "#64748b" }}>({zoneNames.length})</span>
-        </button>
-        {open && !editing && (
-          <button onClick={startNew} style={{
-            padding: "6px 12px", borderRadius: 8, border: "1px solid #6366f1",
-            background: "transparent", color: "#a5b4fc", fontSize: 12, fontWeight: 600, cursor: "pointer",
-          }}>+ New zone</button>
-        )}
-      </div>
-
-      {open && (
-        <div style={{ marginTop: 12 }}>
-          <div style={{ fontSize: 12, color: "#64748b", marginBottom: 12, lineHeight: 1.6 }}>
-            Group rooms so a schedule can act on all of them at once (e.g. an
-            <strong> Outdoor</strong> zone → "turn all outside lights on at sunset").
-            A room can be in several zones.
-          </div>
-
-          {editing && (
-            <div style={{
-              background: "#0f172a", borderRadius: 12, padding: 12, marginBottom: 12,
-              border: "1px solid #4338ca",
-            }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", marginBottom: 6 }}>
-                Zone name
-              </div>
-              <input value={editing.name} disabled={!editing._isNew}
-                onChange={e => setEditing({ ...editing, name: e.target.value })}
-                placeholder="Outdoor" style={{ ...field, opacity: editing._isNew ? 1 : 0.6, marginBottom: 12 }} />
-              <div style={{ fontSize: 11, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", marginBottom: 6 }}>
-                Rooms in this zone
-              </div>
-              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
-                {rooms.length === 0 && <span style={{ fontSize: 12, color: "#64748b" }}>No rooms yet.</span>}
-                {rooms.map(r => (
-                  <button key={r} style={chip(editing.rooms.includes(r))} onClick={() => toggleRoom(r)}>{r}</button>
-                ))}
-              </div>
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                <button onClick={saveDraft} disabled={!editing.name.trim()} style={{
-                  padding: "7px 16px", borderRadius: 8, border: "none",
-                  background: editing.name.trim() ? "#6366f1" : "#334155",
-                  color: editing.name.trim() ? "#fff" : "#64748b",
-                  fontSize: 12, fontWeight: 700, cursor: editing.name.trim() ? "pointer" : "default",
-                }}>Save zone</button>
-                <button onClick={() => setEditing(null)} style={{
-                  padding: "7px 16px", borderRadius: 8, border: "1px solid #334155",
-                  background: "transparent", color: "#94a3b8", fontSize: 12, fontWeight: 600, cursor: "pointer",
-                }}>Cancel</button>
-              </div>
-            </div>
-          )}
-
-          {zoneNames.length === 0 && !editing && (
-            <div style={{ fontSize: 12, color: "#64748b" }}>No zones yet.</div>
-          )}
-          {zoneNames.map(z => (
-            <div key={z} style={{
-              display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap",
-              padding: "8px 0", borderTop: "1px solid #1e293b",
-            }}>
-              <div style={{ flex: "1 1 180px", minWidth: 0 }}>
-                <div style={{ fontSize: 13, fontWeight: 700, color: "#e2e8f0" }}>{z}</div>
-                <div style={{ fontSize: 12, color: "#64748b" }}>
-                  {(zones[z]?.rooms || []).join(", ") || "no rooms"}
-                </div>
-              </div>
-              <button onClick={() => startEdit(z)} style={{
-                padding: "5px 10px", borderRadius: 8, border: "1px solid #334155",
-                background: "transparent", color: "#94a3b8", fontSize: 12, fontWeight: 600, cursor: "pointer",
-              }}>Edit</button>
-              {confirmDelete === z ? (
-                <button onClick={() => { onDeleteZone(z); setConfirmDelete(null); }} style={{
-                  padding: "5px 10px", borderRadius: 8, border: "none",
-                  background: "#ef4444", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer",
-                }}>Confirm</button>
-              ) : (
-                <button onClick={() => setConfirmDelete(z)} style={{
-                  padding: "5px 10px", borderRadius: 8, border: "1px solid #7f1d1d",
-                  background: "transparent", color: "#f87171", fontSize: 12, fontWeight: 600, cursor: "pointer",
-                }}>Delete</button>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
+// ZoneManager moved to zones.js (v3.15.0). Zones are no longer a
+// schedules-only concept: they have live On/Off controls in the global bar
+// and are managed in Assign Rooms, next to the rooms they group. This tab
+// still TARGETS zones (see the Room/Zone toggle in ScheduleEditor); it just
+// no longer owns them.
 
 // ─── Tab ────────────────────────────────────────────────────────────────────
 
@@ -656,8 +524,20 @@ function SchedulesTab({ schedules, rooms, zones, location, favorites, onFavorite
         </div>
       ))}
 
-      <ZoneManager zones={zones} rooms={rooms}
-        onSaveZone={onSaveZone} onDeleteZone={onDeleteZone} isMobile={isMobile} />
+      {/* Zones are managed in Assign Rooms now — point there rather than
+          duplicating the editor, so there's one place membership can change. */}
+      <div style={{
+        marginTop: 18, padding: isMobile ? 12 : 14, borderRadius: 12,
+        background: "#16233a", border: "1px solid #334155",
+        fontSize: 12, color: "#94a3b8", lineHeight: 1.6,
+      }}>
+        <strong style={{ color: "#e2e8f0" }}>Zones</strong> ({zoneNames.length}) let a
+        schedule act on several rooms at once, and have On/Off buttons in the bar at the
+        top of every page. Create and edit them in <strong>Assign Rooms</strong>.
+        {zoneNames.length > 0 && (
+          <div style={{ marginTop: 6, color: "#64748b" }}>{zoneNames.join(" · ")}</div>
+        )}
+      </div>
     </div>
   );
 }

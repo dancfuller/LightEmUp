@@ -529,6 +529,38 @@ function App() {
     setZones(prev => ({ ...prev, [name]: { rooms: res.zone.rooms } }));
   }, []);
 
+  // Renaming has to go through its own endpoint: POST /zones upserts by name, so
+  // saving under a new one would leave the old zone behind and orphan any
+  // schedule targeting it. Returns false (rather than throwing) so the editor can
+  // stay open and show why — a name collision is a normal thing to hit.
+  const renameZone = useCallback(async (oldName, newName) => {
+    try {
+      await api("/zones/rename", {
+        method: "POST", body: JSON.stringify({ old_name: oldName, new_name: newName }),
+      });
+      await loadAll();
+      return true;
+    } catch (e) {
+      console.warn("Zone rename failed:", e);
+      return e.message || "Rename failed";
+    }
+  }, [loadAll]);
+
+  // Live zone control — the "all downstairs off" button. Goes through
+  // /api/zones/control so a zone press and a zone SCHEDULE take the identical
+  // backend path; each member room's "Now showing" is credited to the zone.
+  const controlZone = useCallback(async (name, action) => {
+    try {
+      await api("/zones/control", {
+        method: "POST",
+        body: JSON.stringify({ zone_name: name, ...action }),
+      });
+      await loadAll();     // rooms changed en masse — resync rather than guess
+    } catch (e) {
+      console.warn("Zone control failed:", e);
+    }
+  }, [loadAll]);
+
   const deleteZone = useCallback(async (name) => {
     setZones(prev => { const next = { ...prev }; delete next[name]; return next; });   // optimistic
     try {
@@ -985,7 +1017,10 @@ function App() {
       {/* Global master control — only "All Off" is globally useful; you rarely
           want to turn on every outside light + every empty room at once. The
           "on" shortcuts (Soft/Cool White) live per-room in each RoomSection
-          header, where they actually make sense. */}
+          header, where they actually make sense.
+          ZONES sit here too (v3.15.0): "all downstairs off" is a panic button,
+          and a panic button has to be reachable from wherever you already are —
+          this bar renders on every tab. Zones with no members render nothing. */}
       <div style={{
         display: "flex", gap: isMobile ? 6 : 8, padding: isMobile ? "8px 10px" : "10px 24px",
         borderBottom: "1px solid #1e293b", flexWrap: "wrap", alignItems: "center",
@@ -996,6 +1031,7 @@ function App() {
           title="Turn every light off"
           style={{ padding: isMobile ? "6px 14px" : "7px 18px", borderRadius: 8, border: "1px solid #334155", background: "transparent", color: "#e2e8f0", fontSize: isMobile ? 12 : 13, fontWeight: 700, cursor: "pointer" }}
         >All Off</button>
+        <ZoneBar zones={zones} onControl={controlZone} isMobile={isMobile} />
       </div>
 
       <main style={{ padding: isMobile ? 12 : 24, maxWidth: 1200, margin: "0 auto" }}>
@@ -1176,6 +1212,13 @@ function App() {
         )}
 
         {activeTab === "assign rooms" && (
+          <>
+          {/* Zones group ROOMS the way rooms group devices, so membership is
+              edited on the same organisational tab rather than under Schedules. */}
+          <ZoneManager
+            zones={zones} rooms={Object.keys(rooms)}
+            onSaveZone={saveZone} onDeleteZone={deleteZone}
+            onRenameZone={renameZone} isMobile={isMobile} />
           <RoomAssignment
             hueLights={hueLights} goveeDevices={goveeDevices}
             rooms={rooms} onRoomsChange={handleRoomsChange}
@@ -1187,6 +1230,7 @@ function App() {
             roomLayouts={roomLayouts} onLayoutChange={handleLayoutChange}
             fixtures={fixtures} onFixtureUpsert={upsertFixture} onFixtureDelete={deleteFixture}
           />
+          </>
         )}
 
         {activeTab === "settings" && (

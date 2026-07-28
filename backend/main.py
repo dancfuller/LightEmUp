@@ -3424,6 +3424,108 @@ async def upsert_zone(req: ZoneRequest):
     return {"success": True, "zone": {"name": name, **zones[name]}}
 
 
+class ZoneRenameRequest(BaseModel):
+    old_name: str
+    new_name: str
+
+
+@app.post("/api/zones/rename")
+async def rename_zone(req: ZoneRenameRequest):
+    """Rename a zone, carrying every reference with it.
+
+    `POST /api/zones` upserts by name, so renaming through it would leave the old
+    zone behind and silently orphan any schedule pointing at it — the same trap
+    `rename_room` exists to avoid. A zone name is referenced in three places:
+    the `zones` key itself, `schedules[].action.zone` (held by value), and
+    `room_last_applied[*].source_detail` (which credits the zone that set a room —
+    cosmetic, but it would otherwise name a zone that no longer exists).
+    **Add any new zone-name-keyed structure here.**"""
+    zones = config.get("zones", {}) or {}
+    old = req.old_name.strip()
+    new = req.new_name.strip()
+    if old not in zones:
+        raise HTTPException(404, f"No zone '{old}'")
+    if not new:
+        raise HTTPException(400, "New zone name is required")
+    if new == old:
+        return {"success": True, "zone": {"name": old, **zones[old]}}
+    if new in zones:
+        raise HTTPException(409, f"A zone named '{new}' already exists")
+
+    # Rebuild in place rather than pop+assign: the zone bar renders in insertion
+    # order, so a plain re-add would jump the renamed zone to the end of the row.
+    config["zones"] = {(new if k == old else k): v for k, v in zones.items()}
+
+    for sched in config.get("schedules", []) or []:
+        action = sched.get("action") or {}
+        if action.get("zone") == old:
+            action["zone"] = new
+
+    for entry in (config.get("room_last_applied", {}) or {}).values():
+        if entry.get("source") == "zone" and entry.get("source_detail") == old:
+            entry["source_detail"] = new
+
+    save_config(config)
+    publish_event("config")
+    log.info("Renamed zone %r → %r", old, new)
+    return {"success": True, "zone": {"name": new, **config["zones"][new]}}
+
+
+class ZoneControlRequest(BaseModel):
+    """Drive every room in a zone at once — the "all upstairs off" button.
+
+    Mirrors the schedule action shapes rather than inventing a parallel one, so
+    pressing a zone button and a zone schedule firing take the exact same path."""
+    zone_name: str
+    type: str = "power"                 # power | white | color
+    on: Optional[bool] = None           # power
+    kelvin: Optional[int] = None        # white
+    r: Optional[int] = None             # color
+    g: Optional[int] = None
+    b: Optional[int] = None
+    brightness: int = 100
+
+
+@app.post("/api/zones/control")
+async def control_zone(req: ZoneControlRequest):
+    """Fan a live action out over every room in a zone.
+
+    Zones started life as a scheduling target only, but the useful everyday case
+    is a panic button — "all downstairs off" on the way to bed. This reuses
+    `_apply_action_to_room`, so a zone button and a zone schedule are the same
+    code path, and each room's "Now showing" is credited to the zone rather than
+    looking like someone set every room by hand."""
+    zone = (config.get("zones", {}) or {}).get(req.zone_name)
+    if not zone:
+        raise HTTPException(404, f"No zone '{req.zone_name}'")
+    if req.type not in ("power", "white", "color"):
+        raise HTTPException(400, f"Unsupported zone action '{req.type}'")
+
+    action = {"type": req.type, "brightness": req.brightness}
+    if req.type == "power":
+        action["on"] = True if req.on is None else bool(req.on)
+    elif req.type == "white":
+        action["kelvin"] = int(req.kelvin or 2700)
+    else:
+        action["rgb"] = {"r": req.r or 0, "g": req.g or 0, "b": req.b or 0}
+
+    rooms = config.get("rooms", {})
+    applied, skipped = [], []
+    for member in zone.get("rooms", []):
+        if member not in rooms:
+            skipped.append(member)      # room deleted/renamed out from under the zone
+            continue
+        try:
+            await _apply_action_to_room(member, action, "zone", req.zone_name)
+            applied.append(member)
+        except Exception:
+            log.exception("Zone %r: room %r failed", req.zone_name, member)
+            skipped.append(member)
+    log.info("Zone %r %s → %d room(s)", req.zone_name, req.type, len(applied))
+    publish_event("room", room=None)
+    return {"success": True, "applied": applied, "skipped": skipped}
+
+
 @app.delete("/api/zones/{zone_name}")
 async def delete_zone(zone_name: str):
     zones = config.get("zones", {})

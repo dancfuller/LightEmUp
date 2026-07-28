@@ -9,8 +9,8 @@ rules that apply to every UI change. **Keep this file current when behavior chan
 ## Load order (from index.html)
 utils → audio → components-shared → light-card → lightning-panel → room-map →
 palette-data → color-mode → location-data → schedules → segment-reset-debug →
-room-section → room-assignment → setup-wizard → server-logs → ct-calibration →
-backup-restore → app
+room-section → zones → room-assignment → setup-wizard → server-logs →
+ct-calibration → backup-restore → app
 
 A new file must be added to index.html in the correct slot (after its dependencies).
 
@@ -85,6 +85,33 @@ sliders, hex) converge on the same `onColorSelect(r,g,b)`. `HexColorInput` is al
   RGB, so the 255/180/100 default never falsely flags the "Warm" favorite. A `stagedRef`
   guards the `currentColor`→local sync effect so an SSE refresh mid-edit can't clobber an
   unapplied pick. The bar reads "Pick a color to apply" until a color is known/applied.
+
+## zones.js — live zone controls + zone management (v3.15.0)
+A zone is a named group of ROOMS. It shipped in v3.9.0 as a **scheduling target only**,
+with its editor collapsed inside the Schedules tab. That was the wrong shape twice: the
+everyday use of a zone is a **panic button** ("all downstairs off" on the way to bed), and
+grouping rooms is an organisational act that belongs beside assigning devices to rooms,
+not buried under automation. So the file owns two components:
+- **`ZoneBar`** — On/Off per zone, rendered in the **global bar next to "All Off"**, which
+  means every tab. That placement is the feature: a panic button has to be reachable from
+  wherever you already are. It renders **nothing** when no zones exist, so the bar stays
+  clean for anyone not using them. Buttons disable while a command is in flight (a zone
+  press fans out over several rooms and isn't instant).
+- **`ZoneManager`** — create/edit/**rename**/delete, rendered at the top of **Assign
+  Rooms**. Zones group rooms the same way rooms group devices, so both live on the
+  organisational tab. It's a plain always-open card here, not the old collapsed disclosure.
+  The name field is editable for existing zones (it used to be disabled because renaming
+  wasn't supported); `saveDraft` compares against `_original` and, when they differ,
+  **renames FIRST and only then saves membership** — the other order would upsert a second
+  zone and strand the first. `onRenameZone` resolves to `true` or an error *string* rather
+  than throwing, so a name collision keeps the editor open with the backend's reason
+  showing instead of silently discarding the edit.
+
+`app.js`'s `controlZone` POSTs `/api/zones/control` then `loadAll()` — a zone changes
+several rooms at once, so resync rather than trying to predict the result optimistically.
+**The Schedules tab no longer owns zones**; it still targets them (the Room/Zone toggle in
+`ScheduleEditor`) and shows a pointer to Assign Rooms instead of a second editor, so
+membership has exactly one place it can change.
 
 ## Recovering an unreachable light (v3.14.0)
 A Hue light wired to a wall switch reports `state.reachable: false` while the switch is

@@ -395,11 +395,30 @@ via `.get`, no `schema_version` bump. A schedule pairs a **trigger** (`weekly` /
   `trigger` resets `last_fired` so a retimed schedule isn't blocked by the old dedupe),
   `DELETE /api/schedules/{id}`, `GET/POST /api/location`.
 
-## Zones + safe room rename + Power action (v3.9.0)
+## Zones + safe room rename + Power action (v3.9.0, live control v3.15.0)
 **Zones** (`config["zones"]`, additive `{ zoneName: { rooms: [name,…] } }`, name-keyed
-like `rooms`; a room may be in several) are a **scheduling target**, not a live-control
-surface (yet). CRUD: `GET/POST /api/zones` (`ZoneRequest`; upsert by name, drops unknown
-rooms), `DELETE /api/zones/{name}`. **No zone rename in v1** — delete + recreate.
+like `rooms`; a room may be in several) are **both a live-control surface and a scheduling
+target**. CRUD: `GET/POST /api/zones` (`ZoneRequest`; upsert by name, drops unknown
+rooms), `DELETE /api/zones/{name}`.
+- **`POST /api/zones/rename` (v3.15.0)** — `POST /api/zones` upserts by name, so renaming
+  through it would leave the old zone behind and orphan any schedule pointing at it (the
+  same trap `rename_room` exists to avoid). A zone name is referenced in **three** places
+  and all three migrate: the `zones` key, `schedules[].action.zone` (held by value), and
+  `room_last_applied[*].source_detail` (which credits the zone that set a room — cosmetic,
+  but it would otherwise name a zone that no longer exists). 404 missing / 409 collision /
+  400 blank; same-name is a no-op. The dict is **rebuilt in place rather than pop+assign**,
+  because the zone bar renders in insertion order and a plain re-add would jump the renamed
+  zone to the end of the row. **Add any new zone-name-keyed structure here.**
+- **`POST /api/zones/control` (v3.15.0)** drives a zone right now — the "all downstairs
+  off" panic button. It builds the same action dict a schedule would and calls
+  **`_apply_action_to_room` per member with `source="zone"`**, so a button press and a zone
+  schedule are the *identical* code path and each room's "Now showing" is credited to the
+  zone instead of looking hand-set. Accepts `power` / `white` / `color` — **not `scene`**,
+  for the same reason schedules don't: a scene is a device-specific resolved snapshot.
+  A member room that was deleted or renamed away is **skipped and reported** in
+  `skipped`, and one room raising doesn't abort the rest — a panic button that gives up
+  halfway is worse than useless. Zones started life scheduling-only; that was too narrow,
+  and the note here used to say "not a live-control surface (yet)".
 - **Schedule actions can target a room OR a zone.** `action.zone` (optional, mutually
   exclusive with `action.room`) fans a **non-scene** action out over every member room.
   A **scene is room-only** — it's a device-specific resolved snapshot, so it can't span a
