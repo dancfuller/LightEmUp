@@ -146,6 +146,38 @@ coroutine gets its own context copy) and normal concurrent UI requests are unaff
 **When you add a new bulk Hue path, collect `res["state"]`, set `_in_bulk_hue`, and hand the
 batch to `schedule_hue_verify`.**
 
+## Detecting that something ELSE changed a room (v3.16.0)
+**LightEmUp is not the only thing driving these lights**, and can't be. The Hue app, the
+Govee app and Google Home routines all touch them — and must: Govee's on-device engine is
+the only way to run fast animations, which the rate-limited cloud API can't reach. So
+"what we last set" ≠ "what the room is showing", and the v3.12.0 strip claimed the latter
+while only knowing the former (a daily 1:30pm Home routine forcing 2700K left it lying).
+
+**The governing rule: this check can PROVE divergence but can never PROVE agreement, so it
+only ever downgrades a claim — it never certifies one.** Verdicts are `match` /
+`diverged` / `unknown` / `none`, and **`unknown` must never be rendered as either of the
+others**; a confident tick we can't stand behind is worse than no claim, because it earns
+trust it can't keep.
+- `record_room_applied(..., expect=…)` stores the per-light state **as sent** — the same
+  dict `_hue_verify_repair` already builds, previously discarded. That's what makes a
+  later comparison possible at all.
+- `_hue_state_matches(sent, cur)` returns True/False/**None**. Colour comparison was
+  rejected for *repair* (a false positive re-sends forever) — but for *display* a false
+  positive only mislabels a strip, so a **tolerant** comparison is worth it, and it has to
+  be: mode alone (xy vs ct) can't tell your palette from someone else's colour scene.
+  `HUE_XY_TOLERANCE` 0.06 (gamut clamping shifts xy slightly; a different scene shifts it
+  a lot), `HUE_CT_TOLERANCE` 25 mireds. Unreachable / `hs` mode / no xy reported ⇒ None.
+- **Govee is deliberately not judged.** LAN devStatus reports colour unreliably and a
+  running Govee-app animation isn't a static state at all, so "verifying" it would
+  manufacture exactly the false confidence this exists to avoid.
+- `GET /api/rooms/status` does **one** bridge read for all rooms. `POST /api/rooms/reapply`
+  replays the stored look — which is why scenes also store their resolved `payload`, the
+  same snapshot mechanism a scheduled scene uses (and it's re-freshened through
+  `_freshen_scene_payload`, so DHCP drift doesn't break it).
+- A **"resume" deliberately records no expectation**: `{on:true}` returns each light to
+  whatever it remembers, so there is nothing to compare — better `unknown` than a
+  fabricated match.
+
 ## "Now showing" — what each room was last set to (v3.12.0)
 `config["room_last_applied"][room]` = `{kind, label, swatches, kelvin, at, source,
 source_detail}` (additive). It powers the strip in each room header, so opening a fresh

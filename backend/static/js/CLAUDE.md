@@ -321,6 +321,22 @@ add/edit form; `LocationCard` renders in Settings.
   `onRenameRoom` → `POST /api/rooms/rename`; it is NOT gated on `isDefault` (the seed room
   "Outside" is default yet must be renamable — the backend migrates every reference).
 
+## "Changed since" + the "Set here" button (v3.16.0)
+Other controllers (Hue app, Govee app, Google Home routines) change these lights too, so
+the strip's record can be stale. `RoomLastApplied` takes a `status` from
+`GET /api/rooms/status` and renders **only three ways**:
+- **diverged** — amber panel, the look's name **struck through** (it's what we *set*, not
+  what's on), and a **`Set here`** button that re-applies it.
+- **match** — the normal quiet "Now showing".
+- **unknown / none** — also quiet. **Never render a "verified" tick**: the backend can
+  prove divergence but not agreement, so there is nothing to certify. Adding a badge for
+  "can't tell" was considered and dropped — every Govee-only room would wear it and it'd
+  become noise.
+- The CTA exists because divergence is nearly always a routine elsewhere forcing a plain
+  colour temperature, and what you want is your look back — one tap beats hunting for the
+  scene. `reapplyRoom` in app.js waits ~3s for an async scene replay before `loadAll()`,
+  or the status would still read diverged.
+
 ## room-section.js — "Now showing" strip (v3.12.0)
 `RoomLastApplied` renders what the room was last set to — swatch dots + the look's name +
 a relative time — directly under the room name. It sits **OUTSIDE the `collapsed` gate**

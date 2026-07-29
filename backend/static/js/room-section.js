@@ -19,8 +19,16 @@ function relativeTime(iso) {
   return days === 1 ? "yesterday" : `${days}d ago`;
 }
 
-function RoomLastApplied({ entry, isMobile }) {
+function RoomLastApplied({ entry, status, onReapply, isMobile }) {
+  const [busy, setBusy] = useState(false);
   if (!entry || !entry.label) return null;
+
+  // LightEmUp isn't the only thing driving these lights (Hue app, Govee app,
+  // Google Home routines), so this record is "what we set", not "what's on".
+  // The backend can PROVE the room drifted but can never prove it didn't — so
+  // only the diverged state is announced. "match" and "can't tell" both render
+  // quietly, because a confident tick we can't stand behind is worse than none.
+  const diverged = status && status.state === "diverged";
 
   // White is stored as a Kelvin value rather than swatches, so the backend never
   // needs colour math just to label a temperature — render the chip here.
@@ -34,17 +42,27 @@ function RoomLastApplied({ entry, isMobile }) {
   const bySchedule = entry.source === "schedule";
   const dot = isMobile ? 13 : 15;
 
+  const changedBy = diverged && status.changed_names && status.changed_names.length
+    ? `Changed since — ${status.changed_names.join(", ")} no longer match`
+    : "Changed since LightEmUp set this";
+
   return (
     <div
-      title={`${entry.label}${bySchedule && entry.source_detail ? ` — set by schedule "${entry.source_detail}"` : ""}${when ? ` · ${when}` : ""}`}
+      title={diverged
+        ? `${changedBy}. Something else (a Google Home routine, the Hue or Govee app) has set these lights since. "Set here" puts this look back.`
+        : `${entry.label}${bySchedule && entry.source_detail ? ` — set by schedule "${entry.source_detail}"` : ""}${when ? ` · ${when}` : ""}`}
       style={{
         display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
         padding: isMobile ? "6px 9px" : "6px 11px", borderRadius: 9,
-        background: "rgba(15,27,46,0.75)", border: "1px solid #24334a",
+        background: diverged ? "rgba(69,45,16,0.5)" : "rgba(15,27,46,0.75)",
+        border: diverged ? "1px solid #7c5312" : "1px solid #24334a",
       }}
     >
-      <span style={{ fontSize: 9, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.7 }}>
-        Now showing
+      <span style={{
+        fontSize: 9, fontWeight: 700, letterSpacing: 0.7, textTransform: "uppercase",
+        color: diverged ? "#fbbf24" : "#64748b",
+      }}>
+        {diverged ? "Changed since" : "Now showing"}
       </span>
 
       {swatches.length > 0 && (
@@ -70,9 +88,32 @@ function RoomLastApplied({ entry, isMobile }) {
 
       <span style={{
         fontSize: isMobile ? 11 : 12, fontWeight: 600,
-        color: off ? "#94a3b8" : "#e2e8f0",
+        // Dimmed when the room has drifted: this is what we SET, not what's on.
+        color: diverged ? "#94a3b8" : (off ? "#94a3b8" : "#e2e8f0"),
+        textDecoration: diverged ? "line-through" : "none",
         minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
       }}>{entry.label}</span>
+
+      {/* The call to action. Divergence is nearly always a routine elsewhere
+          forcing a plain colour temperature, and what you want is your look
+          back — so make that one tap instead of "go find the scene again". */}
+      {diverged && onReapply && status.can_reapply !== false && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            setBusy(true);
+            Promise.resolve(onReapply()).finally(() => setBusy(false));
+          }}
+          disabled={busy}
+          title="Re-apply this look to the room"
+          style={{
+            fontSize: isMobile ? 11 : 12, fontWeight: 700,
+            padding: isMobile ? "3px 10px" : "3px 12px", borderRadius: 7,
+            border: "1px solid #b45309", background: "#b45309", color: "#fff",
+            cursor: busy ? "wait" : "pointer", whiteSpace: "nowrap",
+          }}
+        >{busy ? "Setting…" : "Set here"}</button>
+      )}
 
       {/* Attribution only when it wasn't a person in the app — "you did this" is
           the boring default and doesn't need saying. */}
@@ -167,7 +208,7 @@ function ControlSurface({ view, views, onView, onClose, roomName, isMobile, chil
   );
 }
 
-function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGovee, onControlRoom, favorites, onFavoritesChange, nicknames, onNicknameChange, lightningActive, onLightningStart, onLightningStop, segmentInfo, segmentState, onSegmentStateRefresh, deviceModes, onDeviceModeChange, onDeviceModesBulkChange, segmentFillModes, onSegmentFillModeChange, onSegmentCountChange, roomLayouts, onLayoutChange, fixtures, onFixtureUpsert, onFixtureDelete, minSatEnabled, minSatPct, savedColorState, ctCorrection, onScheduleLook, lastApplied, onRecheck }) {
+function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGovee, onControlRoom, favorites, onFavoritesChange, nicknames, onNicknameChange, lightningActive, onLightningStart, onLightningStop, segmentInfo, segmentState, onSegmentStateRefresh, deviceModes, onDeviceModeChange, onDeviceModesBulkChange, segmentFillModes, onSegmentFillModeChange, onSegmentCountChange, roomLayouts, onLayoutChange, fixtures, onFixtureUpsert, onFixtureDelete, minSatEnabled, minSatPct, savedColorState, ctCorrection, onScheduleLook, lastApplied, lastStatus, onReapply, onRecheck }) {
   const isMobile = useIsMobile();
   const [collapsed, setCollapsed] = useState(true);
   // Single overlay surface state — replaces the old per-panel show* booleans.
@@ -447,7 +488,8 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
         {/* What the room is currently set to. Sits directly under the name and
             OUTSIDE the `collapsed` gate, so a collapsed room still answers "what
             did I set this to?" at a glance — the whole point of the feature. */}
-        <RoomLastApplied entry={lastApplied} isMobile={isMobile} />
+        <RoomLastApplied entry={lastApplied} status={lastStatus}
+          onReapply={onReapply ? () => onReapply(name) : null} isMobile={isMobile} />
 
         {/* Surface openers */}
         <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 6 : 8, flexWrap: "wrap" }}>

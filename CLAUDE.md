@@ -218,6 +218,11 @@ All endpoints are under `/api/`. Key groups:
   header). The backend records this itself on every whole-room path incl. schedule fires;
   this endpoint is only for looks the frontend fans out client-side. Config key
   `room_last_applied`. See `backend/CLAUDE.md` "Now showing"
+- `/api/rooms/status` — has anything ELSE changed each room since LightEmUp set it? (The
+  Hue/Govee apps and Google Home routines all drive these lights, so the record goes
+  stale.) Proves divergence where it can, reports `unknown` where it can't, and **never
+  certifies a match**. `/api/rooms/reapply` is the "Set here" button that puts the stored
+  look back. See `backend/CLAUDE.md` "Detecting that something ELSE changed a room"
 - `/api/room-layouts` — floor plan / line layout CRUD (auto-saved from frontend)
 - `/api/nicknames` — device nickname CRUD
 - `/api/identify` — flash a device to locate it (Hue native `alert`; Govee on/off blink then restore)

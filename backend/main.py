@@ -941,7 +941,7 @@ async def _apply_room_white(room_name: str, kelvin: int, brightness_pct: int,
     # No swatch: the frontend renders the chip from `kelvin` via kelvinToRGB, so
     # the backend doesn't need discovery's colour math just for a label.
     record_room_applied(room_name, "white", _white_label(kelvin), kelvin=kelvin,
-                        source=source, source_detail=source_detail)
+                        source=source, source_detail=source_detail, expect=sent)
 
 
 async def _apply_room_color(room_name: str, r: int, g: int, b: int, brightness_pct: int,
@@ -969,7 +969,7 @@ async def _apply_room_color(room_name: str, r: int, g: int, b: int, brightness_p
             await control_govee(GoveeCommandRequest(
                 ip=ip, mac=slug, on=True, brightness=brightness_pct, r=r, g=g, b=b))
     record_room_applied(room_name, "color", "Solid color", swatches=[[r, g, b]],
-                        source=source, source_detail=source_detail)
+                        source=source, source_detail=source_detail, expect=sent)
 
 
 async def _apply_room_power(room_name: str, on: bool,
@@ -1933,11 +1933,14 @@ async def control_room(req: RoomStateRequest):
     # recorded: that's the room slider, which fires repeatedly while dragging and
     # would otherwise churn the record (and overwrite the scene name) on every tick.
     if req.on is False:
-        record_room_applied(req.room_name, "power", "Turned off")
+        record_room_applied(req.room_name, "power", "Turned off", expect=hue_sent)
     elif req.r is not None and req.g is not None and req.b is not None:
         record_room_applied(req.room_name, "color", "Solid color",
-                            swatches=[[req.r, req.g, req.b]])
+                            swatches=[[req.r, req.g, req.b]], expect=hue_sent)
     elif req.on is True and req.brightness is None:
+        # "Resume" sends only {on:true}; each light returns to whatever it
+        # remembers, so there's nothing to compare later — record no expectation
+        # rather than a misleading one.
         record_room_applied(req.room_name, "power", "Resumed last lighting")
 
     publish_event("room", room=req.room_name)
@@ -2501,6 +2504,7 @@ async def _run_scene_apply(req: SceneApplyRequest):
 
         # ── Phase 2: hue + govee whole + razer + cloud segments ──
         done = 0
+        hue_expect = {}   # filled by do_hue; recorded for later divergence checks
         _scene_emit(room, phase="applying", total=apply_total, done=0, active=True, end_at=end_at_ms)
 
         async def do_hue():
@@ -2523,6 +2527,7 @@ async def _run_scene_apply(req: SceneApplyRequest):
             finally:
                 _in_bulk_hue.set(False)
             schedule_hue_verify(sent)
+            hue_expect.update(sent)   # kept so a refresh can detect external changes
 
         async def do_govee_whole():
             for i, t in enumerate(req.govee_whole):
@@ -2574,6 +2579,11 @@ async def _run_scene_apply(req: SceneApplyRequest):
             room, "scene", req.label or "Custom scene",
             swatches=_scene_swatches(req),
             source=req.source or "app", source_detail=req.source_detail,
+            # `hue_expect` is filled by do_hue with the state actually sent, so a
+            # later refresh can tell this scene apart from whatever a Google Home
+            # routine replaced it with. `payload` lets "Set here" put it back.
+            expect=hue_expect,
+            payload=req.model_dump(exclude_none=True),
         )
         _scene_emit(room, phase="done", total=apply_total, done=apply_total, label="", active=False)
     except asyncio.CancelledError:
@@ -2773,15 +2783,26 @@ def record_room_applied(room: str, kind: str, label: str,
                         swatches: Optional[list] = None,
                         kelvin: Optional[int] = None,
                         source: str = "app",
-                        source_detail: Optional[str] = None):
+                        source_detail: Optional[str] = None,
+                        expect: Optional[dict] = None,
+                        payload: Optional[dict] = None):
     """Record what `room` was just set to. Best-effort display metadata — it must
-    never break a light command, so callers don't need to guard it."""
+    never break a light command, so callers don't need to guard it.
+
+    `expect` is the per-light state AS SENT ({light_id: state_dict}) — the same
+    dict `_hue_verify_repair` builds. Keeping it is what lets a later refresh
+    prove the room has since been changed by something that isn't LightEmUp
+    (the Hue app, the Govee app, a Google Home routine). See `_room_status`.
+
+    `payload` is the resolved scene plan, kept so the look can be replayed by
+    `POST /api/rooms/reapply` when it HAS drifted — same snapshot mechanism a
+    scheduled scene uses."""
     try:
         entry = {
             "kind": kind,               # scene | white | color | power | lightning
             "label": label,
             "at": _now_iso(),
-            "source": source,           # "app" | "schedule"
+            "source": source,           # "app" | "schedule" | "zone"
         }
         if swatches:
             entry["swatches"] = swatches[:ROOM_SWATCH_LIMIT]
@@ -2789,6 +2810,10 @@ def record_room_applied(room: str, kind: str, label: str,
             entry["kelvin"] = int(kelvin)
         if source_detail:
             entry["source_detail"] = source_detail
+        if expect:
+            entry["expect_hue"] = {str(k): v for k, v in expect.items()}
+        if payload:
+            entry["payload"] = payload
         config.setdefault("room_last_applied", {})[room] = entry
         schedule_save()
         # Publish UNSOURCED (source=None overrides the ContextVar via **fields) so
@@ -2804,6 +2829,160 @@ def record_room_applied(room: str, kind: str, label: str,
             _suppress_publish.reset(token)
     except Exception:
         log.exception("Could not record last-applied look for %r", room)
+
+
+# ─── Has something else changed this room since we set it? ──────────────────
+# LightEmUp is not the only thing driving these lights — the Hue app, the Govee
+# app and Google Home routines all touch them (and must: Govee's own engine is
+# the only way to run fast animations, which the rate-limited cloud API can't).
+# So "what we last set" is NOT the same as "what the room is showing", and the
+# strip used to claim the latter while only knowing the former.
+#
+# THE RULE: this check can PROVE divergence but can never PROVE agreement, so it
+# only ever downgrades a claim — it never certifies one. Three verdicts, and
+# "unknown" is never dressed up as either of the others.
+#
+# Comparing colour was previously rejected outright (see `_hue_verify_repair`),
+# but that was for REPAIR, where a false positive re-sends forever. Here a false
+# positive only mislabels a strip, so a TOLERANT comparison is worth it — and it
+# has to be, because mode alone (xy vs ct) can't tell your palette from someone
+# else's colour scene.
+HUE_XY_TOLERANCE = 0.06    # gamut clamping shifts xy slightly; a different scene shifts it a lot
+HUE_CT_TOLERANCE = 25      # mireds
+
+
+def _hue_state_matches(sent: dict, cur: dict) -> Optional[bool]:
+    """True = still what we set, False = definitely changed, None = can't tell."""
+    if not cur or not cur.get("reachable", True):
+        return None                       # unreachable: no information either way
+    want_on = sent.get("on")
+    if want_on is not None and bool(cur.get("on")) != bool(want_on):
+        return False
+    if want_on is False:
+        return True                       # asked off and it's off — nothing else matters
+    want_bri = sent.get("bri")
+    if want_bri is not None and cur.get("brightness") is not None:
+        if abs(int(cur["brightness"]) - int(want_bri)) > HUE_VERIFY_BRI_TOLERANCE:
+            return False                  # e.g. a routine forced 100%
+    mode = cur.get("color_mode")
+    if "xy" in sent:
+        if mode == "ct":
+            return False                  # our colour scene replaced by a white — the common case
+        cxy = cur.get("xy")
+        if mode == "xy" and isinstance(cxy, (list, tuple)) and len(cxy) == 2:
+            dx, dy = abs(cxy[0] - sent["xy"][0]), abs(cxy[1] - sent["xy"][1])
+            if max(dx, dy) > HUE_XY_TOLERANCE:
+                return False              # still colour, but a DIFFERENT colour
+            return True
+        return None                       # hs mode or no xy reported — can't judge
+    if "ct" in sent:
+        if mode == "xy":
+            return False
+        cct = cur.get("color_temp")
+        if cct is not None:
+            return abs(int(cct) - int(sent["ct"])) <= HUE_CT_TOLERANCE
+        return None
+    return True if want_bri is not None else None
+
+
+async def _room_status(room_name: str, lights_by_id: dict) -> dict:
+    """Verdict for one room: match | diverged | unknown (+ how many lights agreed)."""
+    entry = (config.get("room_last_applied", {}) or {}).get(room_name)
+    if not entry:
+        return {"state": "none"}
+    expect = entry.get("expect_hue") or {}
+    if not expect:
+        # Nothing recorded to compare against (a pre-v3.16.0 record, or a look we
+        # can't verify such as a Govee-only room). Stay quiet rather than guess.
+        return {"state": "unknown", "checked": 0}
+
+    matched = changed = unknown = 0
+    changed_names = []
+    for light_id, sent in expect.items():
+        verdict = _hue_state_matches(sent, lights_by_id.get(str(light_id)))
+        if verdict is True:
+            matched += 1
+        elif verdict is False:
+            changed += 1
+            nm = (lights_by_id.get(str(light_id)) or {}).get("name")
+            if nm and len(changed_names) < 4:
+                changed_names.append(nm)
+        else:
+            unknown += 1
+
+    if changed:
+        return {"state": "diverged", "changed": changed, "matched": matched,
+                "unknown": unknown, "changed_names": changed_names,
+                "can_reapply": bool(entry.get("payload") or entry.get("kind") in
+                                    ("white", "color", "power"))}
+    if matched:
+        return {"state": "match", "matched": matched, "unknown": unknown}
+    return {"state": "unknown", "checked": len(expect)}
+
+
+@app.get("/api/rooms/status")
+async def rooms_status():
+    """Per-room: does the room still look like what LightEmUp last set?
+
+    One bridge read serves every room. Govee is deliberately NOT judged — LAN
+    devStatus reports colour unreliably, and a running Govee-app animation isn't
+    a static state at all, so pretending to verify it would manufacture exactly
+    the false confidence this endpoint exists to avoid."""
+    ip = config.get("hue_bridge_ip")
+    username = config.get("hue_username")
+    lights_by_id = {}
+    if ip and username:
+        try:
+            for l in await get_hue_lights(ip, username):
+                lights_by_id[str(l["id"])] = {**(l.get("state") or {}), "name": l.get("name")}
+        except Exception:
+            log.warning("Room status: could not read the bridge", exc_info=True)
+    out = {}
+    for room_name in config.get("rooms", {}):
+        out[room_name] = await _room_status(room_name, lights_by_id)
+    return {"rooms": out}
+
+
+class RoomReapplyRequest(BaseModel):
+    room_name: str
+
+
+@app.post("/api/rooms/reapply")
+async def reapply_room(req: RoomReapplyRequest):
+    """Put back the look LightEmUp last set — the "Set here" button that appears
+    once the room has provably drifted (usually a Google Home routine forcing a
+    plain colour temperature)."""
+    entry = (config.get("room_last_applied", {}) or {}).get(req.room_name)
+    if not entry:
+        raise HTTPException(404, f"Nothing recorded for '{req.room_name}'")
+    kind = entry.get("kind")
+
+    if kind == "scene":
+        payload = _freshen_scene_payload(entry.get("payload") or {})
+        if payload is None:
+            raise HTTPException(409, "That scene's devices can't be resolved any more")
+        sreq = SceneApplyRequest(**payload)
+        sreq.label = entry.get("label")
+        existing = _scene_tasks.get(sreq.room)
+        if existing and not existing.done():
+            existing.cancel()
+            try:
+                await existing
+            except BaseException:
+                pass
+        _scene_tasks[sreq.room] = asyncio.create_task(_run_scene_apply(sreq))
+        return {"success": True, "kind": kind, "async": True}
+
+    if kind == "white":
+        await _apply_room_white(req.room_name, int(entry.get("kelvin") or 2700), 100)
+    elif kind == "color":
+        sw = (entry.get("swatches") or [[255, 255, 255]])[0]
+        await _apply_room_color(req.room_name, sw[0], sw[1], sw[2], 100)
+    elif kind == "power":
+        await _apply_room_power(req.room_name, "off" not in (entry.get("label") or "").lower())
+    else:
+        raise HTTPException(400, f"Can't replay a '{kind}' look")
+    return {"success": True, "kind": kind}
 
 
 class RoomAppliedRequest(BaseModel):

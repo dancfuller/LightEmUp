@@ -217,6 +217,10 @@ function App() {
   // What each room was last set to (backend-recorded, incl. schedule fires) —
   // drives the "Now showing" strip in each room header.
   const [roomLastApplied, setRoomLastApplied] = useState({});
+  // Whether each room STILL looks like that. LightEmUp isn't the only controller
+  // (Hue app, Govee app, Google Home routines), so the record can go stale; the
+  // backend proves divergence where it can and says "unknown" where it can't.
+  const [roomStatus, setRoomStatus] = useState({});
   const [ctCorrection, setCtCorrection] = useState({});
   // ctRgb: RGB-space white calibration (takes precedence over ctCorrection).
   const [ctRgb, setCtRgb] = useState({});
@@ -359,6 +363,10 @@ function App() {
         api("/scenes/lightning/status").catch(() => ({ active: [] })),
         api("/govee/segment-info").catch(() => ({ sku_table: {}, configured_counts: {}, segment_mode: {} })),
         api("/govee/segment-state").catch(() => ({ state: {} })),
+        // Has anything else changed these rooms since we set them? One bridge
+        // read serves every room; failure just means "unknown", never a wrong
+        // claim either way.
+        api("/rooms/status").catch(() => ({ rooms: {} })),
       ];
 
       if (cfg.hue_paired) {
@@ -378,10 +386,11 @@ function App() {
       setLightningActiveRooms(results[1].active || []);
       setSegmentInfo(results[2]);
       setSegmentState(results[3]?.state || {});
+      setRoomStatus(results[4]?.rooms || {});
 
       if (cfg.hue_paired) {
-        setHueLights(results[4]?.lights || []);
-        setHueGroups(results[5]?.groups || []);
+        setHueLights(results[5]?.lights || []);
+        setHueGroups(results[6]?.groups || []);
       }
     } catch (e) {
       setError(e.message);
@@ -669,6 +678,22 @@ function App() {
       setHueRescanning(false);
     }
   }, []);
+
+  // "Set here" — put back the look LightEmUp recorded, after something else
+  // (usually a Google Home routine forcing a plain colour temperature) has
+  // changed the room. A scene replays asynchronously server-side, so wait a
+  // moment before resyncing or the status would still read as diverged.
+  const reapplyRoom = useCallback(async (roomName) => {
+    try {
+      const res = await api("/rooms/reapply", {
+        method: "POST", body: JSON.stringify({ room_name: roomName }),
+      });
+      await new Promise(r => setTimeout(r, res && res.async ? 3000 : 800));
+      await loadAll();
+    } catch (e) {
+      console.warn("Re-apply failed:", e);
+    }
+  }, [loadAll]);
 
   // One handler for the offline badge on any card — each vendor's "check again"
   // means something different (ask the bridge vs re-scan the LAN), so dispatch on
@@ -1113,6 +1138,8 @@ function App() {
                   minSatPct={minSatPct}
                   savedColorState={roomColorState[roomName]}
                   lastApplied={roomLastApplied[roomName]}
+                  lastStatus={roomStatus[roomName]}
+                  onReapply={reapplyRoom}
                   ctCorrection={ctCalibrated}
                   onRecheck={recheckDevice}
                   onScheduleLook={handleScheduleLook}
