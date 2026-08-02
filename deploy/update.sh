@@ -8,8 +8,21 @@ cd "$APP_DIR"
 UNIT_SRC="$APP_DIR/deploy/lightemup.service"
 UNIT_DEST=/etc/systemd/system/lightemup.service
 
-have_tty()  { [ -t 0 ]; }
-sudo_free() { sudo -n true 2>/dev/null; }   # passwordless sudo available?
+SYSTEMCTL="$(command -v systemctl || echo /usr/bin/systemctl)"
+
+have_tty() { [ -t 0 ]; }
+
+# Can we restart the service without a password?
+#
+# This must ask about the EXACT command we need, not about sudo in general.
+# `sudo -n true` looks like the obvious probe and is wrong here: install-sudoers.sh
+# deliberately grants only restart / daemon-reload / status, so /bin/true is NOT
+# authorised and the probe failed on a box where the deploy would have worked
+# perfectly. `sudo -l <cmd>` asks "am I allowed to run this?" without running it.
+# The `sudo -n true` fallback covers a box with blanket passwordless sudo.
+sudo_free() {
+  sudo -n -l "$SYSTEMCTL" restart lightemup >/dev/null 2>&1 || sudo -n true 2>/dev/null
+}
 
 # ── Fail BEFORE touching anything ───────────────────────────────────────────
 # A deploy that pulls new files and then can't restart leaves the worst possible

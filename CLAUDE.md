@@ -51,6 +51,11 @@ instead of spelunking, and **update them when you change how something works.**
   `ssh -t pi@lightemup 'sudo ~/lightemup/deploy/install-sudoers.sh'` — installs a
   narrowly-scoped `/etc/sudoers.d/lightemup` (restart / daemon-reload / status only;
   writing the unit file still needs a password, since that's equivalent to root).
+  **Once that's installed, deploys run unattended** — no `-t`, no terminal:
+  `ssh pi@lightemup '~/lightemup/deploy/update.sh'`. (v3.17.1: the script's
+  can-I-finish probe asks `sudo -l` about the *restart command specifically*. It used
+  to ask `sudo -n true`, which the narrow rule correctly denies — so a correctly
+  configured box was refused its own deploy.)
 - `update.sh` **checks it can finish before it changes anything** (v3.15.1). A deploy
   that pulls new files and then can't restart leaves the worst state — new frontend on
   disk, old backend running, so the browser calls endpoints that don't exist yet. It
