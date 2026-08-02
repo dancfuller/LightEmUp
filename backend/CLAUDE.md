@@ -390,7 +390,8 @@ which at 3am lights the whole house. On a **genuine fresh boot** the lifespan sc
 ## Time-based schedules (v3.8.0)
 `config["schedules"]` (a list) + `config["location"]` ({lat,lng}) — both additive, read
 via `.get`, no `schema_version` bump. A schedule pairs a **trigger** (`weekly` /
-`oneoff` / `sun`) with an **action** (`scene` / `white` / `color`) for one room.
+`oneoff` / `sun`) with an **action** (`scene` / `palette` / `white` / `color` / `power`)
+for one room (or, for everything except `scene`, a zone).
 - **`_scheduler_loop()`** is one background task started in the lifespan. It sleeps to
   just past the top of each minute via `asyncio.wait_for(_scheduler_stop.wait(), …)`
   (the cooperative-sleep idiom from `scenes.py`), so shutdown is instant. Each tick it
@@ -426,6 +427,55 @@ via `.get`, no `schema_version` bump. A schedule pairs a **trigger** (`weekly` /
   `enabled` patches just that field**, which is how the list's toggle works — changing
   `trigger` resets `last_fired` so a retimed schedule isn't blocked by the old dedupe),
   `DELETE /api/schedules/{id}`, `GET/POST /api/location`.
+
+## Random palettes in the scheduler (v3.17.0)
+"Ten minutes before sunset, put the living room on **a** Summer palette." The action
+stores a **source, not a snapshot** — the look is resolved when it fires, which is the
+whole point: the same schedule has to look different tonight than it did last night.
+
+**Action shape** (`type: "palette"`), targets a room OR a zone:
+```jsonc
+{ "type": "palette", "room": "Living Room",   // or "zone": "Inside"
+  "source": "category",   // "category" | "list"
+  "category": "Summer",   // source=category; "All" and "Featured" also work
+  "palettes": ["Tropical", "Noir"],           // source=list, in this order
+  "brightness": 80, "segments": true }
+```
+
+- **The library is shared, not duplicated.** `backend/palette_library.json` is the single
+  source of truth; `backend/static/js/palette-library.js` is **generated** from it by
+  `tools/build-palette-library.py`. The 160 palettes lived inline in `color-mode.js` until
+  now, which was fine while they were a browser-only idea — the scheduler fires on the Pi
+  with no browser attached. **Add a palette to the JSON, re-run the generator, commit
+  both.** The generator refuses to write a file that fails its structural checks.
+- **`palettes.py` is pure data + selection** — it knows nothing about rooms or devices.
+  `resolve_candidates(action)` mirrors the frontend's `paletteCandidates()`; keep the two
+  in step or the editor will preview a set the Pi won't draw from. Unknown names are
+  **dropped and logged**, never fatal: a renamed palette must not stop a schedule firing.
+- **`pick()` avoids an immediate repeat.** `_last_palette_pick` is keyed by schedule id and
+  lives **in memory only** — persisting it would mean an SD-card write every time any
+  schedule fires, to defend against a repeat that only matters across a restart. With one
+  candidate, repeating is the correct answer.
+- **A zone picks ONCE and fans out**, so "random Summer palette" reads as one decision
+  across the house rather than six unrelated ones. That's why `_apply_room_palette` takes
+  an already-chosen palette instead of choosing per room, and why palette is handled
+  directly in `_fire_schedule` rather than via `_apply_action_to_room`.
+- **`_build_palette_scene` is the only place the backend does scene math**, and it's
+  deliberately simpler than the browser's adjacency solver: deal a shuffled pool
+  round-robin (`_ColorDealer`, which never repeats consecutively even across cycle
+  boundaries) over devices sorted by layout position (`_palette_device_order`). That buys
+  the two properties that matter — no two neighbours share a colour, and the arrangement
+  re-rolls every fire. It emits a normal `SceneApplyRequest`, so **all the existing
+  timing, staggering, cloud_v2 colour batching, progress SSE and "Now showing" recording
+  come for free** (incl. `expect_hue`, so divergence detection works on palette fires).
+- **Why not snapshot ten payloads in the browser and pick one?** A category is ten
+  devices-worth of resolved JSON, which would bloat `config.json` (rewritten on every
+  mutation, on an SD card) by an order of magnitude, go stale the moment a light is added
+  to the room, and freeze each palette into one arrangement forever.
+- Endpoints: `GET /api/palettes` (the library **as the Pi sees it** — the browser has it
+  statically, so this exists to catch the two copies drifting) and
+  `POST /api/palettes/apply` (the editor's "Try one now": same candidate resolution, same
+  apply path, immediately).
 
 ## Zones + safe room rename + Power action (v3.9.0, live control v3.15.0)
 **Zones** (`config["zones"]`, additive `{ zoneName: { rooms: [name,…] } }`, name-keyed

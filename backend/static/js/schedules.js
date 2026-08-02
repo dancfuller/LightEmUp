@@ -1,13 +1,24 @@
 // Schedules tab — time-based automation.
 //
 // A schedule pairs a TRIGGER (weekly / one-off / sunrise-sunset) with an ACTION
-// (a captured color scene, a white temperature, or a single color) for one room.
+// (a captured color scene, a random palette, a white temperature, or a single
+// color) for one room or zone.
 //
-// Scene actions are SNAPSHOTS, not recipes. All the scene math (palette,
-// gradient, beacon, teams…) lives in color-mode.js in the browser, so a schedule
-// stores the fully-resolved apply plan captured by "Schedule this look" — the
-// backend replays it verbatim. That's also why a scene can't be authored here:
-// you build the look in the room's Scenes panel and capture it.
+// SNAPSHOT vs RECIPE — the two kinds of colour action, and why both exist:
+//
+//   scene   — a SNAPSHOT. All the scene math (gradient, beacon, teams…) lives in
+//             color-mode.js in the browser, so the schedule stores the fully
+//             resolved apply plan captured by "Schedule this look" and the
+//             backend replays it verbatim. Exact and repeatable, but frozen: it
+//             can't be authored here, only captured in the room's Scenes panel.
+//
+//   palette — a RECIPE (v3.17.0). The schedule stores WHICH PALETTES to draw
+//             from ("any Summer palette", or these four), and the Pi picks one
+//             and assigns it to the room's lights when it fires. That's the
+//             point: the same 10-minutes-before-sunset schedule should look
+//             different tonight than it did last night. It can be authored right
+//             here because the palette library is shared with the backend —
+//             see palette-library.js, generated from backend/palette_library.json.
 
 const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];   // 0 = Monday, matching Python's weekday()
 const DAY_PRESETS = [
@@ -20,6 +31,97 @@ const WHITE_PRESETS = [
   { label: "Neutral", kelvin: 4000, tint: "#fde68a" },
   { label: "Cool White", kelvin: 6500, tint: "#93c5fd" },
 ];
+
+// ─── Palette preview pieces ─────────────────────────────────────────────────
+// A palette action is only trustworthy if you can SEE what it might do, so every
+// place one appears — the editor, the picker grid, the saved-schedule row —
+// renders the actual colours rather than just a name.
+
+const PALETTE_BY_NAME = (() => {
+  const m = {};
+  (typeof PALETTE_LIBRARY !== "undefined" ? PALETTE_LIBRARY : []).forEach(p => { m[p.name] = p; });
+  return m;
+})();
+
+// Category chips, with the same two virtual entries the colour tool offers.
+// The backend understands both (palettes.in_category), so a schedule authored
+// from "Featured" resolves to the same 22 palettes on the Pi.
+const PALETTE_FILTERS = ["Featured", "All",
+  ...(typeof PALETTE_CATEGORIES !== "undefined" ? PALETTE_CATEGORIES : [])];
+
+function palettesFor(filter) {
+  const lib = typeof PALETTE_LIBRARY !== "undefined" ? PALETTE_LIBRARY : [];
+  if (filter === "All") return lib;
+  if (filter === "Featured") return lib.filter(p => p.featured);
+  return lib.filter(p => p.category === filter);
+}
+
+// The set a palette action will draw from — the browser's mirror of the
+// backend's palettes.resolve_candidates(). Keep the two in step: what the editor
+// previews has to be exactly what the Pi will choose between.
+function paletteCandidates(action) {
+  if (!action) return [];
+  if (action.source === "list") {
+    return (action.palettes || []).map(n => PALETTE_BY_NAME[n]).filter(Boolean);
+  }
+  return palettesFor(action.category || "All");
+}
+
+// The colour bar. Equal-width stops, no gaps — it reads as one object at 40px
+// wide in a list row and at 160px wide in the picker.
+function PaletteStrip({ colors, height = 10, radius = 3 }) {
+  return (
+    <div style={{ display: "flex", height, borderRadius: radius, overflow: "hidden" }}>
+      {(colors || []).map((c, i) => (
+        <div key={i} style={{ flex: 1, background: `rgb(${c.r}, ${c.g}, ${c.b})` }} />
+      ))}
+    </div>
+  );
+}
+
+// A saved row's preview: the first few palettes this schedule could choose from.
+// A name alone ("random from Summer") doesn't tell you whether that's the mood
+// you wanted at 9pm; four colour bars do.
+function PaletteCandidatePeek({ action, max = 4 }) {
+  const cands = paletteCandidates(action);
+  if (!cands.length) return null;
+  const shown = cands.slice(0, max);
+  return (
+    <div style={{ display: "flex", gap: 4, alignItems: "center", marginTop: 6, flexWrap: "wrap" }}>
+      {shown.map(p => (
+        <div key={p.name} title={p.name} style={{ width: 46 }}>
+          <PaletteStrip colors={p.colors} height={8} radius={2} />
+        </div>
+      ))}
+      {cands.length > shown.length && (
+        <span style={{ fontSize: 10, color: "#64748b" }}>+{cands.length - shown.length}</span>
+      )}
+    </div>
+  );
+}
+
+// One selectable palette in the picker grid.
+function PaletteCard({ palette, selected, onClick, isMobile }) {
+  return (
+    <button onClick={onClick} style={{
+      padding: isMobile ? 6 : 8, borderRadius: 8, cursor: "pointer", textAlign: "left",
+      border: selected ? "1px solid #6366f1" : "1px solid #334155",
+      background: selected ? "rgba(99,102,241,0.18)" : "#0f172a",
+      display: "flex", flexDirection: "column", gap: 5, width: "100%",
+    }}>
+      <PaletteStrip colors={palette.colors} height={isMobile ? 12 : 14} />
+      <div style={{
+        display: "flex", alignItems: "center", gap: 4,
+        fontSize: isMobile ? 10 : 11, fontWeight: 600,
+        color: selected ? "#c7d2fe" : "#cbd5e1",
+        overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+      }}>
+        {selected && <span style={{ color: "#818cf8" }}>✓</span>}
+        {palette.name}
+      </div>
+    </button>
+  );
+}
 
 function pad2(n) { return String(n).padStart(2, "0"); }
 
@@ -64,6 +166,17 @@ function actionSummary(action) {
     const n = (p.hue?.length || 0) + (p.govee_whole?.length || 0)
       + (p.razer?.length || 0) + (p.cloud?.length || 0);
     return `Scene · ${n} device${n === 1 ? "" : "s"}`;
+  }
+  if (action.type === "palette") {
+    const cands = paletteCandidates(action);
+    // A stored action names palettes; if the library no longer has any of them
+    // the schedule will fire and do nothing, so say so instead of "0 palettes".
+    if (cands.length === 0) return "Palette · none of these exist any more";
+    // "1 palette" isn't random at all, and saying so avoids someone wondering
+    // why their "random" schedule shows the same look every night.
+    if (cands.length === 1) return `Palette · always ${cands[0].name}`;
+    return `Random palette · ${action.source === "list"
+      ? `${cands.length} palettes` : `${action.category || "All"} (${cands.length})`}`;
   }
   if (action.type === "white") return `White ${action.kelvin}K · ${action.brightness}%`;
   if (action.type === "color") {
@@ -119,6 +232,205 @@ function todayISO() {
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 }
 
+// ─── Palette action editor ──────────────────────────────────────────────────
+// Two ways to say "surprise me": a whole category, or a hand-picked set. Both
+// resolve to a CANDIDATE LIST that the Pi draws one from at fire time, so both
+// render that list as swatches — the preview isn't decoration, it's the only way
+// to know what a schedule you'll never watch fire is actually going to do.
+
+function PaletteActionEditor({ action, patchAction, isMobile, label, field, seg, onTry }) {
+  const isList = action.source === "list";
+  // The picker's browse filter is separate from the action's category: in list
+  // mode you want to wander through categories while your picks (which may span
+  // several) stay put.
+  const [filter, setFilter] = useState(action.category || "Featured");
+  const [trying, setTrying] = useState(false);
+  const [tried, setTried] = useState(null);
+
+  const selected = action.palettes || [];
+  const candidates = paletteCandidates(action);
+
+  const toggle = (name) => patchAction({
+    palettes: selected.includes(name) ? selected.filter(n => n !== name) : [...selected, name],
+  });
+
+  const tryIt = async () => {
+    setTrying(true); setTried(null);
+    try {
+      setTried({ ok: true, ...(await onTry()) });
+    } catch (e) {
+      setTried({ ok: false, message: e?.message || "the hub couldn't apply it" });
+    }
+    setTrying(false);
+  };
+
+  const gridStyle = {
+    display: "grid",
+    // Two columns on a phone rather than one: these are 14px swatch bars, and a
+    // single column would turn a 160-palette library into an endless scroll.
+    gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(auto-fill, minmax(150px, 1fr))",
+    gap: 6, maxHeight: isMobile ? 240 : 300, overflowY: "auto",
+    padding: 2, borderRadius: 8,
+  };
+
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
+        <button style={seg(!isList)}
+          onClick={() => patchAction({ source: "category", category: action.category || "Summer" })}>
+          {isMobile ? "A category" : "Random from a category"}
+        </button>
+        <button style={seg(isList)}
+          onClick={() => patchAction({ source: "list", palettes: selected })}>
+          {isMobile ? "Pick palettes" : "Pick specific palettes"}
+        </button>
+      </div>
+
+      {!isList && (
+        <div style={{ marginBottom: 12 }}>
+          <div style={label}>Category</div>
+          <select value={action.category || "Summer"}
+            onChange={e => patchAction({ category: e.target.value })} style={field}>
+            {PALETTE_FILTERS.map(c => (
+              <option key={c} value={c}>{c} ({palettesFor(c).length})</option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      {isList && (
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 8 }}>
+            {PALETTE_FILTERS.map(c => (
+              <button key={c} onClick={() => setFilter(c)}
+                style={{ ...seg(filter === c), fontSize: isMobile ? 10 : 11, padding: "4px 8px" }}>
+                {c}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div style={{
+        display: "flex", justifyContent: "space-between", alignItems: "baseline",
+        gap: 8, marginBottom: 6, flexWrap: "wrap",
+      }}>
+        <div style={{ ...label, marginBottom: 0 }}>
+          {isList ? `Chosen — ${selected.length} palette${selected.length === 1 ? "" : "s"}`
+                  : `Picks one of these ${candidates.length}`}
+        </div>
+        {isList && selected.length > 0 && (
+          <button onClick={() => patchAction({ palettes: [] })} style={{
+            border: "none", background: "transparent", color: "#818cf8",
+            fontSize: 11, fontWeight: 600, cursor: "pointer", padding: 0,
+          }}>Clear</button>
+        )}
+      </div>
+
+      {/* Picks can span categories, but the grid only ever shows ONE category —
+          so without this, choosing three Summer palettes and then browsing to
+          Winter would leave you with no idea what you'd chosen. Always visible,
+          and each chip removes itself. */}
+      {isList && selected.length > 0 && (
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+          {selected.map(name => {
+            const p = PALETTE_BY_NAME[name];
+            return (
+              <button key={name} onClick={() => toggle(name)}
+                title="Remove"
+                style={{
+                  display: "flex", alignItems: "center", gap: 6, padding: "4px 8px",
+                  borderRadius: 999, border: "1px solid #4338ca",
+                  background: "rgba(99,102,241,0.15)", cursor: "pointer",
+                  fontSize: isMobile ? 10 : 11, fontWeight: 600, color: "#c7d2fe",
+                }}>
+                <span style={{ width: 32, display: "block" }}>
+                  <PaletteStrip colors={p ? p.colors : []} height={8} radius={2} />
+                </span>
+                {name}
+                <span style={{ color: "#818cf8" }}>×</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {isList ? (
+        <div style={gridStyle}>
+          {palettesFor(filter).map(p => (
+            <PaletteCard key={p.name} palette={p} isMobile={isMobile}
+              selected={selected.includes(p.name)} onClick={() => toggle(p.name)} />
+          ))}
+        </div>
+      ) : (
+        <div style={gridStyle}>
+          {candidates.map(p => (
+            <PaletteCard key={p.name} palette={p} isMobile={isMobile}
+              selected={false} onClick={() => {
+                // Clicking a card in category mode is a natural "actually, just
+                // this one" — switch to a one-item list rather than ignoring it.
+                patchAction({ source: "list", palettes: [p.name] });
+              }} />
+          ))}
+        </div>
+      )}
+
+      {isList && selected.length === 0 && (
+        <div style={{ fontSize: 11, color: "#f59e0b", marginTop: 8 }}>
+          Pick at least one palette — tap the cards above.
+        </div>
+      )}
+      {candidates.length === 1 && (
+        <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 8 }}>
+          With one palette there's nothing to choose between — this will show{" "}
+          <strong>{candidates[0].name}</strong> every time.
+        </div>
+      )}
+
+      <div style={{ marginTop: 14 }}>
+        <div style={label}>Brightness · {action.brightness ?? 100}%</div>
+        <input type="range" min={1} max={100} value={action.brightness ?? 100}
+          onChange={e => patchAction({ brightness: Number(e.target.value) })}
+          style={{ width: "100%", accentColor: "#6366f1" }} />
+      </div>
+
+      <label style={{
+        display: "flex", alignItems: "flex-start", gap: 8, marginTop: 12,
+        fontSize: 12, color: "#cbd5e1", cursor: "pointer",
+      }}>
+        <input type="checkbox" checked={action.segments !== false}
+          onChange={e => patchAction({ segments: e.target.checked })}
+          style={{ accentColor: "#6366f1", marginTop: 2 }} />
+        <span>
+          Spread colours across Govee segments
+          <span style={{ display: "block", fontSize: 10, color: "#64748b" }}>
+            Only affects devices already switched to segment mode. Off = one colour per device.
+          </span>
+        </span>
+      </label>
+
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 12 }}>
+        <button onClick={tryIt} disabled={trying || candidates.length === 0} style={{
+          padding: "7px 14px", borderRadius: 8, border: "1px solid #334155",
+          background: "transparent", color: candidates.length ? "#c7d2fe" : "#475569",
+          fontSize: 12, fontWeight: 600, cursor: trying ? "wait" : "pointer",
+        }}>{trying ? "Applying…" : "Try one now"}</button>
+        {tried && (
+          <span style={{ fontSize: 11, color: tried.ok ? "#4ade80" : "#f87171" }}>
+            {tried.ok
+              ? `Picked ${tried.palette} — now on ${(tried.rooms || []).join(", ")}`
+              : `Couldn't apply — ${tried.message}`}
+          </span>
+        )}
+      </div>
+      <div style={{ fontSize: 10, color: "#64748b", marginTop: 6 }}>
+        "Try one now" turns the lights on and applies a random pick, exactly as the
+        schedule will.
+      </div>
+    </div>
+  );
+}
+
 // ─── Editor ─────────────────────────────────────────────────────────────────
 
 function ScheduleEditor({ initial, rooms, zoneNames, favorites, onFavoritesChange, onSave, onCancel, isMobile }) {
@@ -151,9 +463,31 @@ function ScheduleEditor({ initial, rooms, zoneNames, favorites, onFavoritesChang
     patchTrigger({ days: days.includes(d) ? days.filter(x => x !== d) : [...days, d].sort((a, b) => a - b) });
   };
 
+  // "Try one now" — fire the action immediately against the same target, so the
+  // thing you're about to trust to run at sunset can be seen on the actual walls
+  // first. Same endpoint shape as the stored action; the backend picks and
+  // applies exactly as the scheduler would.
+  const tryPalette = () => api("/palettes/apply", {
+    method: "POST",
+    body: JSON.stringify({
+      room: action.zone ? null : action.room,
+      zone: action.zone || null,
+      source: action.source || "category",
+      category: action.category || null,
+      palettes: action.palettes || [],
+      brightness: action.brightness ?? 100,
+      segments: action.segments !== false,
+    }),
+  });
+
   const submit = async () => {
     if (isZone) { if (!action.zone) { setError("Pick a zone."); return; } }
     else if (!action.room) { setError("Pick a room."); return; }
+    if (action.type === "palette" && paletteCandidates(action).length === 0) {
+      setError(action.source === "list"
+        ? "Pick at least one palette." : "That category has no palettes.");
+      return;
+    }
     if (trigger.type !== "sun" && !/^\d{2}:\d{2}$/.test(trigger.time || "")) { setError("Pick a time."); return; }
     if (trigger.type === "oneoff" && !trigger.date) { setError("Pick a date."); return; }
     if (trigger.type !== "oneoff" && !(trigger.days || []).length) { setError("Pick at least one day."); return; }
@@ -239,6 +573,12 @@ function ScheduleEditor({ initial, rooms, zoneNames, favorites, onFavoritesChang
                 onClick={() => patchAction({ type: "white", kelvin: action.kelvin || 2700, brightness: action.brightness ?? 100 })}>White</button>
               <button style={seg(action.type === "color")}
                 onClick={() => patchAction({ type: "color", rgb: action.rgb || { r: 255, g: 180, b: 100 }, brightness: action.brightness ?? 100 })}>Color</button>
+              <button style={seg(action.type === "palette")}
+                onClick={() => patchAction({
+                  type: "palette", source: action.source || "category",
+                  category: action.category || "Summer", palettes: action.palettes || [],
+                  brightness: action.brightness ?? 100, segments: action.segments !== false,
+                })}>Palette</button>
               <button style={seg(action.type === "power")}
                 onClick={() => patchAction({ type: "power", on: action.on ?? true })}>On / Off</button>
             </>
@@ -272,6 +612,11 @@ function ScheduleEditor({ initial, rooms, zoneNames, favorites, onFavoritesChang
               </button>
             ))}
           </div>
+        )}
+
+        {action.type === "palette" && (
+          <PaletteActionEditor action={action} patchAction={patchAction} isMobile={isMobile}
+            label={label} field={field} seg={seg} onTry={tryPalette} />
         )}
 
         {action.type === "color" && (
@@ -468,8 +813,9 @@ function SchedulesTab({ schedules, rooms, zones, location, favorites, onFavorite
           <div style={{ fontSize: 28, marginBottom: 8 }}>⏰</div>
           <div style={{ fontSize: 14, fontWeight: 600, color: "#94a3b8", marginBottom: 6 }}>No schedules yet</div>
           <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.6 }}>
-            Add one here for a white or single-color look, or build a full scene in a
-            room's <strong>Scenes</strong> panel and press <strong>⏰ Schedule this look</strong>.
+            Add one here for a white, single-color or <strong>random palette</strong> look
+            — or build a full scene in a room's <strong>Scenes</strong> panel and press{" "}
+            <strong>⏰ Schedule this look</strong>.
           </div>
         </div>
       )}
@@ -487,6 +833,7 @@ function SchedulesTab({ schedules, rooms, zones, location, favorites, onFavorite
               <div style={{ fontSize: 12, color: "#64748b", marginTop: 2 }}>
                 {targetSummary(s.action)} · {actionSummary(s.action)}
               </div>
+              {s.action?.type === "palette" && <PaletteCandidatePeek action={s.action} />}
               <div style={{ fontSize: 11, color: s.enabled ? "#34d399" : "#64748b", marginTop: 6 }}>
                 Next: {nextRunLabel(s)}
               </div>

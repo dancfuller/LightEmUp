@@ -8,9 +8,9 @@ rules that apply to every UI change. **Keep this file current when behavior chan
 
 ## Load order (from index.html)
 utils → audio → components-shared → light-card → lightning-panel → room-map →
-palette-data → color-mode → location-data → schedules → segment-reset-debug →
-room-section → zones → room-assignment → setup-wizard → server-logs →
-ct-calibration → backup-restore → app
+palette-data → palette-library → color-mode → location-data → schedules →
+segment-reset-debug → room-section → zones → room-assignment → setup-wizard →
+server-logs → ct-calibration → backup-restore → app
 
 A new file must be added to index.html in the correct slot (after its dependencies).
 
@@ -197,6 +197,11 @@ Assigns colors/temperatures across a room's devices and applies them.
   near-neutrals are judged on lightness alone; floor of 4. Deliberately monochromatic
   themes (Cranberry, Noir, Snowfall) are legitimate — they're just shorter now.
   **When adding a palette, list only genuinely distinct colours.**
+- **The library itself moved OUT of this file in v3.17.0.** `paletteLibrary` is now just
+  `PALETTE_LIBRARY` from the generated `palette-library.js`, because the scheduler's
+  random-palette action needs the same table on the Pi. Add palettes in
+  `backend/palette_library.json` and re-run `python tools/build-palette-library.py` —
+  editing the generated JS is silently undone by the next regeneration.
 - **Picking a library palette adopts ITS length**, replacing both `paletteColors` and
   `paletteSource`. It used to keep whatever count was showing and pad the difference via
   `extendPalette` — whose first extension round is a *lighter tint* of an existing colour,
@@ -283,6 +288,29 @@ add/edit form; `LocationCard` renders in Settings.
   name → app's `handleScheduleLook` stashes `pendingScheduleScene` and switches to the
   Schedules tab; a `SchedulesTab` effect opens the editor pre-filled and calls
   `onConsumePending()` so revisiting the tab doesn't reopen it.
+- **Palette actions ARE authored here — they're recipes, not snapshots (v3.17.0).**
+  `PaletteActionEditor` builds `{type:"palette", source:"category"|"list", category,
+  palettes[], brightness, segments}`; the Pi picks one candidate and assigns it to the
+  room's lights *when it fires*, so the same schedule looks different each night. This is
+  the opposite of a scene action, and both belong: a scene is exact and frozen, a palette
+  is varied and survives room edits.
+  - **The preview is the feature, not decoration.** You will never watch this schedule
+    fire, so every surface shows the actual colours: the editor grids the whole candidate
+    set as `PaletteCard`s, chosen palettes appear as removable chips **that stay visible
+    while you browse other categories** (picks span categories; the grid shows one), and
+    each saved row gets a `PaletteCandidatePeek` — up to four colour bars plus "+N".
+  - **`paletteCandidates()` must mirror the backend's `palettes.resolve_candidates()`.**
+    If they drift, the editor previews a set the Pi won't draw from. Same for the two
+    virtual categories, `Featured` and `All` — the backend understands both.
+  - `actionSummary` refuses to overstate: one candidate reads "always <name>" (it isn't
+    random), and a list whose palettes no longer exist says so rather than "0 palettes".
+  - **"Try one now"** (`POST /api/palettes/apply`) resolves and applies through the exact
+    path the scheduler uses, so what you see is what will run. It drives real lights —
+    the button says so.
+- **`palette-library.js` is GENERATED — never hand-edit it.** Source of truth is
+  `backend/palette_library.json`; regenerate with `python tools/build-palette-library.py`
+  and commit both. It defines `PALETTE_LIBRARY` (160 palettes, variable 4–8 colours) and
+  `PALETTE_CATEGORIES`, and must load **before** `color-mode.js` and `schedules.js`.
 - **Day numbering is 0=Monday** (Python's `weekday()`), NOT JS `getDay()`'s 0=Sunday.
   `nextRunLabel` converts with `(getDay() + 6) % 7`. Get this wrong and every weekly
   schedule is off by a day.

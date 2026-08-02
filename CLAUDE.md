@@ -96,6 +96,10 @@ backend/
   main.py              # FastAPI app — all API endpoints
   discovery.py         # Hue REST + Govee UDP discovery & control
   scenes.py            # Lightning storm scene engine
+  palettes.py          # Palette library loader + candidate resolution / random pick
+                       # for the scheduler's "random palette" action (v3.17.0)
+  palette_library.json # SOURCE OF TRUTH for the 160 curated palettes, shared by the
+                       # server and (via a generated JS file) the browser
   config.json          # LOCAL ONLY (gitignored) — user config
   config.json.example  # Template for config.json
   static/
@@ -108,10 +112,14 @@ backend/
       lightning-panel.js  # LightningPanel — storm scene UI with presets and SSE sync
       room-map.js         # RoomMap — interactive SVG floor plan & linear layout editor
       palette-data.js     # Static color datasets for Teams/NCAA/Flags modes (PRESET_TEAMS/NCAA/FLAGS)
+      palette-library.js  # GENERATED (tools/build-palette-library.py) — PALETTE_LIBRARY +
+                          # PALETTE_CATEGORIES, the 160 curated palettes. Never hand-edit;
+                          # edit backend/palette_library.json and regenerate.
       color-mode.js       # Room color tool — palette/gradient/beacon/custom/teams/ncaa/flags + apply pipeline
       location-data.js    # GENERATED (tools/build-location-data.py) — ZIP3 + world city
                           # coordinates for offline location entry. Never hand-edit.
-      schedules.js        # SchedulesTab (time-based automation) + Settings LocationCard
+      schedules.js        # SchedulesTab (time-based automation, incl. the random-palette
+                          # action + its swatch previews) + Settings LocationCard
       zones.js            # ZoneBar (live On/Off per zone, in the global bar on every
                           # tab) + ZoneManager (create/edit, in Assign Rooms)
       segment-reset-debug.js # Debug panel for segment reset behavior
@@ -131,6 +139,10 @@ deploy/
   install-sudoers.sh   # One-time: narrow NOPASSWD rule so deploys need no terminal.
   lightemup.service    # systemd unit
 tools/
+  build-palette-library.py # Regenerates backend/static/js/palette-library.js from
+                       # backend/palette_library.json (the single source of truth for
+                       # palettes, shared by the browser and the scheduler on the Pi).
+                       # Self-verifying: structural checks + spot-checks, exits non-zero.
   build-location-data.py # Regenerates backend/static/js/location-data.js from the
                        # public-domain US Census ZCTA gazetteer (+ a curated city list).
                        # Self-verifying: sanity/spot checks, exits non-zero on bad data.
@@ -233,6 +245,12 @@ All endpoints are under `/api/`. Key groups:
   `DELETE /{id}`); `/api/location` — lat/lng for sunrise/sunset triggers. Config keys
   `schedules` + `location` are additive. The hub fires these on its own via a
   once-a-minute background loop — see `backend/CLAUDE.md` "Time-based schedules"
+- `/api/palettes` — the shared palette library as the *Pi* sees it (the browser has the
+  same data statically in `palette-library.js`; this endpoint exists so the two copies
+  can be checked for drift). `POST /api/palettes/apply` — resolve a palette action's
+  candidates, pick one at random, and apply it to a room/zone right now; it's the
+  scheduler editor's "Try one now", and the same path a `palette` schedule fires. See
+  `backend/CLAUDE.md` "Random palettes in the scheduler"
 - `/api/zones` — zone CRUD (GET list, POST upsert-by-name, `DELETE /{name}`). A zone is a
   named group of rooms (config key `zones`, additive) that fans a white/color/power action
   over every member room (scenes stay room-only). `POST /api/zones/control` drives one

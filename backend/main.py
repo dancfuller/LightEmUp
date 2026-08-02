@@ -7,6 +7,7 @@ import json
 import logging
 import math
 import os
+import random
 import sys
 import subprocess
 import time
@@ -44,6 +45,7 @@ from discovery import (
 )
 from scenes import scene_manager, LightningSettings
 from razer_keeper import razer_keeper
+import palettes
 from version import __version__ as APP_VERSION, GIT_HASH, GIT_DATE, version_string
 import segment_state
 
@@ -972,6 +974,197 @@ async def _apply_room_color(room_name: str, r: int, g: int, b: int, brightness_p
                         source=source, source_detail=source_detail, expect=sent)
 
 
+# ─── Palette actions (v3.17.0) ───────────────────────────────────────────────
+# A palette schedule stores a SOURCE, not a snapshot: "a random palette from
+# Summer" or "a random one of these four". The look is resolved at fire time,
+# which is the whole point — the same schedule has to produce a different scene
+# each evening. That means the Pi does the colour-to-device assignment itself,
+# where the browser normally would.
+#
+# Why not snapshot ten payloads in the browser and pick one? Because a category
+# is ten devices-worth of resolved JSON per palette, it would bloat config.json
+# (rewritten on every mutation, on an SD card) by an order of magnitude, it goes
+# stale the moment a light is added to the room, and it would freeze each
+# palette into one arrangement forever. Storing the intent instead is smaller,
+# survives room edits, and re-arranges every night.
+#
+# The assignment here is deliberately simpler than the browser's adjacency
+# solver: deal a shuffled pool round-robin over devices sorted by their position
+# in the room layout. That gives the two properties that actually matter — no
+# two neighbours share a colour, and the arrangement differs each fire.
+
+class _ColorDealer:
+    """Hands out palette colours so that consecutive calls never repeat.
+
+    Reshuffles at each cycle boundary (and re-rolls if the new cycle would open
+    with the colour the last one closed on), so a long strip doesn't show the
+    same repeating ABCABC pattern down its whole length."""
+
+    def __init__(self, colors: list, rng=None):
+        self.colors = list(colors)
+        self.rng = rng or random
+        self.queue: list = []
+        self.last = None
+
+    def _refill(self):
+        pool = list(self.colors)
+        self.rng.shuffle(pool)
+        if len(pool) > 1 and pool[0] == self.last:
+            pool.append(pool.pop(0))
+        self.queue = pool
+
+    def next(self):
+        if not self.colors:
+            return (255, 255, 255)
+        if not self.queue:
+            self._refill()
+        self.last = self.queue.pop(0)
+        return self.last
+
+
+def _palette_device_order(room_name: str, keys: list[str]) -> list[str]:
+    """Device keys in room-layout order (left to right, then top to bottom).
+
+    Dealing colours in this order is what makes "no two neighbours match" mean
+    anything spatially. Devices with no placement sort last, in config order —
+    a room that was never laid out still gets a valid, if arbitrary, spread."""
+    positions = ((config.get("room_layouts", {}) or {}).get(room_name) or {}).get("devices") or {}
+    def sort_key(item):
+        i, key = item
+        p = positions.get(key)
+        if not p:
+            return (1, 0.0, 0.0, i)
+        return (0, float(p.get("x", 0)), float(p.get("y", 0)), i)
+    return [k for _, k in sorted(enumerate(keys), key=sort_key)]
+
+
+def _gv_info_for_slug(slug: str):
+    """(mac, info) from known_devices for a stored device slug, or (None, None)."""
+    for mac, info in _known_govee().items():
+        if gv_slug(mac) == slug:
+            return mac, info
+    return None, None
+
+
+def _device_label(key: str, fallback: str) -> str:
+    return (config.get("nicknames", {}) or {}).get(key) or fallback
+
+
+def _build_palette_scene(room_name: str, palette: dict, brightness: int = 100,
+                         use_segments: bool = True, rng=None):
+    """Resolve a palette into a SceneApplyRequest for one room.
+
+    Returns None when the room has nothing addressable — the scheduler then logs
+    and skips rather than firing an empty scene."""
+    room = config.get("rooms", {}).get(room_name)
+    if not room:
+        return None
+    colors = list(palette.get("colors") or [])
+    if not colors:
+        return None
+
+    brightness = max(1, min(100, int(brightness)))
+    dealer = _ColorDealer(colors, rng)
+
+    hue_keys = [f"hue:{lid}" for lid in room.get("hue_light_ids", [])]
+    govee_keys = [f"govee:{slug}" for slug in room.get("govee_devices", [])]
+    ordered = _palette_device_order(room_name, hue_keys + govee_keys)
+
+    seg_mode = config.get("govee_segment_mode", {}) or {}
+    seg_counts = config.get("govee_segment_counts", {}) or {}
+    bri254 = max(1, min(254, round(brightness * 254 / 100)))
+
+    hue, govee_whole, razer, cloud, base_seeds = [], [], [], [], []
+
+    for key in ordered:
+        if key.startswith("hue:"):
+            r, g, b = dealer.next()
+            hue.append(SceneHueTarget(light_id=key[4:], on=True, r=r, g=g, b=b,
+                                      brightness=bri254,
+                                      label=_device_label(key, f"Light {key[4:]}")))
+            continue
+
+        slug = key[6:]
+        mac, info = _gv_info_for_slug(slug)
+        ip = (info or {}).get("ip") or gv_ip_for_slug(slug)
+        if not ip:
+            continue                      # never seen / gone — nothing to address
+        sku = (info or {}).get("sku")
+        label = _device_label(key, (info or {}).get("name") or slug)
+        sku_info = GOVEE_SEGMENT_INFO.get(sku) or {}
+        count = int(seg_counts.get(slug) or sku_info.get("count") or 0)
+        protocol = sku_info.get("protocol")
+
+        if use_segments and seg_mode.get(slug) and count > 0 and protocol:
+            seg_colors = [dealer.next() for _ in range(count)]
+            if protocol == "razer":
+                razer.append(SceneRazer(ip=ip, mac=mac or slug, sku=sku,
+                                        colors=[list(c) for c in seg_colors],
+                                        brightness=brightness, label=label))
+            else:
+                # cloud_v2 is rate-limited, so segments are batched BY COLOUR —
+                # one V2 call per distinct colour instead of one per segment.
+                by_color: dict = {}
+                for idx, c in enumerate(seg_colors):
+                    by_color.setdefault(c, []).append(idx)
+                cloud.append(SceneCloudDevice(
+                    ip=ip, sku=sku, device_mac=mac or slug,
+                    unit="panel" if sku == "H6061" else "segment", label=label,
+                    groups=[SceneCloudGroup(segments=idxs, r=c[0], g=c[1], b=c[2])
+                            for c, idxs in by_color.items()]))
+                # Seed the whole strip with its own middle colour first, so it
+                # reads as the scene immediately instead of flashing white while
+                # the rate-limited segment calls trickle in.
+                seed = seg_colors[len(seg_colors) // 2]
+                base_seeds.append(SceneBaseSeed(ip=ip, mac=mac or slug,
+                                                r=seed[0], g=seed[1], b=seed[2],
+                                                brightness=brightness))
+        else:
+            r, g, b = dealer.next()
+            govee_whole.append(SceneGoveeWhole(ip=ip, mac=mac or slug, on=True,
+                                               r=r, g=g, b=b,
+                                               brightness=brightness, label=label))
+
+    if not (hue or govee_whole or razer or cloud):
+        return None
+    return SceneApplyRequest(room=room_name, brightness=brightness,
+                             base_seeds=base_seeds, hue=hue, govee_whole=govee_whole,
+                             razer=razer, cloud=cloud,
+                             label=f"Palette · {palette['name']}")
+
+
+async def _start_scene_apply(req):
+    """Run a scene in the background, replacing any apply already running in that
+    room. Two applies fighting over the same lights is the one thing worse than
+    a slow one, so the outgoing task is awaited to completion after cancelling —
+    it must have let go of the Govee socket before the new one grabs it."""
+    existing = _scene_tasks.get(req.room)
+    if existing and not existing.done():
+        existing.cancel()
+        try:
+            await existing
+        except BaseException:
+            pass
+    _scene_tasks[req.room] = asyncio.create_task(_run_scene_apply(req))
+    return _scene_tasks[req.room]
+
+
+async def _apply_room_palette(room_name: str, palette: dict, brightness: int = 100,
+                              use_segments: bool = True,
+                              source: str = "app", source_detail: Optional[str] = None) -> bool:
+    """Put one already-chosen palette on a room. The choice is made by the
+    caller so that a ZONE gets one coherent palette across every member room
+    rather than a different random one per room."""
+    req = _build_palette_scene(room_name, palette, brightness, use_segments)
+    if req is None:
+        log.warning("Palette action: room %r has no addressable devices, skipped", room_name)
+        return False
+    req.source = source
+    req.source_detail = source_detail
+    await _start_scene_apply(req)
+    return True
+
+
 async def _apply_room_power(room_name: str, on: bool,
                             source: str = "app", source_detail: Optional[str] = None):
     """Turn a whole room on (resume last state) or off, via the normal room
@@ -1005,12 +1198,34 @@ async def _apply_action_to_room(room: str, action: dict,
         await _apply_room_power(room, bool(action.get("on", True)), source, source_detail)
 
 
+def _zone_rooms(zone_name: str, sched_name: str) -> list[str]:
+    """Member rooms of a zone that still exist, with the missing ones logged."""
+    z = (config.get("zones", {}) or {}).get(zone_name)
+    if not z:
+        log.warning("Scheduler: %r — zone %r not found, skipped", sched_name, zone_name)
+        return []
+    rooms = []
+    for member in z.get("rooms", []):
+        if member in config.get("rooms", {}):
+            rooms.append(member)
+        else:
+            log.warning("Scheduler: %r — zone member %r missing, skipped", sched_name, member)
+    return rooms
+
+
+# schedule id → the palette it last chose, so the next fire can avoid an
+# immediate repeat. Deliberately in memory only: persisting it would mean a
+# config write (an SD-card write) every time a schedule fires, to protect
+# against a repeat that only matters across a restart.
+_last_palette_pick: dict[str, str] = {}
+
+
 async def _fire_schedule(sched: dict):
     """Execute a due schedule's action, reusing the normal control paths.
 
     A scene action always targets one room (a scene is a device-specific
-    snapshot). white / color / power can target a single room OR a zone — a zone
-    fans the same action out over every member room."""
+    snapshot). white / color / power / palette can target a single room OR a
+    zone — a zone fans the same action out over every member room."""
     action = sched.get("action") or {}
     atype = action.get("type")
     room = action.get("room")
@@ -1030,25 +1245,30 @@ async def _fire_schedule(sched: dict):
             req.source_detail = name
             if not req.label:
                 req.label = "Scheduled scene"
-            existing = _scene_tasks.get(req.room)
-            if existing and not existing.done():
-                existing.cancel()
-                try:
-                    await existing
-                except BaseException:
-                    pass
-            _scene_tasks[req.room] = asyncio.create_task(_run_scene_apply(req))
+            await _start_scene_apply(req)
+        elif atype == "palette":
+            # Choose ONCE, then fan out: a zone on "random Summer palette" should
+            # look like one decision across the house, not six unrelated ones.
+            candidates = palettes.resolve_candidates(action)
+            sid = sched.get("id") or name
+            chosen = palettes.pick(candidates, avoid=_last_palette_pick.get(sid))
+            if not chosen:
+                log.warning("Scheduler: %r — palette action matched no palettes, skipped", name)
+                return
+            _last_palette_pick[sid] = chosen["name"]
+            log.info("Scheduler: %r picked palette %r (%d candidate%s)",
+                     name, chosen["name"], len(candidates), "" if len(candidates) == 1 else "s")
+            targets = _zone_rooms(zone, name) if zone else [room]
+            for target in targets:
+                await _apply_room_palette(
+                    target, chosen,
+                    brightness=int(action.get("brightness", 100)),
+                    use_segments=action.get("segments", True) is not False,
+                    source="schedule", source_detail=name)
         elif atype in ("white", "color", "power"):
             if zone:
-                z = (config.get("zones", {}) or {}).get(zone)
-                if not z:
-                    log.warning("Scheduler: %r — zone %r not found, skipped", name, zone)
-                    return
-                for member in z.get("rooms", []):
-                    if member in config.get("rooms", {}):
-                        await _apply_action_to_room(member, action, "schedule", name)
-                    else:
-                        log.warning("Scheduler: %r — zone member %r missing, skipped", name, member)
+                for member in _zone_rooms(zone, name):
+                    await _apply_action_to_room(member, action, "schedule", name)
             else:
                 await _apply_action_to_room(room, action, "schedule", name)
         else:
@@ -3481,12 +3701,13 @@ class LocationRequest(BaseModel):
 
 def _validate_schedule_action(action: dict):
     """Reject impossible action shapes before they're stored. A scene targets one
-    room and carries a resolved payload; white/color/power target a room OR a zone
-    — but a scene can never target a zone (it's a device-specific snapshot)."""
+    room and carries a resolved payload; white/color/power/palette target a room
+    OR a zone — but a scene can never target a zone (it's a device-specific
+    snapshot). A palette CAN, because it's resolved per-room at fire time."""
     if not isinstance(action, dict):
         raise HTTPException(400, "action must be an object")
     atype = action.get("type")
-    if atype not in ("scene", "white", "color", "power"):
+    if atype not in ("scene", "white", "color", "power", "palette"):
         raise HTTPException(400, f"unknown action type {atype!r}")
     if action.get("zone"):
         if atype == "scene":
@@ -3495,6 +3716,66 @@ def _validate_schedule_action(action: dict):
         raise HTTPException(400, "action needs a room or a zone")
     if atype == "scene" and not action.get("payload"):
         raise HTTPException(400, "a scene action needs a captured payload")
+    if atype == "palette":
+        # Catch an empty selection HERE rather than at 3am, where the only
+        # symptom is a schedule that silently does nothing.
+        if not palettes.resolve_candidates(action):
+            if action.get("source") == "list":
+                raise HTTPException(400, "pick at least one palette")
+            raise HTTPException(400, f"no palettes in category {action.get('category')!r}")
+
+
+class PaletteApplyRequest(BaseModel):
+    """Fire a palette action once, right now — the scheduler's "Try it" button.
+    Same shape as the schedule action, so what you preview is literally what
+    will run at sunset."""
+    room: Optional[str] = None
+    zone: Optional[str] = None
+    source: str = "category"           # "category" | "list"
+    category: Optional[str] = None
+    palettes: list[str] = []
+    brightness: int = 100
+    segments: bool = True
+
+
+@app.get("/api/palettes")
+async def get_palettes():
+    """The shared palette library. The browser has the same data statically (see
+    palette-library.js) and doesn't need this — it exists so the library the
+    SCHEDULER will actually draw from can be inspected without ssh'ing to the Pi,
+    which is the only way to catch the two copies drifting apart."""
+    return {
+        "categories": palettes.CATEGORIES,
+        "count": len(palettes.PALETTES),
+        "palettes": [{"name": p["name"], "category": p["category"],
+                      "featured": p["featured"],
+                      "colors": [list(c) for c in p["colors"]]}
+                     for p in palettes.PALETTES],
+    }
+
+
+@app.post("/api/palettes/apply")
+async def apply_palette_now(req: PaletteApplyRequest):
+    """Pick from the same candidate set and apply it immediately, so a palette
+    schedule can be seen before it's trusted to run unattended."""
+    action = req.model_dump()
+    candidates = palettes.resolve_candidates(action)
+    if not candidates:
+        raise HTTPException(400, "no palettes matched that selection")
+    chosen = palettes.pick(candidates)
+    targets = _zone_rooms(req.zone, "Try palette") if req.zone else ([req.room] if req.room else [])
+    if not targets:
+        raise HTTPException(400, "pick a room or a zone")
+    applied = []
+    for target in targets:
+        if await _apply_room_palette(target, chosen, brightness=req.brightness,
+                                     use_segments=req.segments, source="app"):
+            applied.append(target)
+    if not applied:
+        raise HTTPException(400, "nothing addressable in that room")
+    return {"success": True, "palette": chosen["name"], "category": chosen["category"],
+            "colors": [list(c) for c in chosen["colors"]], "rooms": applied,
+            "candidates": len(candidates)}
 
 
 @app.get("/api/schedules")
