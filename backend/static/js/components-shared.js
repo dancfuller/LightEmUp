@@ -589,3 +589,41 @@ function ColorTempSlider({ label = "Color Temperature", kelvin, onChange, min = 
     </div>
   );
 }
+
+// ─── Scene addressing toggle (v3.20.0) ──────────────────────────────────────
+// Segments vs whole for ONE segmented Govee device. Rendered in two places —
+// Settings → Govee Devices (where you set a light's default once) and each
+// room's Scenes panel (where you flip it while building a look) — and both edit
+// the SAME stored value, config `govee_scene_address`. It lives here rather than
+// being written twice precisely so the two surfaces can't drift apart, which is
+// the exact failure that made the scheduler and the scene tool disagree before
+// v3.18.0.
+//
+// `value` is "segments" | "whole" | undefined; undefined means segments, the
+// default for anything with more than one segment.
+function SceneAddressToggle({ value, count, onChange, isMobile, small }) {
+  const pad = small ? (isMobile ? "3px 8px" : "3px 10px") : (isMobile ? "5px 10px" : "5px 12px");
+  const fs = small ? (isMobile ? 10 : 11) : (isMobile ? 11 : 12);
+  return (
+    <div style={{
+      display: "inline-flex", gap: 4, background: "#0f172a",
+      borderRadius: 6, padding: 2, flexShrink: 0,
+    }}>
+      {[["segments", "Segments"], ["whole", "Whole"]].map(([k, lbl]) => {
+        const active = (value === "whole" ? "whole" : "segments") === k;
+        return (
+          <button key={k} onClick={() => onChange(k)}
+            title={k === "segments"
+              ? `Spread a scene's colours across its ${count || ""} segments`.replace("  ", " ")
+              : "Give the whole device one colour"}
+            style={{
+              padding: pad, borderRadius: 5, border: "none",
+              background: active ? "#6366f1" : "transparent",
+              color: active ? "#fff" : "#94a3b8",
+              fontSize: fs, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap",
+            }}>{lbl}</button>
+        );
+      })}
+    </div>
+  );
+}

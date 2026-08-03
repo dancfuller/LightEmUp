@@ -513,6 +513,15 @@ which gives every device (Hue or Govee, present or missing) inline nickname edit
 `POST /api/identify` to locate it physically. `flashBody` is the payload
 (`{light_id}` for Hue, `{ip}` for Govee); pass `null` to hide Flash (unreachable/
 missing devices). `extra` injects per-row buttons (the missing-device Re-scan/Forget).
+- **Scene addressing lives here too (v3.20.0)**, on its own line, for Govee devices with
+  more than one segment (`segmentCount`/`sceneAddressValue`/`onSceneAddressChange`). It is
+  **the same stored value** the room's Scenes panel edits (`govee_scene_address`), not a
+  separate "default" that a room could override — a device is in exactly one room, so a
+  second level would be two names for one thing. Settings is where you set a light once
+  while configuring devices; the Scenes panel is where you flip it while building a look.
+  Both render `SceneAddressToggle` from `components-shared.js` **for that reason** — two
+  hand-rolled copies drifting apart is precisely what made the scheduler and the scene
+  tool disagree before v3.18.0.
 
 ## Full-window room-layout editor + numbered dots/legend (room-map.js, v2.19.0)
 The map was unusable crammed into the ~416px controls drawer (`ControlSurface`). Now

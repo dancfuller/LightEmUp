@@ -110,7 +110,9 @@ backend/
   static/
     index.html         # HTML shell — CSS, CDN imports, script tags
     js/                   # Load order is set by <script> tags in index.html (authoritative)
-      utils.js            # React hooks, api() wrapper, color math, useIsMobile, useThrottledControl, seeded PRNG
+      utils.js            # React hooks, api() wrapper, color math, useIsMobile, useThrottledControl,
+                          # seeded PRNG, goveeSlug/goveeSegmentCount (mirror of the backend's
+                          # gv_slug/gv_segment_count — keep them in step)
       audio.js            # Thunder synth (WebAudio), fart sounds (preloaded MP3s)
       components-shared.js # ColorPicker, ColorWheel, Slider, ColorTempSlider, StatusBadge, RgbSliderInput
       light-card.js       # LightCard — per-device control (toggle, brightness, color, nickname)

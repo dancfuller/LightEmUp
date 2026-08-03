@@ -669,14 +669,9 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     (targetVendor === "govee" && !placedVendors.govee)
       ? "all" : targetVendor;
 
-  // Configured count wins over the SKU default (a 7-panel Hexa vs the SKU's
-  // 15-segment max), matching light-card/room-map — and the backend's
-  // gv_segment_count, which MUST agree or a scheduled scene addresses a
-  // different number of segments than the same look applied by hand.
-  const segCountFor = (light) => light
-    ? ((light.ip && segmentInfo?.configured_counts?.[goveeSlug(light)])
-       || (light.sku && segmentInfo?.sku_table?.[light.sku]?.count) || 0)
-    : 0;
+  // Shared with Settings and mirrored by the backend's gv_segment_count — see
+  // goveeSegmentCount in utils.js for why the two must agree.
+  const segCountFor = (light) => goveeSegmentCount(light, segmentInfo);
 
   const placedColorLights = [];
   Object.entries(devices).forEach(([key, pos]) => {
@@ -2006,28 +2001,15 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
                 {d.name}
                 <span style={{ color: "#64748b", fontSize: 10 }}> · {d.count} segments</span>
               </span>
-              <div style={{ display: "flex", gap: 4, background: "#0f172a", borderRadius: 6, padding: 2 }}>
-                {[
-                  { key: "segments", label: "Segments" },
-                  { key: "whole", label: "Whole" },
-                ].map(opt => {
-                  const active = addressModeFor(d.key) === opt.key;
-                  return (
-                    <button key={opt.key}
-                      onClick={() => onSceneAddressChange && onSceneAddressChange({ [d.slug]: opt.key })}
-                      style={{
-                        padding: "5px 10px", borderRadius: 5, border: "none",
-                        background: active ? "#6366f1" : "transparent",
-                        color: active ? "#fff" : "#94a3b8",
-                        fontSize: 11, fontWeight: 600, cursor: "pointer",
-                      }}>{opt.label}</button>
-                  );
-                })}
-              </div>
+              <SceneAddressToggle
+                value={addressModeFor(d.key)} count={d.count} isMobile={isMobile}
+                onChange={(mode) => onSceneAddressChange && onSceneAddressChange({ [d.slug]: mode })} />
+
             </div>
           ))}
           <div style={{ fontSize: 10, color: "#64748b", marginTop: 6 }}>
-            Also used by scheduled palettes, so a schedule paints the room the same way Apply does.
+            One setting per light — also editable in <strong>Settings → Govee Devices</strong>,
+            and used by scheduled palettes so a schedule paints the room the same way Apply does.
           </div>
         </div>
       )}

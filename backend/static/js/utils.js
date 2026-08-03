@@ -165,6 +165,18 @@ function deviceKey(device) {
   return device.type === "hue" ? `hue:${device.id}` : `govee:${goveeSlug(device)}`;
 }
 
+// How many segments a Govee device is treated as having: a count configured for
+// THIS device (a 7-panel Hexa) beats the SKU's maximum (15). Mirrors the
+// backend's gv_segment_count — the two MUST agree, or a scheduled scene
+// addresses a different number of segments than the same look applied by hand.
+// (light-card.js, room-map.js, room-section.js and segment-reset-debug.js still
+// inline this same expression; fold them in here when you next touch them.)
+function goveeSegmentCount(light, segmentInfo) {
+  if (!light) return 0;
+  return (light.ip && segmentInfo?.configured_counts?.[goveeSlug(light)])
+    || (light.sku && segmentInfo?.sku_table?.[light.sku]?.count) || 0;
+}
+
 function getDeviceDisplayName(device, nicknames) {
   const deviceKey_ = deviceKey(device);
   const nickname = nicknames?.[deviceKey_] || "";

@@ -105,7 +105,7 @@ function PowerRecoveryCard({ settings, onChange, isMobile }) {
 // /identify), and inline nickname editing (reuses the same nickname API as the
 // light cards). `flashBody` is the /identify payload ({light_id} or {ip}); pass
 // null to hide Flash (e.g. unreachable/missing devices).
-function SettingsDeviceRow({ deviceKey, nickname, friendlyName, meta, statusColor, statusOpacity, statusLabel, flashBody, onNicknameChange, isMobile, dim, italicName, extra }) {
+function SettingsDeviceRow({ deviceKey, nickname, friendlyName, meta, statusColor, statusOpacity, statusLabel, flashBody, onNicknameChange, isMobile, dim, italicName, extra, segmentCount, sceneAddressValue, onSceneAddressChange }) {
   const [editing, setEditing] = useState(false);
   const [val, setVal] = useState(nickname || "");
   const [flashing, setFlashing] = useState(false);
@@ -165,6 +165,25 @@ function SettingsDeviceRow({ deviceKey, nickname, friendlyName, meta, statusColo
           <button onClick={saveEdit} style={{ padding: "5px 10px", borderRadius: 6, border: "none", background: "#6366f1", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Save</button>
           {nickname && <button onClick={clearNick} title="Remove nickname" style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #475569", background: "transparent", color: "#94a3b8", fontSize: 12, cursor: "pointer" }}>Clear</button>}
           <button onClick={() => setEditing(false)} style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #475569", background: "transparent", color: "#94a3b8", fontSize: 12, cursor: "pointer" }}>Cancel</button>
+        </div>
+      )}
+      {/* Scene addressing, for segmented devices only — one segment has nothing
+          to spread a palette across. Its own line rather than crammed into the
+          header row, which already carries Flash + Rename and wraps badly on a
+          phone. This is the SAME stored value the room's Scenes panel edits
+          (config `govee_scene_address`), not a separate default. */}
+      {segmentCount > 1 && onSceneAddressChange && (
+        <div style={{
+          display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
+          marginTop: 6, marginLeft: 14,
+        }}>
+          <span style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600 }}>Scenes paint this</span>
+          <SceneAddressToggle
+            value={sceneAddressValue} count={segmentCount} isMobile={isMobile} small
+            onChange={onSceneAddressChange} />
+          <span style={{ fontSize: 10, color: "#64748b" }}>
+            {segmentCount} segments · also in the room's Scenes panel
+          </span>
         </div>
       )}
       {meta && (
@@ -1416,6 +1435,13 @@ function App() {
                         statusLabel={ctCalibrated?.[dk] ? "◐ calibrated" : null}
                         flashBody={{ ip: device.ip, mac: device.mac }}
                         onNicknameChange={updateNickname} isMobile={isMobile}
+                        /* Segmented devices get their scene addressing here, so
+                           it can be set once per light while you're configuring
+                           devices rather than only from inside a room's Scenes
+                           panel. Same stored value either way. */
+                        segmentCount={goveeSegmentCount(device, segmentInfo)}
+                        sceneAddressValue={sceneAddress?.[goveeSlug(device)]}
+                        onSceneAddressChange={(mode) => updateSceneAddress({ [goveeSlug(device)]: mode })}
                       />
                     );
                   })}
