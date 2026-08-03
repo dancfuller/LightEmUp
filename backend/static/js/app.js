@@ -1068,16 +1068,39 @@ function App() {
           ZONES sit here too (v3.15.0): "all downstairs off" is a panic button,
           and a panic button has to be reachable from wherever you already are —
           this bar renders on every tab. Zones with no members render nothing. */}
+      {/* The strip needs to announce ITSELF, not just its buttons (v3.19.1).
+          Sitting flush under the tabs with only sub-labels ("All Lights",
+          "Zones"), it read as the top of whatever page you were on — land on
+          Schedules and the first thing you see is an unexplained row of on/off
+          controls that has nothing to do with scheduling. "LIVE" names what
+          separates it from every page below: these act on the house right now.
+          The tint + inset border make it chrome rather than content. */}
       <div style={{
-        display: "flex", gap: isMobile ? 6 : 8, padding: isMobile ? "8px 10px" : "10px 24px",
-        borderBottom: "1px solid #1e293b", flexWrap: "wrap", alignItems: "center",
+        padding: isMobile ? "8px 10px" : "9px 24px",
+        background: "rgba(2,6,23,0.55)",
+        borderBottom: "1px solid #1e293b",
+        display: "flex", gap: isMobile ? 6 : 8, flexWrap: "wrap", alignItems: "center",
       }}>
-        <span style={{ fontSize: 11, color: "#64748b", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.6, marginRight: 2 }}>All Lights</span>
+        <span
+          title="Acts on your lights right now — always here, on every tab"
+          style={{
+            display: "inline-flex", alignItems: "center", gap: 5,
+            fontSize: 10, color: "#94a3b8", fontWeight: 800,
+            textTransform: "uppercase", letterSpacing: 0.8,
+            padding: "3px 8px", borderRadius: 999,
+            border: "1px solid #334155", background: "rgba(148,163,184,0.08)",
+            marginRight: 2, whiteSpace: "nowrap",
+          }}>
+          <span style={{
+            width: 6, height: 6, borderRadius: 3, background: "#4ade80", flexShrink: 0,
+          }} />
+          Live
+        </span>
         <button
           onClick={() => controlAll({ on: false }, { on: false })}
-          title="Turn every light off"
-          style={{ padding: isMobile ? "6px 14px" : "7px 18px", borderRadius: 8, border: "1px solid #334155", background: "transparent", color: "#e2e8f0", fontSize: isMobile ? 12 : 13, fontWeight: 700, cursor: "pointer" }}
-        >All Off</button>
+          title="Turn every light in the house off"
+          style={{ padding: isMobile ? "6px 12px" : "7px 16px", borderRadius: 8, border: "1px solid #334155", background: "transparent", color: "#e2e8f0", fontSize: isMobile ? 12 : 13, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}
+        >All lights off</button>
         <ZoneBar zones={zones} onControl={controlZone} isMobile={isMobile} />
       </div>
 

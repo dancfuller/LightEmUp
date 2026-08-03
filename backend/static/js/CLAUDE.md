@@ -86,6 +86,18 @@ sliders, hex) converge on the same `onColorSelect(r,g,b)`. `HexColorInput` is al
   guards the `currentColor`→local sync effect so an SSE refresh mid-edit can't clobber an
   unapplied pick. The bar reads "Pick a color to apply" until a color is known/applied.
 
+## The "Live" bar (app.js, above `<main>`)
+The always-present strip holding **All lights off** + `ZoneBar`. It renders on every tab,
+which is the point — a panic button has to be reachable from wherever you are.
+- **It must announce ITSELF, not just its buttons (v3.19.1).** With only sub-labels
+  ("All Lights", "Zones") and no background of its own it read as the top of whatever page
+  you were on: landing on **Schedules**, the first thing you saw was an unexplained row of
+  on/off controls with no hint that it wasn't part of scheduling. The `● LIVE` pill names
+  the thing that separates it from every page below — these act on the house *right now* —
+  and the darker tint plus bottom border make it chrome rather than content.
+- Keep the region label if you restyle this. The sub-labels are the expendable part; the
+  "this is not the page" signal is not.
+
 ## zones.js — live zone controls + zone management (v3.15.0)
 A zone is a named group of ROOMS. It shipped in v3.9.0 as a **scheduling target only**,
 with its editor collapsed inside the Schedules tab. That was the wrong shape twice: the
@@ -332,6 +344,14 @@ add/edit form; `LocationCard` renders in Settings.
   `backend/palette_library.json`; regenerate with `python tools/build-palette-library.py`
   and commit both. It defines `PALETTE_LIBRARY` (160 palettes, variable 4–8 colours) and
   `PALETTE_CATEGORIES`, and must load **before** `color-mode.js` and `schedules.js`.
+- **Switching action type REBUILDS the action, it doesn't merge (v3.19.1).**
+  `setActionType(type, override)` keeps the target and takes that type's own fields from
+  `ACTION_DEFAULTS`, so a saved `power` action can't carry a stray `kelvin` (noise in
+  config.json and in a backup, and it reads as though power sets a colour). What you'd
+  entered for the type you're leaving is remembered in `typeMemory` — **component state,
+  not the action** — so White(6500K) → Color → White still restores 6500K without 6500K
+  ever being stored inside a colour or power action. **Use `setActionType` for type
+  changes and `patchAction` only for fields within the current type.**
 - **The action picker is grouped by OUTCOME, not by action type (v3.19.0):**
   "Turn on and set" → White / Color / Palette, then "Or just" → Turn off / Turn on, last
   used look. "On/Off" was never a peer of the look actions — `_apply_room_white` and

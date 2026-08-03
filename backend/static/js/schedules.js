@@ -123,6 +123,17 @@ function PaletteCard({ palette, selected, onClick, isMobile }) {
   );
 }
 
+// The fields each action type owns. Switching type rebuilds the action from
+// these plus the target, so a stored action never carries fields belonging to a
+// type it isn't (a "power" action with a leftover kelvin, say) — that's noise in
+// config.json and in a backup, and it reads as if power sets a colour.
+const ACTION_DEFAULTS = {
+  white: { kelvin: 2700, brightness: 100 },
+  color: { rgb: { r: 255, g: 180, b: 100 }, brightness: 100 },
+  palette: { source: "category", category: "Summer", palettes: [], brightness: 100 },
+  power: { on: false },
+};
+
 function pad2(n) { return String(n).padStart(2, "0"); }
 
 // "07:00" → "7:00 AM" — schedules are read at a glance, so 12-hour reads better
@@ -444,6 +455,24 @@ function ScheduleEditor({ initial, rooms, zoneNames, favorites, onFavoritesChang
   const patchTrigger = (p) => setTrigger(prev => ({ ...prev, ...p }));
   const patchAction = (p) => setAction(prev => ({ ...prev, ...p }));
 
+  // Switching action type REBUILDS the action from the target plus that type's
+  // own fields, instead of merging on top of the old one. What you had typed for
+  // the type you're leaving is remembered HERE, in component state rather than
+  // in the stored action — so White(4000K) → Color → White still brings 4000K
+  // back, without 4000K riding along inside a saved "power" action.
+  const [typeMemory, setTypeMemory] = useState({});
+  const setActionType = (type, override) => {
+    const { type: prevType, room, zone, ...rest } = action;
+    const same = prevType === type;
+    if (!same) setTypeMemory(m => ({ ...m, [prevType]: rest }));
+    setAction({
+      type,
+      ...(zone ? { zone } : { room: room ?? (rooms[0] || "") }),
+      ...(same ? rest : (typeMemory[type] || ACTION_DEFAULTS[type] || {})),
+      ...(override || {}),
+    });
+  };
+
   // Switch the target between a single room and a zone, adding/removing the
   // right key (patchAction only merges, so removal needs an explicit rebuild).
   const setTargetKind = (kind) => setAction(prev => {
@@ -595,26 +624,22 @@ function ScheduleEditor({ initial, rooms, zoneNames, favorites, onFavoritesChang
             <div style={label}>Turn on and set</div>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
               <button style={seg(action.type === "white")}
-                onClick={() => patchAction({ type: "white", kelvin: action.kelvin || 2700, brightness: action.brightness ?? 100 })}>White</button>
+                onClick={() => setActionType("white")}>White</button>
               <button style={seg(action.type === "color")}
-                onClick={() => patchAction({ type: "color", rgb: action.rgb || { r: 255, g: 180, b: 100 }, brightness: action.brightness ?? 100 })}>Color</button>
+                onClick={() => setActionType("color")}>Color</button>
               <button style={seg(action.type === "palette")}
-                onClick={() => patchAction({
-                  type: "palette", source: action.source || "category",
-                  category: action.category || "Summer", palettes: action.palettes || [],
-                  brightness: action.brightness ?? 100,
-                })}>Palette</button>
+                onClick={() => setActionType("palette")}>Palette</button>
             </div>
 
             <div style={{ ...label, marginTop: 12 }}>Or just</div>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
               <button style={seg(action.type === "power" && action.on === false)}
-                onClick={() => patchAction({ type: "power", on: false })}>Turn off</button>
+                onClick={() => setActionType("power", { on: false })}>Turn off</button>
               {/* "Resume" is genuinely different from any look: it sends only
                   {on:true} and each light returns to whatever IT remembers, so
                   there's nothing to specify and nothing to compare later. */}
               <button style={seg(action.type === "power" && action.on !== false)}
-                onClick={() => patchAction({ type: "power", on: true })}
+                onClick={() => setActionType("power", { on: true })}
                 title="Each light returns to the colour and brightness it last had">
                 Turn on, last used look
               </button>
