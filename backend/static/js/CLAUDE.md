@@ -180,13 +180,26 @@ Assigns colors/temperatures across a room's devices and applies them.
   - This is NOT the light card's `device_modes` (which controls are shown) and NOT
     lightning's `govee_segment_mode`. Applying a scene used to bulk-write `device_modes`
     from the room toggle; that side effect is gone.
-  - **Un-laid-out strips are the reason this matters.** A device whose segments aren't
-    placed on the map gets SYNTHETIC positions (a short horizontal spread at its spot).
-    `computePalette` gives each such strip its own positional cycle, but `computeCustom`
-    and the preset modes walk one global row/column order — so two synthetic strips parked
-    at the same place interleave 1:1, and with exactly 2 (or 4, or 6) colours each strip
-    lands on a single colour. Setting such a device to "whole" is now the deliberate way
-    to get that, instead of relying on the arithmetic.
+  - Setting a device to "whole" is the deliberate way to give a strip a single colour,
+    instead of relying on the arithmetic that used to produce it by accident.
+- **A segmented device is coloured AS A STRIP — `splitStrips` + `assignStrips` (v3.21.0).**
+  Every segment of one device is held OUT of the room's positional walk / adjacency graph
+  and cycles on its own `segIndex`: ABABABA for two colours, ABCABCA for three, whatever
+  else is near it in the room. Applies to the **discrete-colour modes only** — palette,
+  custom, teams/ncaa/flags. **Gradient, Tonal and Beacon are deliberately untouched**:
+  they're spatial by design, and a gradient sweeping across a laid-out hexa row must
+  follow position.
+  - **Why:** segments were just more entries in the shared walk, so any other light in the
+    same row band stole a column index and flipped the parity mid-run. A Triple Lamp at
+    y=7 sitting between hexa panels at y=8 turned ABABABA into **ABBABAB** — two adjacent
+    panels the same colour, halfway along a 7-panel run. The linear branch had the same
+    flaw via x-interleaving. This also subsumes the older "synthetic strips" carve-out:
+    laid-out and un-laid-out segments are now treated identically.
+  - **The trade:** a strip's cycle wins over harmony with its neighbours, so a panel can
+    match the lamp beside it. For a run that reads as one object that's right, but it is a
+    change of priority — don't "fix" it by folding strips back into the graph.
+  - Per-device seeded phase, so Shuffle still re-rolls which colour a strip opens on and
+    two strips in a room don't lock-step.
 - **Teams / NCAA / Flags modes** are preset-color modes backed by `palette-data.js`
   (`PRESET_TEAMS` NFL/NBA/MLB/NHL, `PRESET_NCAA` Power 5, `PRESET_FLAGS` ~195
   countries). A searchable `PresetPicker` selects one entity by name; its hex colors

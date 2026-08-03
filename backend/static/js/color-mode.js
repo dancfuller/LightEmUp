@@ -67,6 +67,58 @@ function extendPalette(baseColors, targetLen) {
 }
 
 // ─── Cyclic palette ordering ──────────────────────────────────────────────
+// ─── Strip cycling (v3.21.0) ────────────────────────────────────────────────
+// A segmented device is ONE physical run and the eye reads it in segment order,
+// so with N distinct colours it should cycle cleanly — ABABABA for two, ABCABCA
+// for three — no matter what else happens to sit near it in the room.
+//
+// It didn't. Segments were just more entries in the room's positional walk, so
+// any OTHER light landing in the same row band stole a column index and flipped
+// the parity part-way along: a Triple Lamp at y=7, between hexa panels at y=8,
+// turned ABABABA into ABBABAB — one panel matching its neighbour, mid-run. Same
+// flaw in the linear branch, where a lamp interleaved by x shifts everything
+// after it. Holding each strip out of the walk and cycling it on its own
+// segIndex makes the pattern a property of the LIGHT rather than of its
+// neighbours.
+//
+// DISCRETE-COLOUR MODES ONLY (palette / custom / teams / ncaa / flags). Gradient,
+// Tonal and Beacon are spatial by design — a gradient sweeping across a laid-out
+// hexa row must follow position, and forcing a cycle would destroy it.
+//
+// The trade: a strip's cycle now wins over harmony with its neighbours, so a
+// panel can match the lamp beside it. For a run that reads as one object that's
+// the right call, but it IS a change of priority, not a free win.
+function splitStrips(placed) {
+  const loose = [], strips = {};
+  (placed || []).forEach(d => {
+    if (d.parentKey !== undefined && d.segIndex !== undefined) {
+      (strips[d.parentKey] ||= []).push(d);
+    } else loose.push(d);
+  });
+  // Segment order is the run's own order — that's the direction the eye travels,
+  // and it holds even if the segments were dropped on the map out of sequence.
+  Object.values(strips).forEach(segs => segs.sort((a, b) => a.segIndex - b.segIndex));
+  return { loose, strips };
+}
+
+// Lay a clean cycle down each strip. `pick(cyclePos, phase)` returns the entry
+// for that position; `phase` is unwrapped so callers that advance a shade on
+// each wrap (Custom/preset "Create shades") can keep doing so.
+// The per-device seeded offset means Shuffle still re-rolls which colour a strip
+// opens on, and two strips in one room don't lock-step.
+function assignStrips(strips, N, seedKey, pick) {
+  const out = {};
+  if (N <= 0) return out;
+  Object.entries(strips).forEach(([parentKey, segs]) => {
+    const offset = Math.floor(seededRng(`${seedKey}|${parentKey}`)() * N);
+    segs.forEach((d, i) => {
+      const phase = i + offset;
+      out[d.key] = pick(((phase % N) + N) % N, phase);
+    });
+  });
+  return out;
+}
+
 // Order palette-color indices so consecutive positions in a repeating cycle
 // (…A B C A B C…) are as perceptually distinct as possible — a greedy
 // "farthest-next" walk over hue/lightness/saturation. Used by Palette mode on
@@ -899,34 +951,37 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     // "respect adjacency when deciding which colour is A/B/C" step, and matters
     // at N ≥ 4 (for N ≤ 3 every cyclic order is equivalent). Shuffle rotates the
     // starting phase, so short strips still re-roll which colours appear.
+    const cycleOrder = orderPaletteForCycle(colors);
+    const seedKey = `${roomName}|palette|${shuffleSeed}`;
+    // Each segmented device cycles on its own segIndex — see splitStrips. In BOTH
+    // branches: a lamp interleaved among the panels used to steal a position and
+    // shift everything after it.
+    const { loose, strips } = splitStrips(placedColorLights);
+    const stripColors = assignStrips(strips, N, seedKey, (pos) => colors[cycleOrder[pos]]);
+
     if (isLinear) {
-      const order = orderPaletteForCycle(colors);
-      const ordered = [...placedColorLights].sort((a, b) =>
+      const ordered = [...loose].sort((a, b) =>
         (a.x !== b.x) ? a.x - b.x : a.y - b.y);
-      const offset = Math.floor(seededRng(`${roomName}|palette|${shuffleSeed}`)() * N);
-      const result = {};
-      ordered.forEach((d, i) => { result[d.key] = colors[order[(i + offset) % N]]; });
+      const offset = Math.floor(seededRng(seedKey)() * N);
+      const result = { ...stripColors };
+      ordered.forEach((d, i) => { result[d.key] = colors[cycleOrder[(i + offset) % N]]; });
       return result;
     }
 
-    // Un-laid-out segments of a segmented device get SYNTHETIC positions (a
-    // short horizontal spread at the device's spot) purely so gradient/beacon
-    // vary. They carry no real spatial info, so feeding them to the graph
-    // colourer is actively harmful: two such devices sitting near each other
-    // (e.g. a globe + a rope both dropped at the same corner) produce ~30
-    // mutually-adjacent nodes that a small palette can't colour, and the relax
-    // fallback then emits an arbitrary-looking assignment. Instead we hold them
-    // OUT of the graph and give each device's strip its own positional cycle
-    // (ABCD…), exactly like a linear layout — the sensible default for a strip
-    // whose physical run the user hasn't drawn. Individually laid-out segments
-    // (real positions) stay anchored and graph-coloured normally.
-    const anchored = placedColorLights.filter(d => !d.synthetic);
-    const synthByParent = {};
-    placedColorLights.forEach(d => {
-      if (d.synthetic) (synthByParent[d.parentKey] ||= []).push(d);
-    });
+    // EVERY segmented device is held out of the graph, laid out or not (v3.21.0
+    // — it used to be only the un-laid-out ones). Two reasons, and both are
+    // real:
+    //   - un-laid-out segments carry synthetic positions with no spatial meaning,
+    //     so two strips dropped at the same corner produce ~30 mutually-adjacent
+    //     nodes a small palette can't colour, and the relax fallback then emits
+    //     an arbitrary-looking assignment;
+    //   - laid-out segments DO have meaning, but the graph colourer only promises
+    //     "neighbours differ", not "the run alternates cleanly", so a nearby lamp
+    //     could still break the pattern the strip is supposed to show.
+    // Either way the strip is one object and gets one cycle.
+    const anchored = loose;
 
-    const rng = seededRng(`${roomName}|palette|${shuffleSeed}`);
+    const rng = seededRng(seedKey);
     const adj = buildAdjacency(anchored);
 
     // Precompute HSL for each palette color
@@ -1185,18 +1240,10 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
       result[key] = colors[ci];
     });
 
-    // Overlay the un-laid-out strips: each device's segments cycle the palette
-    // in index order (ABCD…), so neighbours differ whenever N ≥ 2. Colours are
-    // pre-ordered so consecutive cycle positions are perceptually distinct
-    // (matters at N ≥ 4), and a per-device seeded phase means Shuffle re-rolls
-    // and two strips don't lock-step. This mirrors the isLinear branch above.
-    const cycleOrder = orderPaletteForCycle(colors);
-    Object.entries(synthByParent).forEach(([pk, segs]) => {
-      const strip = [...segs].sort((a, b) => a.segIndex - b.segIndex);
-      const offset = Math.floor(seededRng(`${roomName}|palette|${shuffleSeed}|${pk}`)() * N);
-      strip.forEach((d, i) => { result[d.key] = colors[cycleOrder[(i + offset) % N]]; });
-    });
-    return result;
+    // Overlay every strip's own cycle (computed up front, shared with the
+    // isLinear branch). Colours are pre-ordered so consecutive cycle positions
+    // are perceptually distinct, which matters at N ≥ 4.
+    return { ...result, ...stripColors };
   }, [placedColorLights, paletteColors, buildAdjacency, fixtures, roomName, shuffleSeed, isLinear]);
 
   // ─── Tonal mode: 8 shades of one color, randomly assigned with adjacency gap ─
@@ -1298,11 +1345,20 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
       return generateTonalShades(c.r, c.g, c.b, SHADES_PER_SEED);
     });
 
+    const pick = (seedIdx, phase) =>
+      shadesBySeed[seedIdx][exact ? 0 : Math.floor(phase / M) % SHADES_PER_SEED];
+
+    // Segmented devices cycle on their own segIndex and sit OUT of the walk
+    // below — otherwise a lamp that happens to share their row band steals a
+    // column and flips the run's parity part-way along (see splitStrips).
+    const { loose, strips } = splitStrips(placedColorLights);
+    const result = assignStrips(strips, M, `${roomName}|custom|${shuffleSeed}`, pick);
+
     // Spatial order. Floor plans bucket y into rows (devices roughly level
     // count as one row) so a row reads left-to-right before dropping down.
     const ROW = 1.5; // grid units that count as "the same row"
     const rowOf = (d) => (isLinear ? 0 : Math.round(d.y / ROW));
-    const ordered = [...placedColorLights].sort((a, b) => {
+    const ordered = [...loose].sort((a, b) => {
       const ra = rowOf(a), rb = rowOf(b);
       if (ra !== rb) return ra - rb;
       if (a.x !== b.x) return a.x - b.x;
@@ -1315,7 +1371,6 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     // starts on color 0 with no rotation; Shuffle doesn't reorder it.
     const offset = isLinear ? 0 : Math.floor(seededRng(`${roomName}|custom|${shuffleSeed}`)() * M);
 
-    const result = {};
     let rowKey = null, rowNum = 0, col = 0;
     ordered.forEach((d) => {
       const r = rowOf(d);
@@ -1324,9 +1379,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
       // Per-row shift (rowNum) staggers the pattern in 2D so vertically
       // adjacent rows don't line up the same color.
       const phase = col + rowNum + offset;
-      const seedIdx = ((phase % M) + M) % M;
-      const shadeIdx = exact ? 0 : Math.floor(phase / M) % SHADES_PER_SEED;
-      result[d.key] = shadesBySeed[seedIdx][shadeIdx];
+      result[d.key] = pick(((phase % M) + M) % M, phase);
       col++;
     });
     return result;
@@ -1346,25 +1399,30 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     const shadesBySeed = colors.map(c =>
       exact ? [c] : generateTonalShades(c.r, c.g, c.b, SHADES_PER_SEED)
     );
+    const pick = (seedIdx, phase) =>
+      ({ ...shadesBySeed[seedIdx][exact ? 0 : Math.floor(phase / M) % SHADES_PER_SEED] });
+
+    // Same strip rule as Palette and Custom: a segmented device is one run and
+    // cycles on its own segIndex, out of the room's walk.
+    const { loose, strips } = splitStrips(placedColorLights);
+    const result = assignStrips(strips, M, `${roomName}|${seedKey}|${shuffleSeed}`, pick);
+
     const ROW = 1.5;
     const rowOf = (d) => (isLinear ? 0 : Math.round(d.y / ROW));
-    const ordered = [...placedColorLights].sort((a, b) => {
+    const ordered = [...loose].sort((a, b) => {
       const ra = rowOf(a), rb = rowOf(b);
       if (ra !== rb) return ra - rb;
       if (a.x !== b.x) return a.x - b.x;
       return a.y - b.y;
     });
     const offset = Math.floor(seededRng(`${roomName}|${seedKey}|${shuffleSeed}`)() * M);
-    const result = {};
     let rowKey = null, rowNum = 0, col = 0;
     ordered.forEach((d) => {
       const r = rowOf(d);
       if (rowKey === null) rowKey = r;
       else if (r !== rowKey) { rowKey = r; rowNum++; col = 0; }
       const phase = col + rowNum + offset;
-      const seedIdx = ((phase % M) + M) % M;
-      const shadeIdx = exact ? 0 : Math.floor(phase / M) % SHADES_PER_SEED;
-      result[d.key] = { ...shadesBySeed[seedIdx][shadeIdx] };
+      result[d.key] = pick(((phase % M) + M) % M, phase);
       col++;
     });
     return result;
