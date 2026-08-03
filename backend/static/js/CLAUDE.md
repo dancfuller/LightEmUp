@@ -332,6 +332,15 @@ add/edit form; `LocationCard` renders in Settings.
   `backend/palette_library.json`; regenerate with `python tools/build-palette-library.py`
   and commit both. It defines `PALETTE_LIBRARY` (160 palettes, variable 4–8 colours) and
   `PALETTE_CATEGORIES`, and must load **before** `color-mode.js` and `schedules.js`.
+- **The action picker is grouped by OUTCOME, not by action type (v3.19.0):**
+  "Turn on and set" → White / Color / Palette, then "Or just" → Turn off / Turn on, last
+  used look. "On/Off" was never a peer of the look actions — `_apply_room_white` and
+  `_apply_room_color` already send `on=true` with the colour, so nobody schedules "on"
+  and then separately schedules a look. Only OFF is a distinct outcome, and it now takes
+  one click instead of two (pick On/Off, then pick Turn off). `{type:"power", on:true}`
+  survives as "Turn on, last used look" because it IS distinct: it sends only `{on:true}`,
+  each light returns to what it remembers, and nothing is recorded to compare against
+  later. **Storage is unchanged** — this is labelling and grouping only.
 - **Sun offset is a direction BUTTON plus a non-negative magnitude (v3.18.1)**, stored as
   one signed `offset_min` (negative = before). It used to be a single signed number field
   and was unusable: it prefilled `0` that couldn't be cleared (`Number("")` is `0`, so the

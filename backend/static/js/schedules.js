@@ -183,7 +183,9 @@ function actionSummary(action) {
     const c = action.rgb || {};
     return `Color rgb(${c.r}, ${c.g}, ${c.b}) · ${action.brightness}%`;
   }
-  if (action.type === "power") return action.on === false ? "Turn off" : "Turn on";
+  if (action.type === "power") {
+    return action.on === false ? "Turn off" : "Turn on · last used look";
+  }
   return "Unknown action";
 }
 
@@ -573,12 +575,25 @@ function ScheduleEditor({ initial, rooms, zoneNames, favorites, onFavoritesChang
       </div>
 
       {/* ─── Action ─────────────────────────────────────────────────── */}
+      {/* "Turn on" was never a peer of White/Color/Palette: those already send
+          on=true with the colour, so nobody schedules "on" and then separately
+          schedules a look. Only OFF is a distinct outcome. So the choices are
+          grouped by what the room ends up like — a look (which implies on), or
+          one of the two power outcomes — instead of pretending power is a
+          fourth kind of look. Storage is unchanged: "Turn off" is still
+          {type:"power", on:false}. */}
       <div style={{ marginBottom: 16 }}>
-        <div style={label}>Do what</div>
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
-          {isScene && <button style={seg(true)} disabled>Captured scene</button>}
-          {!isScene && (
-            <>
+        {isScene ? (
+          <>
+            <div style={label}>Do what</div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
+              <button style={seg(true)} disabled>Captured scene</button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div style={label}>Turn on and set</div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
               <button style={seg(action.type === "white")}
                 onClick={() => patchAction({ type: "white", kelvin: action.kelvin || 2700, brightness: action.brightness ?? 100 })}>White</button>
               <button style={seg(action.type === "color")}
@@ -589,11 +604,23 @@ function ScheduleEditor({ initial, rooms, zoneNames, favorites, onFavoritesChang
                   category: action.category || "Summer", palettes: action.palettes || [],
                   brightness: action.brightness ?? 100,
                 })}>Palette</button>
-              <button style={seg(action.type === "power")}
-                onClick={() => patchAction({ type: "power", on: action.on ?? true })}>On / Off</button>
-            </>
-          )}
-        </div>
+            </div>
+
+            <div style={{ ...label, marginTop: 12 }}>Or just</div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
+              <button style={seg(action.type === "power" && action.on === false)}
+                onClick={() => patchAction({ type: "power", on: false })}>Turn off</button>
+              {/* "Resume" is genuinely different from any look: it sends only
+                  {on:true} and each light returns to whatever IT remembers, so
+                  there's nothing to specify and nothing to compare later. */}
+              <button style={seg(action.type === "power" && action.on !== false)}
+                onClick={() => patchAction({ type: "power", on: true })}
+                title="Each light returns to the colour and brightness it last had">
+                Turn on, last used look
+              </button>
+            </div>
+          </>
+        )}
 
         {isScene && (
           <div style={{
@@ -606,10 +633,11 @@ function ScheduleEditor({ initial, rooms, zoneNames, favorites, onFavoritesChang
           </div>
         )}
 
-        {action.type === "power" && (
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
-            <button style={seg(action.on !== false)} onClick={() => patchAction({ on: true })}>Turn on</button>
-            <button style={seg(action.on === false)} onClick={() => patchAction({ on: false })}>Turn off</button>
+        {/* No on/off sub-picker any more — the two power outcomes are their own
+            buttons above, so choosing one is a single click instead of two. */}
+        {action.type === "power" && action.on !== false && (
+          <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 12 }}>
+            Each light returns to the colour and brightness it last had — nothing to set here.
           </div>
         )}
 
