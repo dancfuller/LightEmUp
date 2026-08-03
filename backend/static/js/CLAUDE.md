@@ -332,6 +332,18 @@ add/edit form; `LocationCard` renders in Settings.
   `backend/palette_library.json`; regenerate with `python tools/build-palette-library.py`
   and commit both. It defines `PALETTE_LIBRARY` (160 palettes, variable 4–8 colours) and
   `PALETTE_CATEGORIES`, and must load **before** `color-mode.js` and `schedules.js`.
+- **Sun offset is a direction BUTTON plus a non-negative magnitude (v3.18.1)**, stored as
+  one signed `offset_min` (negative = before). It used to be a single signed number field
+  and was unusable: it prefilled `0` that couldn't be cleared (`Number("")` is `0`, so the
+  zero came straight back), typing into the prefilled zero left `010`, and the minus sign
+  was **unenterable** — a controlled numeric input can't hold the intermediate `"-"`
+  because `Number("-")` is `NaN`. `offsetDir` is its own state rather than derived from
+  the sign, so choosing "Before" at 0 minutes doesn't snap back (`-0 < 0` is false).
+- **Any controlled number input needs a `draft` string.** Bind `value={draft ?? String(n)}`,
+  set `draft` from the raw text on every change, commit only when it parses, and clear
+  `draft` on blur (which also normalises `010` → `10`). Binding a number straight to
+  `value` makes the field unclearable. `RgbSliderInput` in `components-shared.js` is the
+  reference implementation.
 - **Day numbering is 0=Monday** (Python's `weekday()`), NOT JS `getDay()`'s 0=Sunday.
   `nextRunLabel` converts with `(getDay() + 6) % 7`. Get this wrong and every weekly
   schedule is off by a day.

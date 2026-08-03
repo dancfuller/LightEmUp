@@ -456,6 +456,23 @@ function ScheduleEditor({ initial, rooms, zoneNames, favorites, onFavoritesChang
     patchTrigger({ days: days.includes(d) ? days.filter(x => x !== d) : [...days, d].sort((a, b) => a - b) });
   };
 
+  // ─── Sun offset: a direction and a magnitude, never a typed minus sign ──────
+  // Stored as one signed `offset_min` (negative = before), which is what the
+  // scheduler reads — but split here because a signed number field couldn't be
+  // edited: it prefilled 0, refused to be cleared (Number("") is 0), and could
+  // never hold "-" on the way to "-10" (Number("-") is NaN).
+  //
+  // Direction is its OWN state rather than derived from the sign, so that
+  // picking "Before" while the magnitude is 0 doesn't snap back to "After"
+  // (-0 < 0 is false). At 0 minutes the two mean the same thing anyway.
+  const [offsetDir, setOffsetDir] = useState(
+    Number(initial?.trigger?.offset_min || 0) < 0 ? "before" : "after");
+  const [offsetDraft, setOffsetDraft] = useState(null);
+  const offsetMag = Math.abs(Number(trigger.offset_min || 0));
+  const sunEventName = trigger.event === "sunrise" ? "sunrise" : "sunset";
+  const setOffset = (dir, mag) =>
+    patchTrigger({ offset_min: (dir === "before" ? -1 : 1) * Math.abs(mag) });
+
   // "Try one now" — fire the action immediately against the same target, so the
   // thing you're about to trust to run at sunset can be seen on the actual walls
   // first. Same endpoint shape as the stored action; the backend picks and
@@ -653,13 +670,48 @@ function ScheduleEditor({ initial, rooms, zoneNames, favorites, onFavoritesChang
                 <option value="sunset">Sunset</option>
               </select>
             </div>
-            <div style={{ flex: "1 1 140px" }}>
-              <div style={label}>Offset (minutes)</div>
-              <input type="number" step={5} value={trigger.offset_min ?? 0}
-                onChange={e => patchTrigger({ offset_min: Number(e.target.value) })}
-                style={field} />
+            {/* Before/After is a BUTTON, not a minus sign the user has to type.
+                Asking for "-10" in a number field is hostile: on a phone keypad
+                the hyphen often isn't there at all, and a controlled numeric
+                input can't hold the intermediate "-" (Number("-") is NaN), so
+                the sign was literally unenterable. Magnitude is always >= 0. */}
+            <div style={{ flex: "1 1 220px" }}>
+              <div style={label}>Offset</div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                <div style={{ display: "flex", gap: 4, background: "#0f172a", borderRadius: 8, padding: 2 }}>
+                  {[["before", "Before"], ["after", "After"]].map(([k, lbl]) => (
+                    <button key={k} onClick={() => { setOffsetDir(k); setOffset(k, offsetMag); }}
+                      style={{
+                        padding: isMobile ? "6px 10px" : "6px 12px", borderRadius: 6, border: "none",
+                        background: offsetDir === k ? "#6366f1" : "transparent",
+                        color: offsetDir === k ? "#fff" : "#94a3b8",
+                        fontSize: isMobile ? 11 : 12, fontWeight: 600, cursor: "pointer",
+                      }}>{lbl}</button>
+                  ))}
+                </div>
+                {/* draft holds the RAW text while typing, so the field can be
+                    emptied (committing nothing) instead of snapping back to 0,
+                    and "010" normalises to "10" on blur. Same idiom as
+                    RgbSliderInput in components-shared.js. */}
+                <input type="number" min={0} step={5} inputMode="numeric"
+                  value={offsetDraft ?? String(offsetMag)}
+                  onFocus={e => e.target.select()}
+                  onChange={e => {
+                    const text = e.target.value;
+                    setOffsetDraft(text);
+                    if (text.trim() !== "" && !Number.isNaN(Number(text))) {
+                      setOffset(offsetDir, Math.max(0, Math.round(Number(text))));
+                    }
+                  }}
+                  onBlur={() => setOffsetDraft(null)}
+                  onKeyDown={e => { if (e.key === "Enter") e.target.blur(); }}
+                  style={{ ...field, width: 76, flex: "0 0 76px", textAlign: "center" }} />
+                <span style={{ fontSize: 12, color: "#94a3b8" }}>min</span>
+              </div>
               <div style={{ fontSize: 10, color: "#64748b", marginTop: 4 }}>
-                Negative = before, positive = after.
+                {offsetMag === 0
+                  ? `Exactly at ${sunEventName}.`
+                  : `${offsetMag} minute${offsetMag === 1 ? "" : "s"} ${offsetDir} ${sunEventName}.`}
               </div>
             </div>
           </div>
