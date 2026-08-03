@@ -394,20 +394,13 @@ function PaletteActionEditor({ action, patchAction, isMobile, label, field, seg,
           style={{ width: "100%", accentColor: "#6366f1" }} />
       </div>
 
-      <label style={{
-        display: "flex", alignItems: "flex-start", gap: 8, marginTop: 12,
-        fontSize: 12, color: "#cbd5e1", cursor: "pointer",
-      }}>
-        <input type="checkbox" checked={action.segments !== false}
-          onChange={e => patchAction({ segments: e.target.checked })}
-          style={{ accentColor: "#6366f1", marginTop: 2 }} />
-        <span>
-          Spread colours across Govee segments
-          <span style={{ display: "block", fontSize: 10, color: "#64748b" }}>
-            Only affects devices already switched to segment mode. Off = one colour per device.
-          </span>
-        </span>
-      </label>
+      {/* No segments checkbox here (removed v3.18.0). Whether a Govee device is
+          painted per segment is a property of the DEVICE, set in that room's
+          Scenes panel and shared with the scheduler — a second switch on the
+          schedule could only disagree with the room. */}
+      <div style={{ fontSize: 10, color: "#64748b", marginTop: 10 }}>
+        Segmented Govee devices are painted the way that room's Scenes panel is set.
+      </div>
 
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 12 }}>
         <button onClick={tryIt} disabled={trying || candidates.length === 0} style={{
@@ -577,7 +570,7 @@ function ScheduleEditor({ initial, rooms, zoneNames, favorites, onFavoritesChang
                 onClick={() => patchAction({
                   type: "palette", source: action.source || "category",
                   category: action.category || "Summer", palettes: action.palettes || [],
-                  brightness: action.brightness ?? 100, segments: action.segments !== false,
+                  brightness: action.brightness ?? 100,
                 })}>Palette</button>
               <button style={seg(action.type === "power")}
                 onClick={() => patchAction({ type: "power", on: action.on ?? true })}>On / Off</button>

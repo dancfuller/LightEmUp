@@ -234,6 +234,12 @@ function App() {
   // scenes — "follow" (default), "solid" (all segments one color), or
   // "shades" (tonal shades of one color). Persisted per device_key.
   const [segmentFillModes, setSegmentFillModes] = useState({});
+  // sceneAddress: per Govee device, does a room scene paint it per SEGMENT or as
+  // ONE colour ("segments" | "whole", absent = segments). Keyed by bare govee
+  // slug. Set in the Scenes panel and read by the SCHEDULER too, which is the
+  // whole point — before v3.18.0 the browser kept this choice to itself and a
+  // scheduled palette addressed the same device differently.
+  const [sceneAddress, setSceneAddress] = useState({});
   // pickerStyle: "huebar" (default) or "wheel". Provided via context to
   // every ColorPicker so the user's choice applies everywhere.
   const [pickerStyle, setPickerStyle] = useState("huebar");
@@ -337,6 +343,7 @@ function App() {
       setCtRgb(cfg.ct_rgb || {});
       setDeviceModes(cfg.device_modes || {});
       setSegmentFillModes(cfg.segment_fill_modes || {});
+      setSceneAddress(cfg.govee_scene_address || {});
       if (Array.isArray(cfg.favorites)) setFavoriteColors(cfg.favorites);
       setPickerStyle(cfg.ui_prefs?.color_picker_style === "wheel" ? "wheel" : "huebar");
       if (cfg.ui_prefs?.min_saturation_enabled !== undefined) {
@@ -588,6 +595,21 @@ function App() {
     });
     await loadAll();
   }, [loadAll]);
+
+  // Bulk-shaped: the Scenes panel's "set all" and a single device button are the
+  // same call. Optimistic like every other control — a failed save logs and the
+  // next config refresh puts the truth back.
+  const updateSceneAddress = useCallback(async (modes) => {
+    setSceneAddress(prev => ({ ...prev, ...modes }));
+    try {
+      await api("/govee/scene-address", {
+        method: "POST",
+        body: JSON.stringify({ modes }),
+      });
+    } catch (e) {
+      console.warn("Failed to save scene addressing:", e);
+    }
+  }, []);
 
   const updateSegmentFillMode = useCallback(async (deviceKey, mode) => {
     setSegmentFillModes(prev => ({ ...prev, [deviceKey]: mode }));
@@ -1125,6 +1147,8 @@ function App() {
                   onSegmentStateRefresh={refreshSegmentState}
                   deviceModes={deviceModes}
                   onDeviceModeChange={updateDeviceMode}
+                  sceneAddress={sceneAddress}
+                  onSceneAddressChange={updateSceneAddress}
                   onDeviceModesBulkChange={updateDeviceModesBulk}
                   segmentFillModes={segmentFillModes}
                   onSegmentFillModeChange={updateSegmentFillMode}

@@ -208,7 +208,7 @@ function ControlSurface({ view, views, onView, onClose, roomName, isMobile, chil
   );
 }
 
-function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGovee, onControlRoom, favorites, onFavoritesChange, nicknames, onNicknameChange, lightningActive, onLightningStart, onLightningStop, segmentInfo, segmentState, onSegmentStateRefresh, deviceModes, onDeviceModeChange, onDeviceModesBulkChange, segmentFillModes, onSegmentFillModeChange, onSegmentCountChange, roomLayouts, onLayoutChange, fixtures, onFixtureUpsert, onFixtureDelete, minSatEnabled, minSatPct, savedColorState, ctCorrection, onScheduleLook, lastApplied, lastStatus, onReapply, onRecheck }) {
+function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGovee, onControlRoom, favorites, onFavoritesChange, nicknames, onNicknameChange, lightningActive, onLightningStart, onLightningStop, segmentInfo, segmentState, onSegmentStateRefresh, deviceModes, onDeviceModeChange, onDeviceModesBulkChange, sceneAddress, onSceneAddressChange, segmentFillModes, onSegmentFillModeChange, onSegmentCountChange, roomLayouts, onLayoutChange, fixtures, onFixtureUpsert, onFixtureDelete, minSatEnabled, minSatPct, savedColorState, ctCorrection, onScheduleLook, lastApplied, lastStatus, onReapply, onRecheck }) {
   const isMobile = useIsMobile();
   const [collapsed, setCollapsed] = useState(true);
   // Single overlay surface state — replaces the old per-panel show* booleans.
@@ -402,9 +402,11 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
         minSatEnabled={minSatEnabled}
         minSatPct={minSatPct}
         segmentFillModes={segmentFillModes}
+        sceneAddress={sceneAddress}
+        onSceneAddressChange={onSceneAddressChange}
         savedColorState={savedColorState}
         onScheduleLook={onScheduleLook ? (plan) => onScheduleLook(name, plan) : null}
-        onApply={(applied, addressMode, colorStateSnapshot) => {
+        onApply={(applied, colorStateSnapshot) => {
           setColorModeApplied(applied);
           if (colorStateSnapshot) {
             api("/room-color-state", {
@@ -415,17 +417,12 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
           if (onSegmentStateRefresh) {
             setTimeout(onSegmentStateRefresh, 5000);
           }
-          if (addressMode && onDeviceModesBulkChange) {
-            const targetMode = addressMode === "individual" ? "segments" : "whole";
-            const updates = {};
-            goveeDevices.forEach(d => {
-              const segCount = segmentInfo?.sku_table?.[d.sku]?.count || 0;
-              if (segCount > 1) updates[`govee:${goveeSlug(d)}`] = targetMode;
-            });
-            if (Object.keys(updates).length > 0) {
-              onDeviceModesBulkChange(updates);
-            }
-          }
+          // Applying a scene used to ALSO rewrite every segmented device's
+          // LightCard control mode from the room-level address toggle (v3.18.0
+          // removed it). Two unrelated preferences moving as one is exactly the
+          // coupling the per-device scene-addressing switch exists to undo: how
+          // a scene paints a device and which controls its card shows are
+          // different questions.
         }}
       />
     );

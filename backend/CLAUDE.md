@@ -428,6 +428,36 @@ for one room (or, for everything except `scene`, a zone).
   `trigger` resets `last_fired` so a retimed schedule isn't blocked by the old dedupe),
   `DELETE /api/schedules/{id}`, `GET/POST /api/location`.
 
+## Scene addressing: segments vs whole, per device (v3.18.0)
+**`config["govee_scene_address"]`** (`{ goveeSlug: "segments" | "whole" }`, additive) is
+**the** answer to "does a room scene paint this device per segment or as one colour?",
+and both sides read it: the browser's scene apply and the scheduler's palette action.
+Absent = `"segments"` for any device with >1 segment (the pre-v3.18.0 default).
+
+- **Resolve it through `gv_scene_address(slug, sku)`, never by reading the dict.** It also
+  forces `"whole"` for a device with ≤1 segment, so callers can't ask for a per-segment
+  spread that has nowhere to go. Segment count comes from `gv_segment_count`, which
+  mirrors the browser's `segCountFor` (configured count beats the SKU maximum — a 7-panel
+  Hexa, not the SKU's 15). **If you change one, change the other**, or a scheduled scene
+  addresses a different number of segments than the same look applied by hand.
+- **Why it exists.** The choice used to be one toggle per ROOM
+  (`room_color_state[room].address_segments`) that only the browser could read, so a rope
+  light you wanted as one colour forced the hexa panels to match. Worse, the scheduler had
+  no access to it and read `govee_segment_mode` instead — which **only the lightning panel
+  writes** — so the same device could be painted per-segment by hand and as one colour on a
+  schedule. `migrate_scene_address` converts the old room-level setting once at startup
+  (only rooms set to `"unit"` need a record); it's guarded by the KEY'S PRESENCE, not its
+  contents, so a legitimately empty result can't re-migrate forever.
+- **Deliberately NOT unified with `device_modes`** (the LightCard's "show me one picker or
+  per-segment pickers" preference) or with `govee_segment_mode` (lightning). Those answer
+  different questions and stay separate. Note v3.18.0 also **removed** the old side effect
+  where applying a scene bulk-wrote the room-level toggle into `device_modes` — two
+  unrelated preferences moving as one.
+- **There is no per-schedule segments flag.** Whether a device is segmented is a property
+  of the device; a second switch on the schedule could only disagree with the room.
+- Endpoint: `POST /api/govee/scene-address` `{ modes: { slug: mode } }` — bulk-shaped
+  because the Scenes panel's per-device buttons and its "set all" are the same call.
+
 ## Random palettes in the scheduler (v3.17.0)
 "Ten minutes before sunset, put the living room on **a** Summer palette." The action
 stores a **source, not a snapshot** — the look is resolved when it fires, which is the
@@ -460,6 +490,9 @@ whole point: the same schedule has to look different tonight than it did last ni
   across the house rather than six unrelated ones. That's why `_apply_room_palette` takes
   an already-chosen palette instead of choosing per room, and why palette is handled
   directly in `_fire_schedule` rather than via `_apply_action_to_room`.
+- **Segments vs whole comes from `gv_scene_address`** — the same per-device setting the
+  Scenes panel writes (see the section above), so a scheduled palette paints the room the
+  way pressing Apply does. It read `govee_segment_mode` in v3.17.0, which was wrong.
 - **`_build_palette_scene` is the only place the backend does scene math**, and it's
   deliberately simpler than the browser's adjacency solver: deal a shuffled pool
   round-robin (`_ColorDealer`, which never repeats consecutively even across cycle

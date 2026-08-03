@@ -479,7 +479,7 @@ function PresetPicker({ items, value, onChange, placeholder, isMobile }) {
   );
 }
 
-function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlGovee, favorites, onFavoritesChange, nicknames, segmentInfo, roomLayouts, fixtures, onApply, onScheduleLook, minSatEnabled, minSatPct, segmentFillModes, savedColorState }) {
+function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlGovee, favorites, onFavoritesChange, nicknames, segmentInfo, roomLayouts, fixtures, onApply, onScheduleLook, minSatEnabled, minSatPct, segmentFillModes, sceneAddress, onSceneAddressChange, savedColorState }) {
   const isMobile = useIsMobile();
   const [mode, setMode] = useState("palette"); // "palette" | "gradient" | "tonal" | "custom" | "beacon"
   // Color space: "color" (RGB, the default) or "white" (tunable color temperature).
@@ -517,14 +517,21 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
   const [direction, setDirection] = useState("left-right");
   const [brightness, setBrightness] = useState(100); // 0-100%
   const [preview, setPreview] = useState(null); // { deviceKey: {r,g,b}, ... }
-  // addressSegments: "individual" (default) treats each segmented device as
-  // N entries (one per segment, each potentially getting its own color);
-  // "unit" treats the device as a single entry and sends a whole-device
-  // command. The map's per-device expand badge still controls layout
-  // positions when present; otherwise "individual" mode auto-clusters
-  // segments around the device position so gradient/beacon have spatial
-  // variation.
-  const [addressSegments, setAddressSegments] = useState("individual");
+  // Scene addressing is PER DEVICE (v3.18.0), persisted in config as
+  // `govee_scene_address` and read by the scheduler too — so a scheduled palette
+  // paints the room the same way pressing Apply does. It used to be one toggle
+  // for the whole room, which meant a rope light you wanted as one colour forced
+  // the hexa panels to be one colour as well.
+  //
+  // "segments" (default for any device with >1 segment) treats the device as N
+  // entries, one per segment, each able to take its own colour; "whole" treats it
+  // as a single entry and sends one whole-device command. The map's per-device
+  // expand badge still supplies real layout positions when present; otherwise
+  // "segments" auto-clusters them around the device so gradient/beacon still
+  // have spatial variation.
+  const addressModeFor = (key) =>
+    (sceneAddress?.[key.startsWith("govee:") ? key.slice(6) : key] === "whole")
+      ? "whole" : "segments";
 
   // Target vendor filter: "all" | "hue" | "govee". Restricts which devices a
   // scene touches so e.g. a palette can be applied to Govee strips only without
@@ -563,7 +570,9 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     if (s.base_color) setBaseColor(s.base_color);
     if (typeof s.brightness === "number") setBrightness(s.brightness);
     if (s.direction) setDirection(s.direction);
-    if (s.address_segments) setAddressSegments(s.address_segments);
+    // s.address_segments is the pre-v3.18.0 room-level setting. It's deliberately
+    // NOT restored: the backend migrated it into per-device govee_scene_address
+    // at startup, and that map is now the only source of the answer.
     if (s.target_vendor) setTargetVendor(s.target_vendor);
     if (typeof s.shuffle_seed === "number") setShuffleSeed(s.shuffle_seed);
     if (s.selected_team) setSelectedTeam(s.selected_team);
@@ -641,10 +650,10 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
   const gridSize = layout?.grid_size || 40;
 
   // Build placed lights list. Three cases per device:
-  //   addressSegments=individual + map has expanded positions → use them
-  //   addressSegments=individual + no positions → auto-cluster N segments
+  //   device set to "segments" + map has expanded positions → use them
+  //   device set to "segments" + no positions → auto-cluster N segments
   //     near the device position so gradient/beacon get spatial variation
-  //   addressSegments=unit                       → single entry at device pos
+  //   device set to "whole"                      → single entry at device pos
   // Which vendors have color-capable devices placed in this room — drives
   // whether the All/Hue/Govee filter is worth showing, and lets us fall back
   // to "all" if the saved filter targets a vendor that's no longer here.
@@ -660,6 +669,15 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     (targetVendor === "govee" && !placedVendors.govee)
       ? "all" : targetVendor;
 
+  // Configured count wins over the SKU default (a 7-panel Hexa vs the SKU's
+  // 15-segment max), matching light-card/room-map — and the backend's
+  // gv_segment_count, which MUST agree or a scheduled scene addresses a
+  // different number of segments than the same look applied by hand.
+  const segCountFor = (light) => light
+    ? ((light.ip && segmentInfo?.configured_counts?.[goveeSlug(light)])
+       || (light.sku && segmentInfo?.sku_table?.[light.sku]?.count) || 0)
+    : 0;
+
   const placedColorLights = [];
   Object.entries(devices).forEach(([key, pos]) => {
     const light = lightMap[key];
@@ -667,14 +685,8 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     if (effectiveVendor === "hue" && !key.startsWith("hue:")) return;
     if (effectiveVendor === "govee" && !key.startsWith("govee:")) return;
     const segData = segments[key];
-    // Configured count wins over the SKU default (a 7-panel Hexa vs the SKU's
-    // 15-segment max), matching light-card/room-map. Only affects the synthetic
-    // (non-laid-out) segment spread; laid-out devices use their placed positions.
-    const segCountForDevice = light
-      ? ((light.ip && segmentInfo?.configured_counts?.[goveeSlug(light)])
-         || (light.sku && segmentInfo?.sku_table?.[light.sku]?.count) || 0)
-      : 0;
-    const addressIndividual = addressSegments === "individual" && segCountForDevice > 1;
+    const segCountForDevice = segCountFor(light);
+    const addressIndividual = addressModeFor(key) === "segments" && segCountForDevice > 1;
 
     if (addressIndividual && segData?.expanded && segData.positions) {
       // Layout-placed: use explicit positions.
@@ -704,6 +716,19 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
 
   const hasLayout = placedColorLights.length > 0;
   const hasColorLights = allLights.some(l => l?.capabilities?.has_color);
+
+  // The segmented Govee devices placed in this room — one row each in the scene
+  // addressing control. Driven off the LAYOUT (not the raw device list) so it
+  // lists exactly the devices a scene here can actually paint.
+  const segmentedDevicesInRoom = Object.keys(devices)
+    .filter(k => k.startsWith("govee:"))
+    .map(key => {
+      const light = lightMap[key];
+      return { key, light, slug: key.slice(6), count: segCountFor(light),
+               name: nicknames?.[key] || light?.name
+                     || (light?.sku ? GOVEE_SKU_NAMES?.[light.sku] : null) || key.slice(6) };
+    })
+    .filter(d => d.light?.capabilities?.has_color && d.count > 1);
 
   // key → its placed entry (own x/y + synthetic flag), for the preview sort.
   const placedByKey = {};
@@ -1514,7 +1539,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
   useEffect(() => {
     if (!hasLayout) return;
     setPreview(pipeline(computeForMode()));
-  }, [mode, colorSpace, ctPreset, maxKelvin, baseColor, direction, paletteColors, customColors, customShadeMode, hasLayout, layout, fixtures, beaconSourceKey, brightness, addressSegments, minSatEnabled, minSatPct, segmentFillModes, shuffleSeed, targetVendor, selectedTeam, selectedNcaa, selectedFlag]);
+  }, [mode, colorSpace, ctPreset, maxKelvin, baseColor, direction, paletteColors, customColors, customShadeMode, hasLayout, layout, fixtures, beaconSourceKey, brightness, sceneAddress, minSatEnabled, minSatPct, segmentFillModes, shuffleSeed, targetVendor, selectedTeam, selectedNcaa, selectedFlag]);
 
   // Human-readable name for a preview key ("hue:5", "govee:ip", "govee:ip:seg3")
   // used in the live apply-progress label.
@@ -1729,7 +1754,9 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
       base_color: baseColor,
       brightness,
       direction,
-      address_segments: addressSegments,
+      // address_segments is gone (v3.18.0) — scene addressing is per device in
+      // govee_scene_address, not per room. The field stays in the backend model
+      // so an older client's POST is still accepted, but nothing writes it now.
       shuffle_seed: shuffleSeed,
       target_vendor: targetVendor,
       selected_team: selectedTeam,
@@ -1742,7 +1769,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
       max_kelvin: maxKelvin,
       ct_preset: ctPreset,
     };
-    if (onApply) onApply(preview, addressSegments, colorStateSnapshot);
+    if (onApply) onApply(preview, colorStateSnapshot);
   };
 
   // ─── Palette color management ───────────────────────────────────────
@@ -1936,30 +1963,71 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
         </div>
       )}
 
-      {/* Address-segments toggle. Only shown when this room actually has a
-          segmented device — otherwise it has no effect and is just noise. */}
-      {allLights.some(l => l?.sku && (segmentInfo?.sku_table?.[l.sku]?.count || 0) > 1) && (
+      {/* Per-device scene addressing (v3.18.0). One row per segmented device in
+          this room, because the right answer genuinely differs per device: hexa
+          panels look good multicoloured, while a rope light whose physical run
+          isn't drawn on the map often looks better as one colour. Shown only when
+          the room HAS a segmented device — otherwise it's noise. */}
+      {segmentedDevicesInRoom.length > 0 && (
         <div style={{
-          display: "flex", alignItems: "center", gap: 8, marginBottom: 14,
-          padding: "8px 10px", background: "rgba(15,23,42,0.5)",
-          borderRadius: 8, border: "1px solid #1e293b", flexWrap: "wrap",
+          marginBottom: 14, padding: "8px 10px", background: "rgba(15,23,42,0.5)",
+          borderRadius: 8, border: "1px solid #1e293b",
         }}>
-          <span style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600 }}>Segmented devices:</span>
-          <div style={{ display: "flex", gap: 4, background: "#0f172a", borderRadius: 6, padding: 2 }}>
-            {[
-              { key: "individual", label: "Address individually" },
-              { key: "unit", label: "Address as a unit" },
-            ].map(opt => (
-              <button key={opt.key}
-                onClick={() => setAddressSegments(opt.key)}
-                style={{
-                  padding: "5px 10px", borderRadius: 5, border: "none",
-                  background: addressSegments === opt.key ? "#6366f1" : "transparent",
-                  color: addressSegments === opt.key ? "#fff" : "#94a3b8",
-                  fontSize: 11, fontWeight: 600, cursor: "pointer",
-                }}
-              >{opt.label}</button>
-            ))}
+          <div style={{
+            display: "flex", alignItems: "center", justifyContent: "space-between",
+            gap: 8, flexWrap: "wrap", marginBottom: 8,
+          }}>
+            <span style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600 }}>
+              Scenes paint these
+            </span>
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <span style={{ fontSize: 10, color: "#64748b" }}>set all</span>
+              {["segments", "whole"].map(m => (
+                <button key={m}
+                  onClick={() => onSceneAddressChange && onSceneAddressChange(
+                    Object.fromEntries(segmentedDevicesInRoom.map(d => [d.slug, m])))}
+                  style={{
+                    padding: "3px 8px", borderRadius: 5, border: "1px solid #334155",
+                    background: "transparent", color: "#94a3b8",
+                    fontSize: 10, fontWeight: 600, cursor: "pointer",
+                  }}>{m === "segments" ? "Segments" : "Whole"}</button>
+              ))}
+            </div>
+          </div>
+          {segmentedDevicesInRoom.map(d => (
+            <div key={d.key} style={{
+              display: "flex", alignItems: "center", justifyContent: "space-between",
+              gap: 8, padding: "4px 0", flexWrap: "wrap",
+            }}>
+              <span style={{
+                fontSize: 12, color: "#cbd5e1", flex: "1 1 120px", minWidth: 0,
+                overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+              }}>
+                {d.name}
+                <span style={{ color: "#64748b", fontSize: 10 }}> · {d.count} segments</span>
+              </span>
+              <div style={{ display: "flex", gap: 4, background: "#0f172a", borderRadius: 6, padding: 2 }}>
+                {[
+                  { key: "segments", label: "Segments" },
+                  { key: "whole", label: "Whole" },
+                ].map(opt => {
+                  const active = addressModeFor(d.key) === opt.key;
+                  return (
+                    <button key={opt.key}
+                      onClick={() => onSceneAddressChange && onSceneAddressChange({ [d.slug]: opt.key })}
+                      style={{
+                        padding: "5px 10px", borderRadius: 5, border: "none",
+                        background: active ? "#6366f1" : "transparent",
+                        color: active ? "#fff" : "#94a3b8",
+                        fontSize: 11, fontWeight: 600, cursor: "pointer",
+                      }}>{opt.label}</button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+          <div style={{ fontSize: 10, color: "#64748b", marginTop: 6 }}>
+            Also used by scheduled palettes, so a schedule paints the room the same way Apply does.
           </div>
         </div>
       )}

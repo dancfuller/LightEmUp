@@ -269,7 +269,12 @@ All endpoints are under `/api/`. Key groups:
 - `/api/scenes/lightning/*` — lightning storm scene start/stop/settings
 - `/api/scenes/room-apply` — backend-driven room color-scene apply (staggered in a
   background task so the browser can close); `/cancel` to stop. Progress via SSE.
-- `/api/govee/segment-*` — per-segment mode and count config
+- `/api/govee/segment-*` — per-segment mode and count config (the `segment-mode` one is
+  the **lightning** scene's switch, not the colour tool's)
+- `/api/govee/scene-address` — per-device "do room scenes paint this as segments or as
+  one colour?" (config key `govee_scene_address`). Read by BOTH the browser's scene apply
+  and the scheduler's palette action, so a schedule matches a hand-applied look. Replaced
+  the room-level toggle in v3.18.0. See `backend/CLAUDE.md` "Scene addressing"
 
 ## Room Map System
 

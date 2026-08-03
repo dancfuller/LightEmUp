@@ -157,6 +157,24 @@ Assigns colors/temperatures across a room's devices and applies them.
 - **Color vs White space:** `colorSpace` is `"color"` or `"white"`. White mode emits
   entries with a `kelvin` field; whole-device/Hue apply sends real CT, segments send
   the K→RGB approximation (calibrated server-side via `ct_rgb`).
+- **Segments vs whole is PER DEVICE (v3.18.0)** — `addressModeFor(key)` reads the
+  `sceneAddress` prop (config `govee_scene_address`, backed by
+  `POST /api/govee/scene-address`), and the **scheduler reads the same map**, so a
+  scheduled palette paints the room the way Apply does. It was one toggle per room until
+  now, which meant a rope light you wanted as one colour forced the hexa panels to match.
+  Devices with >1 segment get a row each in the panel, plus a "set all" shortcut.
+  - `segCountFor(light)` must mirror the backend's `gv_segment_count` (configured count
+    beats the SKU maximum). Diverge and a schedule addresses a different segment count.
+  - This is NOT the light card's `device_modes` (which controls are shown) and NOT
+    lightning's `govee_segment_mode`. Applying a scene used to bulk-write `device_modes`
+    from the room toggle; that side effect is gone.
+  - **Un-laid-out strips are the reason this matters.** A device whose segments aren't
+    placed on the map gets SYNTHETIC positions (a short horizontal spread at its spot).
+    `computePalette` gives each such strip its own positional cycle, but `computeCustom`
+    and the preset modes walk one global row/column order — so two synthetic strips parked
+    at the same place interleave 1:1, and with exactly 2 (or 4, or 6) colours each strip
+    lands on a single colour. Setting such a device to "whole" is now the deliberate way
+    to get that, instead of relying on the arithmetic.
 - **Teams / NCAA / Flags modes** are preset-color modes backed by `palette-data.js`
   (`PRESET_TEAMS` NFL/NBA/MLB/NHL, `PRESET_NCAA` Power 5, `PRESET_FLAGS` ~195
   countries). A searchable `PresetPicker` selects one entity by name; its hex colors
@@ -299,6 +317,9 @@ add/edit form; `LocationCard` renders in Settings.
     set as `PaletteCard`s, chosen palettes appear as removable chips **that stay visible
     while you browse other categories** (picks span categories; the grid shows one), and
     each saved row gets a `PaletteCandidatePeek` — up to four colour bars plus "+N".
+  - **No segments checkbox here (removed v3.18.0).** Whether a Govee device is painted per
+    segment is a property of the device, set in that room's Scenes panel and shared with
+    the backend — a switch on the schedule could only disagree with the room.
   - **`paletteCandidates()` must mirror the backend's `palettes.resolve_candidates()`.**
     If they drift, the editor previews a set the Pi won't draw from. Same for the two
     virtual categories, `Featured` and `All` — the backend understands both.

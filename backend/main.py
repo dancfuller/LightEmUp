@@ -67,7 +67,16 @@ DEFAULT_CONFIG = {
     "nicknames": {},
     "room_layouts": {},
     "fixtures": {},  # fixture_id → { name, members: [device_key, ...] }
-    "device_modes": {},  # device_key → "whole" | "segments" (LightCard preference)
+    "device_modes": {},  # device_key → "whole" | "segments" (LightCard preference:
+                          # which CONTROLS the card shows. Not scene addressing —
+                          # that's govee_scene_address below.)
+    "govee_scene_address": {},  # govee slug → "segments" | "whole" (v3.18.0)
+                                # Does a room scene paint this device per segment or
+                                # as one colour? Set per device in the Scenes panel
+                                # and read by BOTH the browser's scene apply and the
+                                # scheduler's palette action, so a scheduled look
+                                # matches a hand-applied one. Absent = "segments"
+                                # for any device with >1 segment (the old default).
     "segment_fill_modes": {},  # device_key → "follow" | "solid" | "shades"
                                 # how the device's segments are filled by room scenes
     "known_devices": {  # devices we've seen before; surface as "missing" when absent
@@ -342,8 +351,8 @@ def migrate_govee_to_mac(cfg: dict) -> bool:
         if isinstance(gd, list):
             room["govee_devices"] = [s for ip in gd for s in (slug_for_ip(ip),) if s]
 
-    # 3) Bare-IP dicts (segment mode / counts)
-    for key in ("govee_segment_mode", "govee_segment_counts"):
+    # 3) Bare-IP dicts (segment mode / counts / scene addressing)
+    for key in ("govee_segment_mode", "govee_segment_counts", "govee_scene_address"):
         d = cfg.get(key)
         if isinstance(d, dict):
             cfg[key] = {s: v for ip, v in d.items() for s in (slug_for_ip(ip),) if s}
@@ -368,8 +377,40 @@ def migrate_govee_to_mac(cfg: dict) -> bool:
     return True
 
 
+def migrate_scene_address(cfg: dict) -> bool:
+    """One-time: turn the old ROOM-level "address segmented devices individually /
+    as a unit" scene setting into the per-device `govee_scene_address` map.
+
+    Before v3.18.0 the choice was one switch per room, stored in
+    `room_color_state[room].address_segments`, and only the browser could read it —
+    which is why a scheduled palette and a hand-applied one disagreed about the
+    same device. Now it's per device and shared with the backend.
+
+    Only rooms that opted OUT ("unit") need a record: absent means "segments",
+    which is what "individual" (the default) meant. Guarded by the key's presence,
+    not its contents, so a legitimately empty result doesn't re-migrate forever."""
+    if "govee_scene_address" in cfg:
+        return False
+
+    mapping = {}
+    for room_name, state in (cfg.get("room_color_state") or {}).items():
+        if (state or {}).get("address_segments") != "unit":
+            continue
+        room = (cfg.get("rooms") or {}).get(room_name) or {}
+        for slug in room.get("govee_devices", []):
+            mapping[slug] = "whole"
+
+    cfg["govee_scene_address"] = mapping
+    if mapping:
+        log.warning("Scene addressing migrated: %d device(s) kept on whole-device "
+                    "(from a room set to 'address as a unit')", len(mapping))
+    return True
+
+
 config = load_config()
 if migrate_govee_to_mac(config):
+    save_config(config)
+if migrate_scene_address(config):
     save_config(config)
 
 
@@ -1046,13 +1087,45 @@ def _gv_info_for_slug(slug: str):
     return None, None
 
 
+def gv_segment_count(slug: str, sku: Optional[str]) -> int:
+    """How many segments this device is treated as having: the count configured
+    for it (a 7-panel Hexa) beats the SKU's maximum (15). Mirrors the browser's
+    `segCountForDevice` — the two MUST agree or a scheduled scene addresses a
+    different number of segments than the same look applied by hand."""
+    configured = (config.get("govee_segment_counts", {}) or {}).get(slug)
+    if configured:
+        return int(configured)
+    return int((GOVEE_SEGMENT_INFO.get(sku) or {}).get("count") or 0)
+
+
+def gv_scene_address(slug: str, sku: Optional[str]) -> str:
+    """"segments" or "whole" — how a room scene paints this device (v3.18.0).
+
+    THE single answer to that question, shared by the browser's scene apply and
+    the scheduler's palette action. Before this existed the browser used a
+    room-level toggle it kept to itself and the scheduler read `govee_segment_mode`
+    (which only the LIGHTNING panel ever writes), so the same device could be
+    painted per-segment by hand and as one colour on a schedule.
+
+    A device with one segment is always "whole" regardless of what's stored —
+    there is nothing to spread a palette across."""
+    if gv_segment_count(slug, sku) <= 1:
+        return "whole"
+    stored = (config.get("govee_scene_address", {}) or {}).get(slug)
+    return "whole" if stored == "whole" else "segments"
+
+
 def _device_label(key: str, fallback: str) -> str:
     return (config.get("nicknames", {}) or {}).get(key) or fallback
 
 
 def _build_palette_scene(room_name: str, palette: dict, brightness: int = 100,
-                         use_segments: bool = True, rng=None):
+                         rng=None):
     """Resolve a palette into a SceneApplyRequest for one room.
+
+    Whether each Govee device is painted per-segment or as one colour comes from
+    `gv_scene_address` — the SAME setting the Scenes panel writes — so a schedule
+    fires the look the room is configured for rather than a second opinion.
 
     Returns None when the room has nothing addressable — the scheduler then logs
     and skips rather than firing an empty scene."""
@@ -1070,8 +1143,6 @@ def _build_palette_scene(room_name: str, palette: dict, brightness: int = 100,
     govee_keys = [f"govee:{slug}" for slug in room.get("govee_devices", [])]
     ordered = _palette_device_order(room_name, hue_keys + govee_keys)
 
-    seg_mode = config.get("govee_segment_mode", {}) or {}
-    seg_counts = config.get("govee_segment_counts", {}) or {}
     bri254 = max(1, min(254, round(brightness * 254 / 100)))
 
     hue, govee_whole, razer, cloud, base_seeds = [], [], [], [], []
@@ -1091,11 +1162,10 @@ def _build_palette_scene(room_name: str, palette: dict, brightness: int = 100,
             continue                      # never seen / gone — nothing to address
         sku = (info or {}).get("sku")
         label = _device_label(key, (info or {}).get("name") or slug)
-        sku_info = GOVEE_SEGMENT_INFO.get(sku) or {}
-        count = int(seg_counts.get(slug) or sku_info.get("count") or 0)
-        protocol = sku_info.get("protocol")
+        count = gv_segment_count(slug, sku)
+        protocol = (GOVEE_SEGMENT_INFO.get(sku) or {}).get("protocol")
 
-        if use_segments and seg_mode.get(slug) and count > 0 and protocol:
+        if gv_scene_address(slug, sku) == "segments" and count > 0 and protocol:
             seg_colors = [dealer.next() for _ in range(count)]
             if protocol == "razer":
                 razer.append(SceneRazer(ip=ip, mac=mac or slug, sku=sku,
@@ -1150,12 +1220,11 @@ async def _start_scene_apply(req):
 
 
 async def _apply_room_palette(room_name: str, palette: dict, brightness: int = 100,
-                              use_segments: bool = True,
                               source: str = "app", source_detail: Optional[str] = None) -> bool:
     """Put one already-chosen palette on a room. The choice is made by the
     caller so that a ZONE gets one coherent palette across every member room
     rather than a different random one per room."""
-    req = _build_palette_scene(room_name, palette, brightness, use_segments)
+    req = _build_palette_scene(room_name, palette, brightness)
     if req is None:
         log.warning("Palette action: room %r has no addressable devices, skipped", room_name)
         return False
@@ -1261,9 +1330,7 @@ async def _fire_schedule(sched: dict):
             targets = _zone_rooms(zone, name) if zone else [room]
             for target in targets:
                 await _apply_room_palette(
-                    target, chosen,
-                    brightness=int(action.get("brightness", 100)),
-                    use_segments=action.get("segments", True) is not False,
+                    target, chosen, brightness=int(action.get("brightness", 100)),
                     source="schedule", source_detail=name)
         elif atype in ("white", "color", "power"):
             if zone:
@@ -2337,9 +2404,33 @@ async def state_events():
     )
 
 
+class SceneAddressRequest(BaseModel):
+    """{ "2d3acc…": "segments", "1b62ee…": "whole" } — keyed by Govee slug.
+    Bulk-shaped on purpose: the Scenes panel offers a "set all" alongside the
+    per-device buttons, and both should be one request."""
+    modes: dict[str, str]
+
+
+@app.post("/api/govee/scene-address")
+async def set_scene_address(req: SceneAddressRequest):
+    """Set whether room scenes paint each Govee device per segment or as one
+    colour. Read by the browser AND the scheduler — see gv_scene_address."""
+    store = config.setdefault("govee_scene_address", {})
+    bad = [k for k, v in req.modes.items() if v not in ("segments", "whole")]
+    if bad:
+        raise HTTPException(400, f"mode must be 'segments' or 'whole' (bad: {bad})")
+    store.update(req.modes)
+    save_config(config)
+    publish_event("config")     # other sessions' Scenes panels resync
+    return {"success": True, "govee_scene_address": store}
+
+
 @app.post("/api/govee/segment-mode")
 async def set_govee_segment_mode(req: GoveeSegmentModeRequest):
-    """Toggle per-segment mode for a Govee device in a room."""
+    """Toggle per-segment mode for a Govee device in a room.
+
+    NOTE: this is the LIGHTNING scene's per-device switch, not the colour tool's.
+    Room scenes and the scheduler use `govee_scene_address` (v3.18.0)."""
     slug = gv_slug_for_ip(req.ip, req.mac)
     if "govee_segment_mode" not in config:
         config["govee_segment_mode"] = {}
@@ -3302,6 +3393,7 @@ async def get_config():
         "ct_correction": config.get("ct_correction", {}),
         "ct_rgb": config.get("ct_rgb", {}),
         "device_modes": config.get("device_modes", {}),
+        "govee_scene_address": config.get("govee_scene_address", {}),
         "segment_fill_modes": config.get("segment_fill_modes", {}),
         "ui_prefs": config.get("ui_prefs", {}),
         "power_recovery": config.get("power_recovery", {}),
@@ -3494,8 +3586,10 @@ async def import_config(req: ConfigImportRequest):
     config.clear()
     config.update(merged)
 
-    # An older backup may still be IP-keyed (pre-v3.0.0); migrate it like a boot would.
+    # An older backup may still be IP-keyed (pre-v3.0.0) or carry the room-level
+    # scene-addressing setting (pre-v3.18.0); migrate it like a boot would.
     migrate_govee_to_mac(config)
+    migrate_scene_address(config)
     save_config(config)          # write through now, not via the coalescing scheduler
     reload_segment_state()       # in-memory store must match the config we just loaded
     publish_event("config")      # every open browser resyncs
@@ -3735,7 +3829,9 @@ class PaletteApplyRequest(BaseModel):
     category: Optional[str] = None
     palettes: list[str] = []
     brightness: int = 100
-    segments: bool = True
+    # No per-schedule segments flag: whether a device is painted per segment is a
+    # property of the DEVICE (govee_scene_address, set in the Scenes panel), not
+    # of the schedule. A second switch here could only disagree with the room.
 
 
 @app.get("/api/palettes")
@@ -3769,7 +3865,7 @@ async def apply_palette_now(req: PaletteApplyRequest):
     applied = []
     for target in targets:
         if await _apply_room_palette(target, chosen, brightness=req.brightness,
-                                     use_segments=req.segments, source="app"):
+                                     source="app"):
             applied.append(target)
     if not applied:
         raise HTTPException(400, "nothing addressable in that room")
