@@ -193,6 +193,64 @@ function SettingsDeviceRow({ deviceKey, nickname, friendlyName, meta, statusColo
   );
 }
 
+// Rooms that still list Hue lights the bridge doesn't have — almost always a
+// light that was re-paired and came back with a new id, leaving the old one in
+// every room, layout and record forever, permanently "unknown" to the divergence
+// check. Detection is automatic; REMOVAL is one click and never silent, because
+// the failure mode of getting this wrong is deleting a working room. The backend
+// re-checks the bridge on the call and refuses if it can't read it (v3.23.0).
+function PhantomHueCard({ phantoms, onRemove, isMobile }) {
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(null);
+  const rooms = Object.entries(phantoms?.phantoms || {});
+  if (!phantoms?.ok || rooms.length === 0) return null;
+
+  const all = rooms.flatMap(([, ids]) => ids.map(p => p.light_id));
+  const go = async () => {
+    setBusy(true);
+    try { setDone(await onRemove(all)); }
+    catch (e) { setDone({ error: e?.message || "failed" }); }
+    setBusy(false);
+  };
+
+  return (
+    <div style={{
+      marginTop: 10, padding: isMobile ? 10 : 12, borderRadius: 10,
+      background: "rgba(69,45,16,0.35)", border: "1px solid #7c5312",
+    }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: "#fbbf24", marginBottom: 4 }}>
+        {all.length} light{all.length === 1 ? "" : "s"} in your rooms no longer exist on the bridge
+      </div>
+      <div style={{ fontSize: 11, color: "#cbd5e1", lineHeight: 1.5, marginBottom: 8 }}>
+        Usually a light that was re-paired and came back with a new ID. It can never be
+        reached, and it makes its room permanently unverifiable. Removing it clears it from
+        the room, the map, its nickname and the "Now showing" record — the physical light
+        isn't touched.
+      </div>
+      {rooms.map(([room, ids]) => (
+        <div key={room} style={{ fontSize: 11, color: "#94a3b8", marginBottom: 3 }}>
+          <strong style={{ color: "#e2e8f0" }}>{room}</strong>
+          {" — "}
+          {ids.map(p => `${p.nickname || "unnamed"} (ID ${p.light_id})`).join(", ")}
+        </div>
+      ))}
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 8 }}>
+        <button onClick={go} disabled={busy} style={{
+          padding: "5px 12px", borderRadius: 7, border: "1px solid #7c5312",
+          background: "transparent", color: busy ? "#64748b" : "#fbbf24",
+          fontSize: 12, fontWeight: 700, cursor: busy ? "wait" : "pointer",
+        }}>{busy ? "Removing…" : `Remove ${all.length === 1 ? "it" : "them"}`}</button>
+        {done && (
+          <span style={{ fontSize: 11, color: done.error ? "#f87171" : "#4ade80" }}>
+            {done.error ? `Couldn't remove — ${done.error}`
+                        : `Removed ${(done.removed || []).join(", ")}`}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Main App ───────────────────────────────────────────────────────────────
 
 function App() {
@@ -259,6 +317,9 @@ function App() {
   // whole point — before v3.18.0 the browser kept this choice to itself and a
   // scheduled palette addressed the same device differently.
   const [sceneAddress, setSceneAddress] = useState({});
+  // Hue ids our rooms list that the bridge no longer has. Checked on every load;
+  // shown in Settings, removed only on an explicit click.
+  const [huePhantoms, setHuePhantoms] = useState({ ok: false, phantoms: {} });
   // pickerStyle: "huebar" (default) or "wheel". Provided via context to
   // every ColorPicker so the user's choice applies everywhere.
   const [pickerStyle, setPickerStyle] = useState("huebar");
@@ -377,6 +438,11 @@ function App() {
       setSchedules(cfg.schedules || []);
       setLocation(cfg.location || {});
       setZones(cfg.zones || {});
+      // Fire-and-forget: a bridge read, and a failure just means "don't offer to
+      // prune" — never a reason to hold up the page or show an error.
+      api("/hue/phantoms")
+        .then(setHuePhantoms)
+        .catch(() => setHuePhantoms({ ok: false, phantoms: {} }));
 
       // Fast initial paint: the CACHED Govee list (no LAN scan) plus the other
       // quick calls. The slow live scan (6–15s of UDP broadcast + per-device
@@ -618,6 +684,14 @@ function App() {
   // Bulk-shaped: the Scenes panel's "set all" and a single device button are the
   // same call. Optimistic like every other control — a failed save logs and the
   // next config refresh puts the truth back.
+  const removeHuePhantoms = useCallback(async (lightIds) => {
+    const res = await api("/hue/phantoms/remove", {
+      method: "POST", body: JSON.stringify({ light_ids: lightIds }),
+    });
+    await loadAll();
+    return res;
+  }, [loadAll]);
+
   const updateSceneAddress = useCallback(async (modes) => {
     setSceneAddress(prev => ({ ...prev, ...modes }));
     try {
@@ -1400,6 +1474,8 @@ function App() {
                       />
                     );
                   })}
+                  <PhantomHueCard phantoms={huePhantoms} onRemove={removeHuePhantoms}
+                    isMobile={isMobile} />
                 </div>
               ) : config?.hue_paired ? (
                 <div style={{ fontSize: 12, color: "#64748b", fontStyle: "italic" }}>No lights found — try refreshing</div>

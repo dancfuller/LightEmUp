@@ -228,6 +228,11 @@ All endpoints are under `/api/`. Key groups:
   settings from such a file (`dry_run` previews; writes a `config.json.pre-import-*.bak`
   first; no restart needed). See `backend/CLAUDE.md` "Backup / restore"
 - `/api/discover/govee`, `/api/discover/hue` — device discovery (live LAN/network scan)
+- `/api/hue/phantoms` — rooms listing Hue ids the bridge no longer has (a re-paired light
+  comes back with a new id and the old one lingers forever). `POST /api/hue/phantoms/remove`
+  purges one from every room/layout/nickname/record. **Both refuse if the bridge can't be
+  read or returns no lights** — that would look like "everything is a phantom". Detection
+  is automatic, removal is always an explicit click. See `backend/CLAUDE.md` "Phantom Hue lights"
 - `/api/discover/govee/cached` — instant Govee list from `known_devices` + last-known
   `device_state`, **no LAN scan** (used for the fast initial paint; the client then
   refreshes with the live `/api/discover/govee` in the background)

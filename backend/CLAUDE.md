@@ -178,6 +178,31 @@ trust it can't keep.
   whatever it remembers, so there is nothing to compare — better `unknown` than a
   fabricated match.
 
+## Phantom Hue lights (v3.23.0)
+A Hue light that's re-paired comes back with a **new id**, and the old one lingers in
+every room, layout, nickname and record forever — unreachable, and permanently `unknown`
+to the divergence check. `GET /api/hue/phantoms` lists them; `POST /api/hue/phantoms/remove`
+(`{light_ids, dry_run}`) purges them via `_purge_hue_light`, which clears **rooms,
+nicknames, device_modes, ct_correction/ct_rgb, layout devices+segments, fixture members,
+`expect_hue`, AND the stored re-apply `payload.hue`** — miss that last one and "Set here"
+keeps driving a light that doesn't exist. Writes a `config.json.pre-phantom-purge.bak`.
+
+- **Absent from the bridge's list ≠ `reachable: false`.** A Hue light on a flipped wall
+  switch is still LISTED, just unreachable, and must never be pruned. Only absence from
+  the list counts — which works because for Hue the bridge is authoritative. This is the
+  exact opposite of the Govee rule, where discovery is lossy and absence proves nothing
+  (see "assume presence"). Don't unify them.
+- **Both endpoints refuse when the bridge can't be read OR returns an empty list.** A
+  bridge that's briefly down, or has just been factory reset, otherwise looks like "every
+  light in the house is a phantom" — and acting on that wipes every room. The GET returns
+  `ok: false`; the POST raises 503 and changes nothing.
+- **Remove re-checks the bridge itself** rather than trusting the ids the client sent: the
+  client's list can be seconds stale, which is long enough for a light to have come back.
+  A live id in the request lands in `refused`, not in the purge.
+- **Detection is automatic; deletion never is.** The UI (`PhantomHueCard`) surfaces them in
+  Settings → Hue Bridge with one button. Silent auto-deletion was considered and rejected:
+  the upside is saving one click, and the downside is quietly destroying rooms.
+
 ## Expectations are pinned to what the BRIDGE settled on (v3.22.0)
 `_reconcile_expectations(actual)` runs inside `_hue_verify_repair` (free — those lights
 were just read) and rewrites a **just-written** `expect_hue` with the colour the bridge

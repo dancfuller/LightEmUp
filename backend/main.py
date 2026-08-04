@@ -2474,6 +2474,150 @@ async def state_events():
     )
 
 
+# ─── Phantom Hue lights (v3.23.0) ────────────────────────────────────────────
+# A light re-paired to the bridge comes back with a NEW id, and the old one stays
+# in every room / layout / nickname forever. It can never be reached, and the
+# divergence check has to report it as "unknown" for the rest of time — which is
+# how Exterior Front ended up listing four lights when only two exist.
+#
+# The bridge's light list is AUTHORITATIVE for Hue, which is what makes this
+# detectable at all — and it's the opposite of the Govee rule, where discovery is
+# lossy and absence proves nothing (see "assume presence"). Note "absent from the
+# list" is not the same as `reachable: false`: a Hue light on a flipped wall
+# switch is still LISTED, just unreachable, and must never be pruned.
+#
+# Detection is automatic; deletion is not. See the endpoints below for why.
+
+def _hue_phantoms(live_ids: set) -> dict:
+    """room name → [light_id, …] that the room claims but the bridge doesn't have."""
+    out = {}
+    for room_name, room in (config.get("rooms", {}) or {}).items():
+        missing = [str(i) for i in room.get("hue_light_ids", []) if str(i) not in live_ids]
+        if missing:
+            out[room_name] = missing
+    return out
+
+
+def _purge_hue_light(light_id: str) -> list[str]:
+    """Remove every trace of one Hue light. Returns what was touched, for the
+    caller's report — a prune that doesn't say what it removed is a prune you
+    can't check afterwards."""
+    lid, key = str(light_id), f"hue:{light_id}"
+    touched = []
+
+    for room_name, room in (config.get("rooms", {}) or {}).items():
+        ids = room.get("hue_light_ids", [])
+        kept = [i for i in ids if str(i) != lid]
+        if len(kept) != len(ids):
+            room["hue_light_ids"] = kept
+            touched.append(f"room:{room_name}")
+
+    for store in ("nicknames", "device_modes", "ct_correction", "ct_rgb"):
+        if (config.get(store) or {}).pop(key, None) is not None:
+            touched.append(store)
+
+    for layout_name, layout in (config.get("room_layouts", {}) or {}).items():
+        for sub in ("devices", "segments"):
+            if (layout.get(sub) or {}).pop(key, None) is not None:
+                touched.append(f"layout:{layout_name}.{sub}")
+
+    for fx_id, fx in (config.get("fixtures", {}) or {}).items():
+        members = fx.get("members") or []
+        kept = [m for m in members if m != key]
+        if len(kept) != len(members):
+            fx["members"] = kept
+            touched.append(f"fixture:{fx_id}")
+
+    for room_name, entry in (config.get("room_last_applied", {}) or {}).items():
+        if (entry.get("expect_hue") or {}).pop(lid, None) is not None:
+            touched.append(f"expect:{room_name}")
+        # Also drop it from the stored re-apply payload, or "Set here" would keep
+        # trying to drive a light that no longer exists.
+        payload = entry.get("payload") or {}
+        hue_list = payload.get("hue")
+        if isinstance(hue_list, list):
+            kept = [h for h in hue_list if str(h.get("light_id")) != lid]
+            if len(kept) != len(hue_list):
+                payload["hue"] = kept
+                touched.append(f"payload:{room_name}")
+
+    return touched
+
+
+@app.get("/api/hue/phantoms")
+async def get_hue_phantoms():
+    """Rooms listing Hue lights the bridge doesn't have. Read-only.
+
+    Returns `ok: false` and prunes NOTHING when the bridge can't be read or
+    reports an empty list — a bridge that's briefly down, or has just been
+    factory reset, would otherwise look like "every light is a phantom", and
+    acting on that would wipe every room in the house."""
+    ip, username = config.get("hue_bridge_ip"), config.get("hue_username")
+    if not ip or not username:
+        return {"ok": False, "reason": "no bridge paired", "phantoms": {}}
+    try:
+        lights = await get_hue_lights(ip, username)
+    except Exception as e:
+        return {"ok": False, "reason": f"bridge unreachable ({e})", "phantoms": {}}
+    if not lights:
+        return {"ok": False, "reason": "bridge reported no lights at all", "phantoms": {}}
+
+    live = {str(l["id"]) for l in lights}
+    phantoms = _hue_phantoms(live)
+    return {
+        "ok": True,
+        "live_count": len(live),
+        "phantoms": {room: [{"light_id": i, "nickname": (config.get("nicknames", {}) or {}).get(f"hue:{i}")}
+                            for i in ids]
+                     for room, ids in phantoms.items()},
+    }
+
+
+class HuePhantomRemoveRequest(BaseModel):
+    light_ids: list[str] = []      # empty = every phantom currently detected
+    dry_run: bool = False
+
+
+@app.post("/api/hue/phantoms/remove")
+async def remove_hue_phantoms(req: HuePhantomRemoveRequest):
+    """Drop phantom Hue lights from every room, layout, nickname and record.
+
+    Re-verifies against the bridge on every call rather than trusting the ids the
+    caller sends: this deletes user data, and the client's list may be seconds
+    stale — long enough for a light to have come back."""
+    ip, username = config.get("hue_bridge_ip"), config.get("hue_username")
+    if not ip or not username:
+        raise HTTPException(400, "No Hue bridge paired")
+    try:
+        lights = await get_hue_lights(ip, username)
+    except Exception as e:
+        raise HTTPException(503, f"Bridge unreachable, refusing to prune: {e}")
+    if not lights:
+        raise HTTPException(503, "Bridge reported no lights at all — refusing to prune")
+
+    live = {str(l["id"]) for l in lights}
+    detected = {i for ids in _hue_phantoms(live).values() for i in ids}
+    targets = sorted(detected & {str(i) for i in req.light_ids}) if req.light_ids else sorted(detected)
+    refused = sorted({str(i) for i in req.light_ids} - detected) if req.light_ids else []
+
+    if req.dry_run or not targets:
+        return {"success": True, "dry_run": req.dry_run, "removed": [],
+                "would_remove": targets, "refused": refused}
+
+    try:
+        if CONFIG_PATH.exists():
+            import shutil
+            shutil.copy2(CONFIG_PATH, CONFIG_PATH.parent / (CONFIG_PATH.name + ".pre-phantom-purge.bak"))
+    except Exception:
+        log.exception("Could not write pre-purge backup")
+
+    report = {lid: _purge_hue_light(lid) for lid in targets}
+    save_config(config)
+    publish_event("config")
+    log.warning("Pruned %d phantom Hue light(s): %s", len(targets), ", ".join(targets))
+    return {"success": True, "removed": targets, "refused": refused, "details": report}
+
+
 class SceneAddressRequest(BaseModel):
     """{ "2d3acc…": "segments", "1b62ee…": "whole" } — keyed by Govee slug.
     Bulk-shaped on purpose: the Scenes panel offers a "set all" alongside the
