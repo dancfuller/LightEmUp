@@ -19,6 +19,37 @@ function relativeTime(iso) {
   return days === 1 ? "yesterday" : `${days}d ago`;
 }
 
+// Compact brightness control for the room header row (v3.25.0). The full-width
+// `Slider` (label above, value right) can't sit inline, but the THROTTLING can:
+// same useThrottledControl hook, so dragging still coalesces into ~180ms of
+// requests rather than one per pixel of travel.
+//
+// Floor is 1%, not 0: this sits inches from the power toggle, which owns off.
+// A slider that silently turns the room off while the toggle still reads "On"
+// would be two controls disagreeing about the same fact.
+function InlineBrightness({ value, onChange, isMobile }) {
+  const [local, onInput] = useThrottledControl(value, onChange, 180);
+  const pct = Math.max(1, Math.min(100, Math.round(local)));
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}
+      title="Brightness for every light in this room">
+      <input
+        type="range" min={1} max={100} value={pct}
+        onChange={(e) => onInput(Number(e.target.value))}
+        style={{
+          width: isMobile ? 88 : 116, height: 6, appearance: "none", borderRadius: 3,
+          background: `linear-gradient(to right, #fbbf24 ${pct}%, #334155 ${pct}%)`,
+          cursor: "pointer", outline: "none",
+        }}
+      />
+      <span style={{
+        fontSize: 11, fontWeight: 700, color: "#94a3b8",
+        width: 30, textAlign: "right", flexShrink: 0,
+      }}>{pct}%</span>
+    </div>
+  );
+}
+
 function RoomLastApplied({ entry, status, onReapply, isMobile, applying }) {
   const [busy, setBusy] = useState(false);
 
@@ -240,7 +271,10 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
   // Single overlay surface state — replaces the old per-panel show* booleans.
   // null | "lightning" | "scenes" | "controls" | "debug"
   const [surfaceView, setSurfaceView] = useState(null);
-  const [roomBrightness, setRoomBrightness] = useState(75);
+  // null until you actually drag it — the displayed value is then derived from
+  // the lights (below), so the header slider can't sit at a made-up 75% while
+  // the room is dim.
+  const [roomBrightness, setRoomBrightness] = useState(null);
   const [roomColor, setRoomColor] = useState(null);
   const [colorModeApplied, setColorModeApplied] = useState(null);
 
@@ -266,6 +300,21 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
   ];
   const anyOn = allLights.some(l => l.state?.on);
   const anyColor = allLights.some(l => l.capabilities?.has_color);
+
+  // What the room is ACTUALLY at, averaged over the lights that are ON — an off
+  // light's remembered brightness isn't what you're looking at. Hue reports
+  // 1–254, Govee 0–100, so they're normalised before averaging. Used until you
+  // drag, after which your own value stands (it's what was sent, so it matches).
+  const litPcts = allLights
+    .filter(l => l.state?.on)
+    .map(l => l.type === "hue"
+      ? Math.round(((l.state.brightness ?? 0) / 254) * 100)
+      : Math.round(l.state.brightness ?? 0));
+  const avgBrightness = litPcts.length
+    ? Math.round(litPcts.reduce((a, b) => a + b, 0) / litPcts.length)
+    : null;
+  const shownBrightness = roomBrightness != null ? roomBrightness
+    : (avgBrightness != null ? avgBrightness : 75);
   const segmentCountFor = (d) => {
     const configured = segmentInfo?.configured_counts?.[goveeSlug(d)];
     const skuCount = segmentInfo?.sku_table?.[d.sku]?.count;
@@ -341,6 +390,32 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
     >{label}</button>
   );
 
+  // Master power toggle. It's really Resume ⇄ Off: turning "on" sends {on:true},
+  // so each light comes back to its last state (bulbs/strips remember) rather
+  // than a fixed look. The white presets beside it own the specific looks, so the
+  // two don't read as duplicate whole-room controls. Tooltip spells out the
+  // resume semantics (no hover on mobile, but the label shows state honestly).
+  // Built here as a value because it's placed differently on phone vs desktop.
+  const powerToggle = (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+      <span style={{ fontSize: 12, fontWeight: 700, color: anyOn ? "#e2e8f0" : "#64748b", whiteSpace: "nowrap" }}>
+        {anyOn ? "On" : "Off"}
+      </span>
+      <button
+        onClick={() => onControlRoom(name, { on: !anyOn })}
+        title={anyOn ? "Turn the whole room off" : "Resume the room's last lighting"}
+        style={{
+          width: 48, height: 28, borderRadius: 14, border: "none",
+          background: anyOn ? "#6366f1" : "#334155", cursor: "pointer",
+          position: "relative", transition: "background 0.2s", flexShrink: 0,
+          boxShadow: anyOn ? "0 0 8px rgba(99,102,241,0.4)" : "none",
+        }}
+      >
+        <div style={{ width: 22, height: 22, borderRadius: "50%", background: "#fff", position: "absolute", top: 3, left: anyOn ? 23 : 3, transition: "left 0.2s ease" }} />
+      </button>
+    </div>
+  );
+
   // Opener button in the room header (sets the surface view).
   const openerBtn = (key, label, accent, dashed) => (
     <button
@@ -396,7 +471,7 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
       </div>
 
       <Slider
-        label="Room Brightness" value={roomBrightness} min={0} max={100}
+        label="Room Brightness" value={shownBrightness} min={0} max={100}
         onChange={applyRoomBrightness} color="#fbbf24" unit="%"
       />
 
@@ -486,41 +561,45 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
     <div style={{ marginBottom: 32 }}>
       {/* Room header — name row, then a row of surface-opener buttons. */}
       <div style={{ display: "flex", flexDirection: "column", marginBottom: 4, paddingBottom: 12, borderBottom: "1px solid #1e293b", gap: 12 }}>
+        {/* Name, the quick looks, brightness and power all on ONE line (v3.25.0).
+            The white presets used to sit in their own "Set room to" block two rows
+            further down, which put the three things you reach for most often —
+            warm it up, dim it, turn it off — in three different places. The
+            heading is gone with them: the buttons already say "Soft White" and
+            "Cool White", and a header row can't afford a label per group.
+            On a phone the right-hand group wraps to its own line as a unit. */}
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
           <div
             onClick={() => setCollapsed(!collapsed)}
-            style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", userSelect: "none", flex: 1, minWidth: 0 }}
+            style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", userSelect: "none", flex: isMobile ? "1 1 auto" : "0 1 auto", minWidth: 0 }}
           >
             <span style={{ fontSize: 14, color: "#64748b", transition: "transform 0.2s", transform: collapsed ? "rotate(-90deg)" : "rotate(0deg)", display: "inline-block" }}>&#x25BC;</span>
             <h2 style={{ fontSize: isMobile ? 17 : 20, fontWeight: 700, color: "#f8fafc", margin: 0 }}>{name}</h2>
-            <span style={{ fontSize: 12, color: "#64748b" }}>
+            <span style={{ fontSize: 12, color: "#64748b", whiteSpace: "nowrap" }}>
               {allLights.length} {allLights.length === 1 ? "light" : "lights"}
               {totalSegments > 0 && <> &middot; {totalSegments} segments</>}
             </span>
           </div>
-          {/* Master power toggle. It's really Resume ⇄ Off: turning "on" sends
-              {on:true}, so each light comes back to its last state (bulbs/strips
-              remember) rather than a fixed look. The specific-look shortcuts live
-              in the "Set room to" group below — this toggle owns power/resume, they
-              own the presets, so the two no longer read as duplicate whole-room
-              controls. Tooltip spells out the resume semantics (no hover on mobile,
-              but the label already shows state honestly). */}
-          <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-            <span style={{ fontSize: 12, fontWeight: 700, color: anyOn ? "#e2e8f0" : "#64748b", whiteSpace: "nowrap" }}>
-              {anyOn ? "On" : "Off"}
-            </span>
-            <button
-              onClick={() => onControlRoom(name, { on: !anyOn })}
-              title={anyOn ? "Turn the whole room off" : "Resume the room's last lighting"}
-              style={{
-                width: 48, height: 28, borderRadius: 14, border: "none",
-                background: anyOn ? "#6366f1" : "#334155", cursor: "pointer",
-                position: "relative", transition: "background 0.2s", flexShrink: 0,
-                boxShadow: anyOn ? "0 0 8px rgba(99,102,241,0.4)" : "none",
-              }}
-            >
-              <div style={{ width: 22, height: 22, borderRadius: "50%", background: "#fff", position: "absolute", top: 3, left: anyOn ? 23 : 3, transition: "left 0.2s ease" }} />
-            </button>
+
+          {/* Power stays glued to the NAME on a phone. 390px can't hold name +
+              two presets + slider + toggle on one line, so something has to wrap
+              — and the right thing to keep on the identity line is the control
+              you reach for in the dark. The looks wrap below it as a unit. */}
+          {isMobile && powerToggle}
+
+          <div style={{
+            display: "flex", alignItems: "center", gap: isMobile ? 6 : 8,
+            flexWrap: "wrap", marginLeft: isMobile ? 0 : "auto",
+            width: isMobile ? "100%" : "auto",
+          }}>
+            {allLights.length > 0 && (
+              <>
+                {whiteBtn("Soft White", SOFT_WHITE_K, "#fcd34d", "rgba(251,191,36,0.12)", "rgba(251,191,36,0.4)")}
+                {whiteBtn("Cool White", COOL_WHITE_K, "#93c5fd", "rgba(96,165,250,0.12)", "rgba(96,165,250,0.4)")}
+                <InlineBrightness value={shownBrightness} onChange={applyRoomBrightness} isMobile={isMobile} />
+              </>
+            )}
+            {!isMobile && powerToggle}
           </div>
         </div>
 
@@ -539,21 +618,8 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
           {anySegmented && openerBtn("debug", "Debug", "#64748b", true)}
         </div>
 
-        {/* "Set room to" — specific whole-room looks. Deliberately excludes an
-            on/off/resume button: the master power toggle (top-right) owns that, so
-            these read as "looks", not another power control. The heading scopes
-            both buttons (they set EVERY light in the room) so the labels stay short. */}
-        {allLights.length > 0 && (
-          <div>
-            <div style={{ fontSize: 10, color: "#64748b", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 7 }}>
-              {isRealRoom ? "Set room to" : "Set lights to"}
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 6 : 8, flexWrap: "wrap" }}>
-              {whiteBtn("Soft White", SOFT_WHITE_K, "#fcd34d", "rgba(251,191,36,0.12)", "rgba(251,191,36,0.4)")}
-              {whiteBtn("Cool White", COOL_WHITE_K, "#93c5fd", "rgba(96,165,250,0.12)", "rgba(96,165,250,0.4)")}
-            </div>
-          </div>
-        )}
+        {/* The "Set room to" block that used to live here moved INTO the name row
+            above (v3.25.0) — same buttons, same behaviour, one less place to look. */}
       </div>
 
       {/* Light-card grid — renders independently of the control surface. */}

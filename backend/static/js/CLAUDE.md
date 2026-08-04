@@ -440,6 +440,25 @@ the strip's record can be stale. `RoomLastApplied` takes a `status` from
   scene. `reapplyRoom` in app.js waits ~3s for an async scene replay before `loadAll()`,
   or the status would still read diverged.
 
+## room-section.js — the room header row (v3.25.0)
+Name · light count · **Soft White · Cool White · brightness · power**, all on one line.
+The white presets used to sit in a separate "Set room to" block two rows down, which put
+the three things you reach for most often — warm it up, dim it, turn it off — in three
+different places. The block's heading went with it: the buttons already say what they do,
+and a header row can't afford a label per group.
+- **`InlineBrightness`** is a compact slider that reuses `useThrottledControl` (~180ms), so
+  dragging coalesces instead of firing per pixel. Floor is **1%, not 0** — it sits inches
+  from the power toggle, and a slider that silently turns the room off while the toggle
+  still reads "On" is two controls disagreeing about one fact.
+- **The percentage is derived, not invented.** `roomBrightness` starts `null` and the
+  displayed value is the average of the lights that are **on** (Hue 1–254 and Govee 0–100
+  normalised first); it only becomes your own value once you drag. An all-off room falls
+  back to 75. Don't reintroduce a hardcoded default as the *displayed* value — it made the
+  slider claim 75% over a dim room.
+- **At <640px the row can't hold everything**, so it wraps deliberately: the **power toggle
+  stays on the name line** (the control you want in the dark) and the looks wrap below it
+  as a unit. That's why `powerToggle` is built as a value and placed in two spots.
+
 ## room-section.js — "Now showing" strip (v3.12.0)
 - **While a scene is applying, the strip says "Applying…" (v3.22.0).** A scene is recorded
   only when it FINISHES — deliberately, since a cancelled apply left the room half-set —
