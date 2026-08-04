@@ -1979,6 +1979,70 @@ async def _hue_verify_drain(settle_s: float = HUE_VERIFY_SETTLE_S):
         log.exception("Hue verify drain failed")
 
 
+# How long after an apply a stored expectation may still be reconciled against
+# what the bridge actually settled on. Deliberately short — see below.
+EXPECT_RECONCILE_WINDOW_S = 45
+
+
+def _reconcile_expectations(actual: dict) -> bool:
+    """Replace "the colour we asked for" with "the colour the bridge settled on"
+    in any JUST-WRITTEN room record. Returns True if anything changed.
+
+    The bridge gamut-clamps. Ask an outdoor bulb for a saturated cyan and it
+    reports back the nearest colour it can physically make, and for a hard clamp
+    that lands well outside HUE_XY_TOLERANCE — one of Dan's Front Door lights was
+    asked for xy [0.184, 0.284] and settled at [0.157, 0.379], a dy of 0.095.
+    Comparing later against what we ASKED for then declares the room changed
+    forever, minutes after LightEmUp itself set it. That's the precise false
+    alarm this whole feature exists in order not to raise, and loosening the
+    tolerance enough to swallow it (~0.12) would let a genuinely different colour
+    hide inside it. Comparing against what the bridge SETTLED ON fixes it exactly
+    and costs nothing: these lights were just read for the verify.
+
+    STRICTLY bounded to records written moments ago. Reconciling an old record
+    would quietly rewrite the evidence that something else changed the room —
+    erasing divergence rather than reporting it, which is far worse than the bug
+    it fixes. Same reason a light whose brightness didn't take is skipped: a
+    repair is in flight, and baking in the wrong state would hide the miss."""
+    from datetime import datetime
+    now = datetime.now().astimezone()
+    changed = False
+    for entry in (config.get("room_last_applied", {}) or {}).values():
+        expect = entry.get("expect_hue")
+        if not expect:
+            continue
+        try:
+            when = datetime.fromisoformat(entry.get("at") or "")
+        except (ValueError, TypeError):
+            continue
+        if abs((now - when).total_seconds()) > EXPECT_RECONCILE_WINDOW_S:
+            continue
+        for light_id, sent in expect.items():
+            cur = actual.get(str(light_id))
+            if not cur or not cur.get("reachable", True) or not cur.get("on"):
+                continue
+            if sent.get("on") is False:
+                continue
+            want_bri = sent.get("bri")
+            if want_bri is not None and \
+                    abs(int(cur.get("brightness") or 0) - int(want_bri)) > HUE_VERIFY_BRI_TOLERANCE:
+                continue
+            mode = cur.get("color_mode")
+            cxy = cur.get("xy")
+            if "xy" in sent and mode == "xy" and isinstance(cxy, (list, tuple)) and len(cxy) == 2:
+                settled = [round(float(cxy[0]), 4), round(float(cxy[1]), 4)]
+                if settled != list(sent["xy"]):
+                    log.info("Expectation reconciled: light %s asked xy %s, bridge settled %s",
+                             light_id, sent["xy"], settled)
+                    sent["xy"] = settled
+                    changed = True
+            elif "ct" in sent and mode == "ct" and cur.get("color_temp") is not None:
+                if int(cur["color_temp"]) != int(sent["ct"]):
+                    sent["ct"] = int(cur["color_temp"])
+                    changed = True
+    return changed
+
+
 async def _hue_verify_repair(expectations: dict):
     """expectations: {light_id: state_dict_as_sent}. Re-sends to any light whose
     reported state disagrees with what we asked for. Assumes the caller has
@@ -1996,6 +2060,12 @@ async def _hue_verify_repair(expectations: dict):
     try:
         lights = await get_hue_lights(ip, username)
         actual = {l["id"]: l.get("state", {}) for l in lights}
+
+        # Free ride on the read we just did: pin any just-written expectation to
+        # the colour the bridge actually settled on, so gamut clamping can't read
+        # as divergence five minutes later.
+        if _reconcile_expectations(actual):
+            save_config(config)
 
         repaired = []
         for light_id, sent in expectations.items():
@@ -2887,7 +2957,7 @@ async def _run_scene_apply(req: SceneApplyRequest):
         # Record only on COMPLETION — a cancelled apply left the room half-set, so
         # claiming it's "now showing" that look would be a lie.
         record_room_applied(
-            room, "scene", req.label or "Custom scene",
+            room, "scene", req.label or "Scene",
             swatches=_scene_swatches(req),
             source=req.source or "app", source_detail=req.source_detail,
             # `hue_expect` is filled by do_hue with the state actually sent, so a
@@ -2896,6 +2966,11 @@ async def _run_scene_apply(req: SceneApplyRequest):
             expect=hue_expect,
             payload=req.model_dump(exclude_none=True),
         )
+        # A scene's Hue verify fired inside do_hue, long before this record
+        # existed — so it had nothing to reconcile against. Run one more pass now
+        # that the expectation is stored, which pins each colour to whatever the
+        # bridge settled on (and re-checks the lights while it's there).
+        schedule_hue_verify(hue_expect)
         _scene_emit(room, phase="done", total=apply_total, done=apply_total, label="", active=False)
     except asyncio.CancelledError:
         _scene_emit(room, phase="canceled", active=False, label="")

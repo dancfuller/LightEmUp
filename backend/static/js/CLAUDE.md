@@ -441,6 +441,14 @@ the strip's record can be stale. `RoomLastApplied` takes a `status` from
   or the status would still read diverged.
 
 ## room-section.js — "Now showing" strip (v3.12.0)
+- **While a scene is applying, the strip says "Applying…" (v3.22.0).** A scene is recorded
+  only when it FINISHES — deliberately, since a cancelled apply left the room half-set —
+  but a room with segmented Govee devices takes ~30s because the cloud_v2 segment calls
+  are rate limited. For that whole window the strip used to keep advertising the PREVIOUS
+  look, so applying a palette and glancing up showed "Soft White · 2700K" and read as a
+  plain bug. `RoomSection` listens to the `lightemup-scene-apply` window event (app.js
+  re-broadcasts the SSE stream) and tracks it per room — in RoomSection, not
+  RoomLastApplied, so it survives the colour panel being closed.
 `RoomLastApplied` renders what the room was last set to — swatch dots + the look's name +
 a relative time — directly under the room name. It sits **OUTSIDE the `collapsed` gate**
 on purpose: rooms start collapsed, so a strip that only appeared when expanded would miss

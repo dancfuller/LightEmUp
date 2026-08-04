@@ -155,11 +155,15 @@ function orderPaletteForCycle(cols) {
 // Display names for the spatial modes, used to name an applied look for the room
 // header's "Now showing" strip (see describeLook in buildScenePlan). The mode keys
 // themselves are internal ("beacon"), so don't render those to the user directly.
+// "Custom" said nothing — every mode here is a custom look. The distinction that
+// matters is WHERE the colours come from: Palette draws from the curated library,
+// this one uses colours you picked yourself. Hence "My Colors" (v3.22.0). The
+// mode KEY stays "custom" so stored room_color_state keeps working.
 const MODE_LOOK_NAMES = {
   palette: "Palette",
   gradient: "Gradient",
   tonal: "Tonal",
-  custom: "Custom",
+  custom: "My Colors",
   beacon: "Beacon",
 };
 
@@ -1760,7 +1764,10 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     }
     const base = MODE_LOOK_NAMES[mode] || mode;
     if (mode === "palette") return `${base} · ${paletteColors.length} colors`;
-    if (mode === "custom") return `${base} · ${customColors.length} colors`;
+    // No colour count for this mode: the strip renders every swatch beside the
+    // label anyway (there are at most 4 seeds), and in "Create shades" the seed
+    // count would actively mislead — 2 seeds can apply as 8 tonal variants.
+    if (mode === "custom") return base;
     return base;
   }
 
@@ -1942,8 +1949,9 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
           <button onClick={() => setMode("tonal")} style={btnStyle(mode === "tonal")}>
             Tonal
           </button>
-          <button onClick={() => setMode("custom")} style={btnStyle(mode === "custom")}>
-            Custom
+          <button onClick={() => setMode("custom")} style={btnStyle(mode === "custom")}
+            title="Pick your own 1–4 colours, instead of choosing from the palette library">
+            My Colors
           </button>
           <button onClick={() => setMode("beacon")} style={btnStyle(mode === "beacon")}>
             Beacon

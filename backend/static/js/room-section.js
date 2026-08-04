@@ -19,8 +19,34 @@ function relativeTime(iso) {
   return days === 1 ? "yesterday" : `${days}d ago`;
 }
 
-function RoomLastApplied({ entry, status, onReapply, isMobile }) {
+function RoomLastApplied({ entry, status, onReapply, isMobile, applying }) {
   const [busy, setBusy] = useState(false);
+
+  // A scene is recorded only when it FINISHES (a cancelled apply left the room
+  // half-set, so claiming it early would be a lie) — but a room with segmented
+  // Govee devices takes ~30s, because the cloud_v2 segment calls are rate
+  // limited. For that whole window the strip used to keep advertising the
+  // PREVIOUS look, so pressing Apply on a palette and glancing up showed
+  // "Soft White · 2700K" and looked like the record was simply wrong.
+  // Say what's actually true instead: it's mid-change.
+  if (applying) {
+    return (
+      <div style={{
+        display: "flex", alignItems: "center", gap: 8,
+        padding: isMobile ? "6px 9px" : "6px 11px", borderRadius: 9,
+        background: "rgba(15,27,46,0.75)", border: "1px solid #24334a",
+      }}>
+        <span style={{
+          fontSize: 10, fontWeight: 700, color: "#818cf8",
+          textTransform: "uppercase", letterSpacing: 0.5,
+        }}>Applying…</span>
+        <span style={{ fontSize: isMobile ? 11 : 12, color: "#94a3b8" }}>
+          setting the new look
+        </span>
+      </div>
+    );
+  }
+
   if (!entry || !entry.label) return null;
 
   // LightEmUp isn't the only thing driving these lights (Hue app, Govee app,
@@ -217,6 +243,22 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
   const [roomBrightness, setRoomBrightness] = useState(75);
   const [roomColor, setRoomColor] = useState(null);
   const [colorModeApplied, setColorModeApplied] = useState(null);
+
+  // Is a backend scene apply running for THIS room? app.js re-broadcasts the
+  // scene_apply SSE stream as a window event; the colour panel uses it for its
+  // progress bar, and the header strip needs it so it doesn't keep advertising
+  // the previous look for the ~30s a segmented room takes to fill in. Tracked
+  // here rather than in RoomLastApplied so it survives the panel being closed.
+  const [applying, setApplying] = useState(false);
+  useEffect(() => {
+    const onProgress = (e) => {
+      const d = e.detail || {};
+      if (d.room !== name) return;
+      setApplying(d.active !== false && d.phase !== "done" && d.phase !== "canceled");
+    };
+    window.addEventListener("lightemup-scene-apply", onProgress);
+    return () => window.removeEventListener("lightemup-scene-apply", onProgress);
+  }, [name]);
 
   const allLights = [
     ...hueLights.map(l => ({ ...l, _controlFn: onControlHue })),
@@ -485,7 +527,7 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
         {/* What the room is currently set to. Sits directly under the name and
             OUTSIDE the `collapsed` gate, so a collapsed room still answers "what
             did I set this to?" at a glance — the whole point of the feature. */}
-        <RoomLastApplied entry={lastApplied} status={lastStatus}
+        <RoomLastApplied entry={lastApplied} status={lastStatus} applying={applying}
           onReapply={onReapply ? () => onReapply(name) : null} isMobile={isMobile} />
 
         {/* Surface openers */}

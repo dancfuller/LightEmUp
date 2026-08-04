@@ -178,6 +178,28 @@ trust it can't keep.
   whatever it remembers, so there is nothing to compare — better `unknown` than a
   fabricated match.
 
+## Expectations are pinned to what the BRIDGE settled on (v3.22.0)
+`_reconcile_expectations(actual)` runs inside `_hue_verify_repair` (free — those lights
+were just read) and rewrites a **just-written** `expect_hue` with the colour the bridge
+actually reports.
+
+- **Why:** the bridge gamut-clamps. An outdoor bulb asked for xy `[0.184, 0.284]` settled
+  at `[0.157, 0.379]` — dy `0.095`, well outside `HUE_XY_TOLERANCE` (0.06). Comparing
+  later against what we *asked for* declared the room "Changed since" minutes after
+  LightEmUp's own schedule set it: exactly the false alarm the feature exists not to
+  raise. Loosening the tolerance enough to swallow a hard clamp (~0.12) would let a
+  genuinely different colour hide inside it, so the comparison target moves instead.
+- **Bounded to `EXPECT_RECONCILE_WINDOW_S` (45s) after the record was written.**
+  Reconciling an older record would rewrite the evidence that something *else* changed
+  the room — erasing divergence rather than reporting it, which is worse than the bug it
+  fixes. Same reason a light whose brightness didn't take is skipped: a repair is in
+  flight and baking in the wrong state would hide the miss. A colour-MODE mismatch
+  (asked xy, reports ct) is never reconciled either — that's the Google Home case.
+- **A scene re-verifies after recording.** `_run_scene_apply` fires its Hue verify inside
+  `do_hue`, long before the record exists (a segmented room takes ~30s), so it has nothing
+  to reconcile against. It now calls `schedule_hue_verify(hue_expect)` again after
+  `record_room_applied` — one extra bridge read, which doubles as a late re-check.
+
 ## "Now showing" — what each room was last set to (v3.12.0)
 `config["room_last_applied"][room]` = `{kind, label, swatches, kelvin, at, source,
 source_detail}` (additive). It powers the strip in each room header, so opening a fresh
