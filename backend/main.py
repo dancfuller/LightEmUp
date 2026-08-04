@@ -70,6 +70,10 @@ DEFAULT_CONFIG = {
     "device_modes": {},  # device_key → "whole" | "segments" (LightCard preference:
                           # which CONTROLS the card shows. Not scene addressing —
                           # that's govee_scene_address below.)
+    "hue_missing_since": {},  # hue light id → ISO date it was FIRST seen absent
+                               # from the bridge (v3.23.1). Cleared the moment it
+                               # comes back. Govee's equivalent is
+                               # known_devices.govee[mac].last_seen.
     "govee_scene_address": {},  # govee slug → "segments" | "whole" (v3.18.0)
                                 # Does a room scene paint this device per segment or
                                 # as one colour? Set per device in the Scenes panel
@@ -2515,6 +2519,8 @@ def _purge_hue_light(light_id: str) -> list[str]:
     for store in ("nicknames", "device_modes", "ct_correction", "ct_rgb"):
         if (config.get(store) or {}).pop(key, None) is not None:
             touched.append(store)
+    if (config.get("hue_missing_since") or {}).pop(lid, None) is not None:
+        touched.append("hue_missing_since")
 
     for layout_name, layout in (config.get("room_layouts", {}) or {}).items():
         for sub in ("devices", "segments"):
@@ -2544,6 +2550,90 @@ def _purge_hue_light(light_id: str) -> list[str]:
     return touched
 
 
+# A device missing this long has almost certainly been unplugged, re-paired or
+# thrown away — as opposed to being briefly off the network, which is routine and
+# already shown as "not responding". Five days is long enough to survive a
+# holiday-weekend router swap without nagging.
+STALE_MISSING_DAYS = 5
+
+
+def _track_hue_missing(live_ids: set) -> bool:
+    """Maintain `hue_missing_since` — the date each room-claimed Hue id was FIRST
+    seen to be absent from the bridge. Returns True if anything changed.
+
+    Only ever called with an authoritative bridge read (see the guards in
+    get_hue_phantoms), so a bridge that's down records nothing rather than
+    starting a five-day clock on every light in the house. If the app simply
+    isn't opened for a week the clock starts late — under-reporting, which is the
+    safe direction for something whose only action is "suggest deleting"."""
+    from datetime import date
+    store = config.setdefault("hue_missing_since", {})
+    today = date.today().isoformat()
+    claimed = {str(i) for room in (config.get("rooms", {}) or {}).values()
+               for i in room.get("hue_light_ids", [])}
+    changed = False
+    for lid in claimed:
+        if lid in live_ids:
+            if store.pop(lid, None) is not None:
+                changed = True          # it came back — reset the clock entirely
+        elif lid not in store:
+            store[lid] = today
+            changed = True
+    for lid in list(store):             # no longer claimed by any room
+        if lid not in claimed:
+            store.pop(lid, None)
+            changed = True
+    return changed
+
+
+def _days_since(iso: Optional[str]) -> Optional[int]:
+    from datetime import date, datetime
+    if not iso:
+        return None
+    try:
+        d = datetime.fromisoformat(iso).date() if len(iso) > 10 else date.fromisoformat(iso)
+    except (ValueError, TypeError):
+        return None
+    return max(0, (date.today() - d).days)
+
+
+@app.get("/api/devices/stale")
+async def get_stale_devices():
+    """Devices missing long enough to be worth removing, Hue and Govee together.
+
+    Pure config reads — the clocks are maintained elsewhere (`hue_missing_since`
+    on an authoritative bridge read, `known_devices.govee[*].last_seen` on each
+    scan). That matters: it means a bridge or network that's down right now can
+    never manufacture a stale device, because nothing here consults the network."""
+    out = []
+    room_of = {}
+    for room_name, room in (config.get("rooms", {}) or {}).items():
+        for lid in room.get("hue_light_ids", []):
+            room_of[f"hue:{lid}"] = room_name
+        for slug in room.get("govee_devices", []):
+            room_of[f"govee:{slug}"] = room_name
+
+    nicknames = config.get("nicknames", {}) or {}
+    for lid, since in (config.get("hue_missing_since", {}) or {}).items():
+        days = _days_since(since)
+        if days is not None and days >= STALE_MISSING_DAYS:
+            out.append({"kind": "hue", "key": f"hue:{lid}", "light_id": lid,
+                        "name": nicknames.get(f"hue:{lid}") or f"Light {lid}",
+                        "room": room_of.get(f"hue:{lid}"), "since": since, "days": days})
+
+    for mac, info in _known_govee().items():
+        slug = gv_slug(mac)
+        days = _days_since(info.get("last_seen"))
+        if days is not None and days >= STALE_MISSING_DAYS:
+            out.append({"kind": "govee", "key": f"govee:{slug}", "mac": mac, "slug": slug,
+                        "name": nicknames.get(f"govee:{slug}") or info.get("name") or info.get("sku") or slug,
+                        "room": room_of.get(f"govee:{slug}"),
+                        "since": info.get("last_seen"), "days": days})
+
+    out.sort(key=lambda d: -d["days"])
+    return {"threshold_days": STALE_MISSING_DAYS, "count": len(out), "devices": out}
+
+
 @app.get("/api/hue/phantoms")
 async def get_hue_phantoms():
     """Rooms listing Hue lights the bridge doesn't have. Read-only.
@@ -2563,11 +2653,22 @@ async def get_hue_phantoms():
         return {"ok": False, "reason": "bridge reported no lights at all", "phantoms": {}}
 
     live = {str(l["id"]) for l in lights}
+    # This GET has one side effect on purpose: it's the only place with an
+    # authoritative bridge read AND the guards above, so it's where the
+    # missing-since clock is kept honest. Writes only when something changed.
+    if _track_hue_missing(live):
+        save_config(config)
+
     phantoms = _hue_phantoms(live)
+    since = config.get("hue_missing_since", {}) or {}
     return {
         "ok": True,
         "live_count": len(live),
-        "phantoms": {room: [{"light_id": i, "nickname": (config.get("nicknames", {}) or {}).get(f"hue:{i}")}
+        "threshold_days": STALE_MISSING_DAYS,
+        "phantoms": {room: [{"light_id": i,
+                             "nickname": (config.get("nicknames", {}) or {}).get(f"hue:{i}"),
+                             "since": since.get(i),
+                             "days": _days_since(since.get(i))}
                             for i in ids]
                      for room, ids in phantoms.items()},
     }

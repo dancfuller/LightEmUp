@@ -203,6 +203,21 @@ keeps driving a light that doesn't exist. Writes a `config.json.pre-phantom-purg
   Settings → Hue Bridge with one button. Silent auto-deletion was considered and rejected:
   the upside is saving one click, and the downside is quietly destroying rooms.
 
+### "Gone N days" — the escalation that replaces auto-deletion (v3.24.0)
+`GET /api/devices/stale` returns Hue **and** Govee devices missing for
+`STALE_MISSING_DAYS` (5) or more, and drives a third header badge next to Hue/Govee.
+- **This is a different claim from "not responding", and that's the whole point.** Online
+  status flickers — a light on a wall switch is missing every evening and back every
+  morning — so an amber badge for it is noise you learn to ignore. "Gone 5+ days" is rare,
+  so it's allowed to be loud, and it links straight to Settings where removal lives.
+- **Clocks, not live checks.** Hue uses `hue_missing_since` (set by `_track_hue_missing`,
+  called ONLY from `/api/hue/phantoms`, which already refuses on a bad bridge read); Govee
+  uses the existing `known_devices.govee[*].last_seen`. The stale endpoint itself touches
+  **no network at all**, so a bridge or LAN that's down right now can't manufacture a
+  stale device. If the app isn't opened for a week the Hue clock starts late —
+  under-reporting, the safe direction for something whose only suggestion is "delete this".
+- A light coming back **resets** the clock; `_purge_hue_light` clears it too.
+
 ## Expectations are pinned to what the BRIDGE settled on (v3.22.0)
 `_reconcile_expectations(actual)` runs inside `_hue_verify_repair` (free — those lights
 were just read) and rewrites a **just-written** `expect_hue` with the colour the bridge

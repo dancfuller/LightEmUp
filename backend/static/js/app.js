@@ -231,7 +231,8 @@ function PhantomHueCard({ phantoms, onRemove, isMobile }) {
         <div key={room} style={{ fontSize: 11, color: "#94a3b8", marginBottom: 3 }}>
           <strong style={{ color: "#e2e8f0" }}>{room}</strong>
           {" — "}
-          {ids.map(p => `${p.nickname || "unnamed"} (ID ${p.light_id})`).join(", ")}
+          {ids.map(p => `${p.nickname || "unnamed"} (ID ${p.light_id}${
+            p.days != null ? `, gone ${p.days} day${p.days === 1 ? "" : "s"}` : ""})`).join(", ")}
         </div>
       ))}
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 8 }}>
@@ -320,6 +321,9 @@ function App() {
   // Hue ids our rooms list that the bridge no longer has. Checked on every load;
   // shown in Settings, removed only on an explicit click.
   const [huePhantoms, setHuePhantoms] = useState({ ok: false, phantoms: {} });
+  // Devices (Hue OR Govee) missing long enough to be worth deleting, not merely
+  // offline right now. Drives the header's third badge.
+  const [staleDevices, setStaleDevices] = useState({ count: 0, devices: [], threshold_days: 5 });
   // pickerStyle: "huebar" (default) or "wheel". Provided via context to
   // every ColorPicker so the user's choice applies everywhere.
   const [pickerStyle, setPickerStyle] = useState("huebar");
@@ -440,9 +444,14 @@ function App() {
       setZones(cfg.zones || {});
       // Fire-and-forget: a bridge read, and a failure just means "don't offer to
       // prune" — never a reason to hold up the page or show an error.
+      // Order matters: /hue/phantoms is what advances the Hue missing-since
+      // clock, so ask it first and read the staleness it just updated.
       api("/hue/phantoms")
         .then(setHuePhantoms)
-        .catch(() => setHuePhantoms({ ok: false, phantoms: {} }));
+        .catch(() => setHuePhantoms({ ok: false, phantoms: {} }))
+        .then(() => api("/devices/stale"))
+        .then(s => s && setStaleDevices(s))
+        .catch(() => {});
 
       // Fast initial paint: the CACHED Govee list (no LAN scan) plus the other
       // quick calls. The slow live scan (6–15s of UDP broadcast + per-device
@@ -1135,6 +1144,32 @@ function App() {
               </button>
             );
           })()}
+          {/* A THIRD state, distinct from "not responding" (v3.23.1). The Hue and
+              Govee badges answer "is it online right now?", which flickers — a
+              light on a flipped switch is missing every evening and back every
+              morning, and an amber badge for that is noise you learn to ignore.
+              This one only appears once something has been gone for
+              STALE_MISSING_DAYS, which is a different claim: not "offline" but
+              "probably gone for good, and still cluttering your rooms". Because
+              it's rare, it's allowed to be loud, and it leads straight to the
+              place that removes it. */}
+          {staleDevices?.count > 0 && (
+            <button
+              onClick={() => setActiveTab("settings")}
+              title={`Missing ${staleDevices.threshold_days}+ days: ${
+                staleDevices.devices.map(d => `${d.name} (${d.days}d${d.room ? `, ${d.room}` : ""})`).join(", ")
+              } — open Settings to remove`}
+              style={{
+                display: "inline-flex", alignItems: "center", gap: 6,
+                padding: "4px 12px", borderRadius: 20, cursor: "pointer",
+                border: "1px solid #b45309", background: "rgba(180,83,9,0.25)",
+                color: "#fdba74", fontSize: 12, fontWeight: 700, letterSpacing: 0.3,
+              }}
+            >
+              <span style={{ fontSize: 11 }}>⚠</span>
+              {staleDevices.count} gone {staleDevices.threshold_days}+ days
+            </button>
+          )}
         </div>
       </header>
 
@@ -1532,7 +1567,13 @@ function App() {
                       <SettingsDeviceRow key={device.mac}
                         deviceKey={dk} nickname={nicknames?.[dk]} friendlyName={friendlyName}
                         meta={meta} italicName dim
-                        statusColor="#f87171" statusOpacity={1} statusLabel="not responding"
+                        statusColor="#f87171" statusOpacity={1}
+                        /* "not responding" is a snapshot; how LONG is the part
+                           that tells you whether to wait or to delete it. */
+                        statusLabel={(() => {
+                          const st = staleDevices.devices.find(d => d.key === dk);
+                          return st ? `gone ${st.days} days` : "not responding";
+                        })()}
                         flashBody={null}
                         onNicknameChange={updateNickname} isMobile={isMobile}
                         extra={

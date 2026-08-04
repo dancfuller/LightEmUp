@@ -233,6 +233,9 @@ All endpoints are under `/api/`. Key groups:
   purges one from every room/layout/nickname/record. **Both refuse if the bridge can't be
   read or returns no lights** — that would look like "everything is a phantom". Detection
   is automatic, removal is always an explicit click. See `backend/CLAUDE.md` "Phantom Hue lights"
+- `/api/devices/stale` — Hue + Govee devices missing 5+ days (config key `hue_missing_since`
+  for Hue; Govee reuses `last_seen`). Drives the header's third badge, which is a
+  deliberately different claim from "not responding" — see `backend/CLAUDE.md` "Gone N days"
 - `/api/discover/govee/cached` — instant Govee list from `known_devices` + last-known
   `device_state`, **no LAN scan** (used for the fast initial paint; the client then
   refreshes with the live `/api/discover/govee` in the background)
