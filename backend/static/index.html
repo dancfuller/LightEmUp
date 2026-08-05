@@ -21,6 +21,27 @@
       opacity: 1;
     }
     select { -webkit-appearance: auto; }
+
+    /* Native date/time widgets are drawn by the BROWSER, and without this it
+       draws them for a light page: the dropdown clock/calendar opens white, the
+       picker icon is a dark glyph on our dark field, and the selected segment
+       gets light-mode system colours. One declaration hands the browser our
+       actual palette. */
+    input[type="time"], input[type="date"], input[type="number"],
+    input[type="range"], select, textarea { color-scheme: dark; }
+
+    /* The AM/PM segment is the one people hunt for, so give it room to breathe
+       and to show its highlight.
+       NOTE: recolouring the SELECTED segment is not available to us. The
+       sub-field pseudo-element is styleable (this padding works, and so does
+       text-decoration — verified), but Chrome paints the selected one with the
+       system selection colours and does NOT match `:focus` on it, so a
+       `::-webkit-datetime-edit-ampm-field:focus { background: … }` rule is dead
+       CSS. `color-scheme: dark` above is what actually fixes the highlight, by
+       switching those system colours to their dark-mode pair. */
+    input[type="time"]::-webkit-datetime-edit-ampm-field { padding: 0 4px; }
+    input[type="time"]::-webkit-datetime-edit-hour-field,
+    input[type="time"]::-webkit-datetime-edit-minute-field { padding: 0 2px; }
     @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
     @keyframes sheetUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
