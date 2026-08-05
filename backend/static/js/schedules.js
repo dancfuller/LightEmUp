@@ -1080,7 +1080,11 @@ function SchedulesTab({ schedules, rooms, zones, location, favorites, onFavorite
         </div>
       )}
 
-      {schedules.map(s => (
+      {/* The row for the schedule being edited is hidden: the editor above IS
+          that schedule, so showing both means two representations of one thing
+          on screen, one of them stale the moment you type. Only for an EXISTING
+          schedule — a new one has no row yet. */}
+      {schedules.filter(s => !(editing && editing.id && s.id === editing.id)).map(s => (
         <div key={s.id} style={{ ...card, opacity: s.enabled ? 1 : 0.6 }}>
           <div style={{ display: "flex", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
             <div style={{ flex: "1 1 200px", minWidth: 0 }}>
