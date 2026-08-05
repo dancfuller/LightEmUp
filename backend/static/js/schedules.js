@@ -564,8 +564,30 @@ function ScheduleEditor({ initial, rooms, zoneNames, favorites, onFavoritesChang
       background: "#1e293b", borderRadius: 16, padding: isMobile ? 14 : 20,
       marginBottom: 16, border: "1px solid #6366f1",
     }}>
-      <div style={{ fontSize: isMobile ? 15 : 17, fontWeight: 700, color: "#e2e8f0", marginBottom: 16 }}>
-        {initial?.id ? "Edit schedule" : "New schedule"}
+      {/* Dismiss at the TOP as well as the bottom (v3.26.0). The editor is long —
+          name, target, action (a palette grid is 300px of it), trigger, days —
+          so backing out of an edit you opened by mistake meant scrolling the
+          whole form to reach Cancel. This is an × rather than a second button
+          labelled "Cancel": two identical labels invite "do these differ?", while
+          an × in a panel header is unambiguously "close this". Same handler. */}
+      <div style={{
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        gap: 10, marginBottom: 16,
+      }}>
+        <div style={{ fontSize: isMobile ? 15 : 17, fontWeight: 700, color: "#e2e8f0" }}>
+          {initial?.id ? "Edit schedule" : "New schedule"}
+        </div>
+        <button
+          onClick={onCancel}
+          title="Close without saving"
+          aria-label="Close without saving"
+          style={{
+            width: 30, height: 30, borderRadius: 8, flexShrink: 0,
+            border: "1px solid #334155", background: "transparent",
+            color: "#94a3b8", fontSize: 16, fontWeight: 700, cursor: "pointer",
+            lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center",
+          }}
+        >×</button>
       </div>
 
       <div style={{ marginBottom: 16 }}>
