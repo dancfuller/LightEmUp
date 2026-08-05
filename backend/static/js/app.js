@@ -410,6 +410,41 @@ function App() {
     }
   }, []);
 
+  // Devices in no room yet — the pool the Rooms tab's "Assign lights" picker
+  // offers, and the same set Assign Rooms computes for its own picker.
+  const unassignedDevices = (() => {
+    const hueTaken = new Set(), goveeTaken = new Set();
+    Object.values(rooms || {}).forEach(r => {
+      (r.hue_light_ids || []).forEach(id => hueTaken.add(id));
+      (r.govee_devices || []).forEach(s => goveeTaken.add(s));
+    });
+    return [
+      ...hueLights.filter(l => !hueTaken.has(l.id)),
+      ...goveeDevices.filter(d => !goveeTaken.has(goveeSlug(d))),
+    ];
+  })();
+
+  // Add devices to a room from anywhere. Mirrors addDevicesToRoom in
+  // room-assignment.js and goes through the same handleRoomsChange, so the two
+  // entry points can't diverge in what "assigned" means.
+  const assignDevicesToRoom = useCallback((roomName, devices) => {
+    const updated = JSON.parse(JSON.stringify(rooms));
+    if (!updated[roomName]) updated[roomName] = { hue_light_ids: [], govee_devices: [] };
+    for (const d of devices) {
+      if (d.type === "hue") {
+        if (!(updated[roomName].hue_light_ids || []).includes(d.id)) {
+          updated[roomName].hue_light_ids = [...(updated[roomName].hue_light_ids || []), d.id];
+        }
+      } else {
+        const slug = goveeSlug(d);
+        if (!(updated[roomName].govee_devices || []).includes(slug)) {
+          updated[roomName].govee_devices = [...(updated[roomName].govee_devices || []), slug];
+        }
+      }
+    }
+    handleRoomsChange(updated);
+  }, [rooms, handleRoomsChange]);
+
   const loadAll = useCallback(async (isFirst = false) => {
     // Only the first load drives the full-screen loader; SSE refetches are silent.
     const status = isFirst ? setLoadingStatus : () => {};
@@ -1300,6 +1335,8 @@ function App() {
                   onDeviceModeChange={updateDeviceMode}
                   sceneAddress={sceneAddress}
                   onSceneAddressChange={updateSceneAddress}
+                  unassignedDevices={unassignedDevices}
+                  onAssignDevices={assignDevicesToRoom}
                   onDeviceModesBulkChange={updateDeviceModesBulk}
                   segmentFillModes={segmentFillModes}
                   onSegmentFillModeChange={updateSegmentFillMode}

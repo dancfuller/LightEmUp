@@ -440,6 +440,20 @@ the strip's record can be stale. `RoomLastApplied` takes a `status` from
   scene. `reapplyRoom` in app.js waits ~3s for an async scene replay before `loadAll()`,
   or the status would still read diverged.
 
+## Assigning lights from the Rooms tab (v3.26.0)
+Creating a room in **Rooms** produced an empty card with every control inert and no way
+forward — lights could only be put in it from the **Assign Rooms** tab, which you had to
+already know about. The room now shows an empty state that says so and opens the *same*
+`DevicePickerModal` in place; rooms that already have lights get a `+ Lights` opener in
+the surface row, since adding one later hit the identical wall.
+- **`DevicePickerModal` lives in `components-shared.js`**, not room-assignment.js. It's
+  used by both tabs, and room-assignment.js loads AFTER room-section.js — reaching across
+  would invert the script order index.html defines.
+- **`assignDevicesToRoom` in app.js mirrors `addDevicesToRoom`** in room-assignment.js and
+  goes through the same `handleRoomsChange`, so the two entry points can't drift on what
+  "assigned" means. If you change one, change the other (or fold them together).
+- Both affordances hide when nothing is unassigned — an empty picker is a dead end.
+
 ## room-section.js — the room header row (v3.25.0)
 Name · light count · **Soft White · Cool White · brightness · power**, all on one line.
 The white presets used to sit in a separate "Set room to" block two rows down, which put

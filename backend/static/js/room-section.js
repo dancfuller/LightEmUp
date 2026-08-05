@@ -265,7 +265,7 @@ function ControlSurface({ view, views, onView, onClose, roomName, isMobile, chil
   );
 }
 
-function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGovee, onControlRoom, favorites, onFavoritesChange, nicknames, onNicknameChange, lightningActive, onLightningStart, onLightningStop, segmentInfo, segmentState, onSegmentStateRefresh, deviceModes, onDeviceModeChange, onDeviceModesBulkChange, sceneAddress, onSceneAddressChange, segmentFillModes, onSegmentFillModeChange, onSegmentCountChange, roomLayouts, onLayoutChange, fixtures, onFixtureUpsert, onFixtureDelete, minSatEnabled, minSatPct, savedColorState, ctCorrection, onScheduleLook, lastApplied, lastStatus, onReapply, onRecheck }) {
+function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGovee, onControlRoom, favorites, onFavoritesChange, nicknames, onNicknameChange, lightningActive, onLightningStart, onLightningStop, segmentInfo, segmentState, onSegmentStateRefresh, deviceModes, onDeviceModeChange, onDeviceModesBulkChange, sceneAddress, onSceneAddressChange, unassignedDevices, onAssignDevices, segmentFillModes, onSegmentFillModeChange, onSegmentCountChange, roomLayouts, onLayoutChange, fixtures, onFixtureUpsert, onFixtureDelete, minSatEnabled, minSatPct, savedColorState, ctCorrection, onScheduleLook, lastApplied, lastStatus, onReapply, onRecheck }) {
   const isMobile = useIsMobile();
   const [collapsed, setCollapsed] = useState(true);
   // Single overlay surface state — replaces the old per-panel show* booleans.
@@ -283,6 +283,10 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
   // progress bar, and the header strip needs it so it doesn't keep advertising
   // the previous look for the ~30s a segmented room takes to fill in. Tracked
   // here rather than in RoomLastApplied so it survives the panel being closed.
+  // Creating a room in Rooms left you with an empty card and no way forward —
+  // the only place to put lights in it was the Assign Rooms tab, which you had
+  // to know about. Same picker, opened here (v3.26.0).
+  const [showAssign, setShowAssign] = useState(false);
   const [applying, setApplying] = useState(false);
   useEffect(() => {
     const onProgress = (e) => {
@@ -616,11 +620,69 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
           {openerBtn("controls", "Controls", "#a5b4fc")}
           {canMap && openerBtn("map", "🗺 Room Map", "#22d3ee")}
           {anySegmented && openerBtn("debug", "Debug", "#64748b", true)}
+          {/* Adding a light LATER hits the same wall as creating an empty room,
+              so the picker is reachable here too — not only from the empty state.
+              Hidden when there's nothing spare to add. */}
+          {isRealRoom && allLights.length > 0 && (unassignedDevices || []).length > 0 && onAssignDevices && (
+            <button
+              onClick={() => setShowAssign(true)}
+              title={`${unassignedDevices.length} light${unassignedDevices.length === 1 ? "" : "s"} not in any room`}
+              style={{
+                padding: isMobile ? "6px 12px" : "6px 16px", borderRadius: 8,
+                border: "1px dashed #475569", background: "transparent", color: "#94a3b8",
+                fontSize: isMobile ? 11 : 12, fontWeight: 700, cursor: "pointer",
+                whiteSpace: "nowrap", transition: "all 0.2s",
+              }}
+            >+ Lights</button>
+          )}
         </div>
 
         {/* The "Set room to" block that used to live here moved INTO the name row
             above (v3.25.0) — same buttons, same behaviour, one less place to look. */}
+
+        {/* A brand-new room is empty, and every control above it is inert. Say so,
+            and offer the one thing that makes it useful — rather than leaving the
+            user to discover that lights are assigned on a different tab. */}
+        {isRealRoom && allLights.length === 0 && (
+          <div style={{
+            padding: isMobile ? 12 : 14, borderRadius: 10,
+            background: "rgba(99,102,241,0.08)", border: "1px dashed #4338ca",
+            display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
+          }}>
+            <div style={{ flex: "1 1 200px", minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#c7d2fe" }}>
+                No lights in this room yet
+              </div>
+              <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>
+                {(unassignedDevices || []).length > 0
+                  ? `${(unassignedDevices || []).length} light${(unassignedDevices || []).length === 1 ? " isn't" : "s aren't"} in a room yet.`
+                  : "Every light is already in another room — move one here from Assign Rooms."}
+              </div>
+            </div>
+            {(unassignedDevices || []).length > 0 && onAssignDevices && (
+              <button
+                onClick={() => setShowAssign(true)}
+                style={{
+                  padding: isMobile ? "8px 14px" : "8px 18px", borderRadius: 8,
+                  border: "none", background: "#6366f1", color: "#fff",
+                  fontSize: isMobile ? 12 : 13, fontWeight: 700, cursor: "pointer",
+                  whiteSpace: "nowrap", flexShrink: 0,
+                }}
+              >Assign lights</button>
+            )}
+          </div>
+        )}
       </div>
+
+      {showAssign && (
+        <DevicePickerModal
+          title={`Add lights to ${name}`}
+          devices={unassignedDevices || []}
+          onSelect={(picked) => onAssignDevices(name, picked)}
+          onClose={() => setShowAssign(false)}
+          nicknames={nicknames}
+        />
+      )}
 
       {/* Light-card grid — renders independently of the control surface. */}
       {!collapsed && (

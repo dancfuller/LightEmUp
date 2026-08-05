@@ -627,3 +627,124 @@ function SceneAddressToggle({ value, count, onChange, isMobile, small }) {
     </div>
   );
 }
+
+// ─── Device picker (shared by Assign Rooms and the Rooms tab, v3.26.0) ──────
+// Multi-select list of devices with a confirm. It lived in room-assignment.js
+// until the Rooms tab needed it too: a room created there had no way to get
+// lights into it without a detour to another tab. Shared here rather than
+// reached across files, because room-assignment.js loads AFTER room-section.js
+// and depending upward would invert the script order index.html defines.
+function DevicePickerModal({ title, devices, onSelect, onClose, nicknames }) {
+  if (devices.length === 0) return null;
+  const [selected, setSelected] = useState(new Set());
+
+  const toggle = (d) => {
+    const key = d.type === "hue" ? `hue:${d.id}` : `govee:${goveeSlug(d)}`;
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  };
+
+  const getKey = (d) => d.type === "hue" ? `hue:${d.id}` : `govee:${goveeSlug(d)}`;
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, zIndex: 1000,
+      background: "rgba(0,0,0,0.6)", backdropFilter: "blur(4px)",
+      display: "flex", alignItems: "center", justifyContent: "center",
+      padding: 16,
+    }} onClick={onClose}>
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "#1e293b", borderRadius: 20, border: "1px solid #334155",
+          width: "100%", maxWidth: 420, maxHeight: "80vh",
+          display: "flex", flexDirection: "column",
+        }}
+      >
+        <div style={{ padding: "20px 20px 12px", borderBottom: "1px solid #0f172a" }}>
+          <h3 style={{ fontSize: 16, fontWeight: 700, color: "#f1f5f9", margin: 0 }}>{title}</h3>
+          <p style={{ fontSize: 12, color: "#64748b", margin: "4px 0 0" }}>
+            Tap to select, then confirm.
+          </p>
+        </div>
+        <div style={{ flex: 1, overflow: "auto", padding: "12px 20px" }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {devices.map((d, i) => {
+              const key = getKey(d);
+              const isSelected = selected.has(key);
+              const isHue = d.type === "hue";
+              const { nickname, friendlyName } = getDeviceDisplayName(d, nicknames);
+              const subtitle = isHue ? (d.product_name || d.model || "Hue") : (d.sku || d.ip);
+              return (
+                <button
+                  key={`pick-${key}-${i}`}
+                  onClick={() => toggle(d)}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 10,
+                    padding: "12px 14px", borderRadius: 12, border: "none",
+                    background: isSelected ? "rgba(99,102,241,0.15)" : "#0f172a",
+                    outline: isSelected ? "2px solid #6366f1" : "1px solid #334155",
+                    cursor: "pointer", textAlign: "left", width: "100%",
+                    transition: "all 0.15s ease",
+                  }}
+                >
+                  <div style={{
+                    width: 22, height: 22, borderRadius: 6, flexShrink: 0,
+                    border: isSelected ? "none" : "2px solid #475569",
+                    background: isSelected ? "#6366f1" : "transparent",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontSize: 14, color: "#fff",
+                  }}>
+                    {isSelected ? "✓" : ""}
+                  </div>
+                  <div style={{
+                    width: 8, height: 8, borderRadius: "50%", flexShrink: 0,
+                    background: isHue ? "#c084fc" : "#34d399",
+                  }} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    {nickname && (
+                      <div style={{ fontSize: 13, fontWeight: 700, color: "#e2e8f0" }}>{nickname}</div>
+                    )}
+                    <div style={{
+                      fontSize: nickname ? 11 : 13, fontWeight: nickname ? 500 : 600,
+                      color: nickname ? "#94a3b8" : "#e2e8f0",
+                    }}>{friendlyName}</div>
+                    <div style={{ fontSize: 10, color: "#64748b", marginTop: 1 }}>{subtitle}</div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        <div style={{
+          padding: "12px 20px 20px", borderTop: "1px solid #0f172a",
+          display: "flex", gap: 8, justifyContent: "flex-end",
+        }}>
+          <button onClick={onClose} style={{
+            padding: "10px 20px", borderRadius: 10, border: "1px solid #334155",
+            background: "transparent", color: "#94a3b8", fontSize: 13,
+            fontWeight: 600, cursor: "pointer",
+          }}>Cancel</button>
+          <button
+            disabled={selected.size === 0}
+            onClick={() => {
+              const picked = devices.filter(d => selected.has(getKey(d)));
+              onSelect(picked);
+              onClose();
+            }}
+            style={{
+              padding: "10px 20px", borderRadius: 10, border: "none",
+              background: selected.size > 0 ? "#6366f1" : "#334155",
+              color: selected.size > 0 ? "#fff" : "#64748b",
+              fontSize: 13, fontWeight: 600,
+              cursor: selected.size > 0 ? "pointer" : "default",
+            }}
+          >Add {selected.size > 0 ? `(${selected.size})` : ""}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
