@@ -1348,6 +1348,98 @@ async def _fire_schedule(sched: dict):
         log.exception("Scheduler: %r failed to fire", name)
 
 
+# ─── Paired on/off schedules (v3.27.0) ───────────────────────────────────────
+# One entry that turns lights ON and later turns them OFF: "sunset−10 until
+# sunrise+10", or "10am for 90 minutes". Previously that took two schedules,
+# which can silently drift apart — retarget one, forget the other, and the lights
+# stay on all day with nothing to flag it.
+#
+# The end is ARMED BY THE START rather than scheduled independently. When the
+# start fires, the end is resolved to an absolute datetime and stored in
+# `end_due`; each tick fires anything now due. That choice does a lot of work:
+#
+#   - Overnight spans need no special handling. An independently-scheduled end
+#     would have to answer "does Monday mean it STARTS Monday, or must be off
+#     during Monday?" for every sunset→sunrise pair. Armed, the question can't
+#     arise: days-of-week apply to the start, and the end is simply "later".
+#   - It survives a restart, because `end_due` is persisted. A Pi that reboots at
+#     2am still turns the porch off at sunrise — which is the durability case
+#     that actually matters.
+#   - A start that never fired arms nothing, so no stray "off" arrives for a span
+#     that never began.
+#
+# A due end DOES fire late (unlike a missed start, which is skipped — waking to a
+# 7am scene at 9am is worse than nothing). Turning lights off late is both
+# harmless and what you wanted. **If the end action ever becomes configurable
+# beyond "off", revisit that**: catching up on a colour change hours later is the
+# behaviour the no-catch-up rule exists to prevent.
+
+def _resolve_end_due(sched: dict, started: "datetime", location: dict,
+                     sun_resolver=None) -> Optional[str]:
+    """Absolute wall-clock moment this schedule's span should end, as
+    'YYYY-MM-DD HH:MM'. None when the schedule has no end.
+
+    PURE apart from the sun lookup, which is injectable for the same reason
+    _schedule_due's is: astral is imported lazily so the module loads on a dev
+    box without it, and a test there would otherwise silently get None."""
+    from datetime import timedelta
+    end = sched.get("end") or {}
+    etype = end.get("type")
+
+    if etype == "after":
+        mins = int(end.get("after_minutes") or 0)
+        if mins <= 0:
+            return None
+        return (started + timedelta(minutes=mins)).strftime("%Y-%m-%d %H:%M")
+
+    if etype == "weekly":
+        # _parse_hhmm always returns a tuple, signalling bad input with -1.
+        hm = _parse_hhmm(end.get("time"))
+        if hm[0] < 0:
+            return None
+        cand = started.replace(hour=hm[0], minute=hm[1], second=0, microsecond=0)
+        if cand <= started:
+            cand += timedelta(days=1)      # a clock time already past means tomorrow
+        return cand.strftime("%Y-%m-%d %H:%M")
+
+    if etype == "sun":
+        lat, lng = (location or {}).get("lat"), (location or {}).get("lng")
+        if lat is None or lng is None:
+            log.warning("Schedule end: sun end needs a location, ignoring")
+            return None
+        # Today's occurrence may already have passed (a sunset start ending at
+        # sunrise), so walk forward until it's in the future.
+        resolver = sun_resolver or (lambda ev, dt, off: _sun_hhmm(ev, dt, lat, lng, off))
+        for day_offset in (0, 1, 2):
+            d = (started + timedelta(days=day_offset)).date()
+            hm = resolver(end.get("event", "sunrise"), d,
+                          int(end.get("offset_min", 0) or 0))
+            # Don't trust the tuple blindly: an out-of-range minute would raise
+            # out of the scheduler tick. _sun_hhmm normalises via timedelta, so
+            # this only bites on a bad resolver — skip rather than throw.
+            if not hm or not (0 <= hm[0] <= 23 and 0 <= hm[1] <= 59):
+                continue
+            cand = started.replace(year=d.year, month=d.month, day=d.day,
+                                   hour=hm[0], minute=hm[1], second=0, microsecond=0)
+            if cand > started:
+                return cand.strftime("%Y-%m-%d %H:%M")
+    return None
+
+
+async def _fire_schedule_end(sched: dict):
+    """The OFF half of a paired schedule — same target as the start."""
+    action = sched.get("action") or {}
+    name = sched.get("name") or sched.get("id")
+    zone, room = action.get("zone"), action.get("room")
+    log.info("Scheduler: ending %r (room=%s zone=%s)", name, room, zone)
+    try:
+        targets = _zone_rooms(zone, name) if zone else ([room] if room else [])
+        for target in targets:
+            await _apply_room_power(target, False, "schedule", f"{name} (end)")
+    except Exception:
+        log.exception("Scheduler: %r failed to end", name)
+
+
 async def _scheduler_loop():
     """Wake ~once a minute (aligned to the top of the minute) and fire due
     schedules. Wakes instantly on shutdown via the stop event."""
@@ -1362,9 +1454,27 @@ async def _scheduler_loop():
             fired = False
             for sched in list(config.get("schedules", []) or []):
                 try:
+                    # Checked BEFORE (and independently of) the start, and without
+                    # consulting `enabled` — because disabling or retiming clears
+                    # end_due at save time, so an armed end reaching here means the
+                    # span really is still running. Fires late if the Pi was down
+                    # through the moment: an off is idempotent and still wanted.
+                    due = sched.get("end_due")
+                    if due and now.strftime("%Y-%m-%d %H:%M") >= due:
+                        await _fire_schedule_end(sched)
+                        sched["end_due"] = None
+                        sched["end_last_fired"] = now.strftime("%Y-%m-%d %H:%M")
+                        fired = True
+
                     if _schedule_due(sched, now, location):
                         await _fire_schedule(sched)
                         sched["last_fired"] = now.strftime("%Y-%m-%d %H:%M")
+                        # Arm the OFF half, if this schedule has one.
+                        end_due = _resolve_end_due(sched, now, location)
+                        if end_due:
+                            sched["end_due"] = end_due
+                            log.info("Scheduler: %r will turn off at %s",
+                                     sched.get("name") or sched.get("id"), end_due)
                         if (sched.get("trigger") or {}).get("type") == "oneoff":
                             sched["enabled"] = False   # one-off: fire once, then off
                         fired = True
@@ -4106,6 +4216,10 @@ class ScheduleRequest(BaseModel):
     enabled: Optional[bool] = None
     trigger: Optional[dict] = None   # see DEFAULT_CONFIG["schedules"] for the shape
     action: Optional[dict] = None
+    # Optional OFF half: {"type":"after","after_minutes":90} |
+    # {"type":"weekly","time":"23:30"} | {"type":"sun","event":"sunrise","offset_min":10}
+    # Send null to remove it. See "Paired on/off schedules".
+    end: Optional[dict] = None
 
 
 class LocationRequest(BaseModel):
@@ -4194,6 +4308,33 @@ async def apply_palette_now(req: PaletteApplyRequest):
             "candidates": len(candidates)}
 
 
+def _validate_schedule_end(end):
+    """Reject an unusable OFF half at save time rather than at 3am."""
+    if end is None:
+        return
+    if not isinstance(end, dict):
+        raise HTTPException(400, "end must be an object or null")
+    etype = end.get("type")
+    if etype not in ("after", "weekly", "sun"):
+        raise HTTPException(400, f"unknown end type {etype!r}")
+    if etype == "after":
+        try:
+            mins = int(end.get("after_minutes"))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "after_minutes must be a number")
+        if mins <= 0:
+            raise HTTPException(400, "after_minutes must be greater than 0")
+    elif etype == "weekly":
+        if _parse_hhmm(end.get("time"))[0] < 0:
+            raise HTTPException(400, "end needs a time as HH:MM")
+    elif etype == "sun":
+        if end.get("event") not in ("sunrise", "sunset"):
+            raise HTTPException(400, "end event must be sunrise or sunset")
+        loc = config.get("location") or {}
+        if loc.get("lat") is None or loc.get("lng") is None:
+            raise HTTPException(400, "a sunrise/sunset end needs your location set first")
+
+
 @app.get("/api/schedules")
 async def get_schedules():
     return {"schedules": config.get("schedules", []),
@@ -4208,17 +4349,25 @@ async def upsert_schedule(req: ScheduleRequest):
     schedules = config.setdefault("schedules", [])
     existing = next((s for s in schedules if s.get("id") == req.id), None) if req.id else None
 
+    # `end` needs three states — absent (leave alone), an object (set), and an
+    # explicit null (remove) — which a plain Optional can't express. pydantic v2
+    # records which fields the caller actually sent.
+    end_sent = "end" in req.model_fields_set
+
     if existing is None:
         if not req.trigger or not req.action:
             raise HTTPException(400, "A new schedule needs both a trigger and an action")
         _validate_schedule_action(req.action)
+        _validate_schedule_end(req.end)
         sched = {
             "id": req.id or str(uuid.uuid4()),
             "name": req.name or "Schedule",
             "enabled": True if req.enabled is None else bool(req.enabled),
             "trigger": req.trigger,
             "action": req.action,
+            "end": req.end,
             "last_fired": None,
+            "end_due": None,
         }
         schedules.append(sched)
     else:
@@ -4227,12 +4376,23 @@ async def upsert_schedule(req: ScheduleRequest):
             sched["name"] = req.name
         if req.enabled is not None:
             sched["enabled"] = bool(req.enabled)
+            # Disabling means "this schedule does nothing". Leaving a pending OFF
+            # armed would contradict that — a disabled schedule turning lights off
+            # an hour later is exactly the sort of thing you can't explain.
+            if not sched["enabled"]:
+                sched["end_due"] = None
         if req.trigger is not None:
             sched["trigger"] = req.trigger
             sched["last_fired"] = None   # retimed — don't let the old dedupe block it
+            sched["end_due"] = None      # …and the armed end belonged to the old timing
         if req.action is not None:
             _validate_schedule_action(req.action)
             sched["action"] = req.action
+            sched["end_due"] = None      # the target may have moved
+        if end_sent:
+            _validate_schedule_end(req.end)
+            sched["end"] = req.end
+            sched["end_due"] = None
 
     save_config(config)
     publish_event("config")

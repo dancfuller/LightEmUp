@@ -572,6 +572,35 @@ whole point: the same schedule has to look different tonight than it did last ni
   `POST /api/palettes/apply` (the editor's "Try one now": same candidate resolution, same
   apply path, immediately).
 
+## Paired on/off schedules — the optional `end` (v3.27.0)
+One entry that turns lights on and later off: "sunset−10 until sunrise+10", or "10am for
+90 minutes". Optional `end` on a schedule, one of:
+`{type:"after", after_minutes}` · `{type:"weekly", time:"HH:MM"}` ·
+`{type:"sun", event, offset_min}`.
+
+- **The end is ARMED BY THE START, not scheduled independently.** When the start fires,
+  `_resolve_end_due` turns the end into an absolute `"YYYY-MM-DD HH:MM"` stored in
+  `end_due`; each tick fires whatever is now due. This is the load-bearing decision:
+  - **Overnight needs no special case.** An independent end would have to answer "does
+    Monday mean it STARTS Monday, or must be off during Monday?" for every sunset→sunrise
+    pair. Armed, the question can't arise — days apply to the START.
+  - **It survives a restart**, because `end_due` is persisted. A Pi rebooting at 2am still
+    turns the porch off at sunrise, which is the durability case that matters.
+  - **A start that never fired arms nothing**, so no stray "off" for a span that never began.
+- **A due end fires LATE** if the Pi was down through the moment — deliberately unlike a
+  missed start, which is skipped (waking to a 7am scene at 9am is worse than nothing).
+  Turning lights off late is harmless and still wanted. **If the end action ever becomes
+  configurable beyond "off", revisit this** — catching up on a colour change hours later is
+  exactly what the no-catch-up rule exists to prevent.
+- **Saving clears `end_due`** when the trigger, action or end changes, or when the schedule
+  is disabled — a disabled schedule turning lights off an hour later is unexplainable. A
+  plain rename deliberately does NOT disturb a running span.
+- `end` is three-state in the API (absent = leave alone, object = set, **explicit null =
+  remove**), which a plain Optional can't express — `upsert_schedule` reads
+  `req.model_fields_set`. The frontend always sends it.
+- `_resolve_end_due` takes an injectable `sun_resolver` for the same reason `_schedule_due`
+  does: astral is lazily imported and absent on dev boxes, so a test would silently get None.
+
 ## Zones + safe room rename + Power action (v3.9.0, live control v3.15.0)
 **Zones** (`config["zones"]`, additive `{ zoneName: { rooms: [name,…] } }`, name-keyed
 like `rooms`; a room may be in several) are **both a live-control surface and a scheduling

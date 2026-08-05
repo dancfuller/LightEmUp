@@ -240,6 +240,27 @@ function nextRunLabel(sched) {
   return "—";
 }
 
+// One formatter for a duration, used by BOTH the preset buttons and the
+// read-back line — otherwise the button says "90 min" and the sentence under it
+// says "1h 30m" for the very same value.
+function prettyMinutes(m) {
+  m = Number(m) || 0;
+  if (m >= 60 && m % 60 === 0) return `${m / 60}h`;
+  if (m > 60) return `${Math.floor(m / 60)}h ${m % 60}m`;
+  return `${m} min`;
+}
+
+// "…then off after 90 min" / "…then off at sunrise +10" — the OFF half in words.
+function endSummary(end) {
+  if (!end) return "";
+  if (end.type === "after") return `, off after ${prettyMinutes(end.after_minutes)}`;
+  if (end.type === "weekly") return `, off at ${prettyTime(end.time)}`;
+  if (end.type === "sun") {
+    return `, off at ${end.event === "sunrise" ? "sunrise" : "sunset"}${prettyOffset(end.offset_min)}`;
+  }
+  return "";
+}
+
 function todayISO() {
   const d = new Date();
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
@@ -499,6 +520,14 @@ function ScheduleEditor({ initial, rooms, zoneNames, favorites, onFavoritesChang
   const [offsetDir, setOffsetDir] = useState(
     Number(initial?.trigger?.offset_min || 0) < 0 ? "before" : "after");
   const [offsetDraft, setOffsetDraft] = useState(null);
+
+  // The optional OFF half. Its own state rather than part of `action`, because
+  // it's a property of the SPAN, not of what the lights are set to.
+  const [end, setEnd] = useState(initial?.end || null);
+  const [endDraft, setEndDraft] = useState(null);        // duration text
+  const [endOffDraft, setEndOffDraft] = useState(null);  // sun-offset text
+  const [endDir, setEndDir] = useState(
+    Number(initial?.end?.offset_min || 0) < 0 ? "before" : "after");
   const offsetMag = Math.abs(Number(trigger.offset_min || 0));
   const sunEventName = trigger.event === "sunrise" ? "sunrise" : "sunset";
   const setOffset = (dir, mag) =>
@@ -539,6 +568,9 @@ function ScheduleEditor({ initial, rooms, zoneNames, favorites, onFavoritesChang
         name: name.trim() || `${action.zone || action.room} ${trigger.type === "sun" ? trigger.event : prettyTime(trigger.time)}`,
         enabled: initial ? initial.enabled : true,
         trigger, action,
+        // Always sent, so clearing it (null) actually removes it — the backend
+        // distinguishes "absent" from "explicitly null".
+        end: (action.type === "power" && action.on === false) ? null : end,
       });
     } catch (e) {
       setError("Couldn't save — " + (e?.message || "the hub didn't accept it."));
@@ -828,6 +860,114 @@ function ScheduleEditor({ initial, rooms, zoneNames, favorites, onFavoritesChang
         )}
       </div>
 
+      {/* ─── Optional OFF half ──────────────────────────────────────── */}
+      {/* One entry that turns lights on and later off. Two schedules can do this
+          today, and silently drift — retarget one, forget the other, and the
+          lights stay on all day. Hidden for a "Turn off" action, which has
+          nothing to end. */}
+      {!(action.type === "power" && action.on === false) && (
+        <div style={{ marginBottom: 16 }}>
+          <div style={label}>Then turn off</div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: end ? 12 : 0 }}>
+            <button style={seg(!end)} onClick={() => setEnd(null)}>Leave on</button>
+            <button style={seg(end?.type === "after")}
+              onClick={() => setEnd({ type: "after", after_minutes: end?.after_minutes || 60 })}>
+              After a while
+            </button>
+            <button style={seg(end?.type === "weekly")}
+              onClick={() => setEnd({ type: "weekly", time: end?.time || "23:00" })}>
+              At a time
+            </button>
+            <button style={seg(end?.type === "sun")}
+              onClick={() => setEnd({ type: "sun", event: end?.event || "sunrise", offset_min: end?.offset_min || 0 })}>
+              Sunrise / sunset
+            </button>
+          </div>
+
+          {end?.type === "after" && (
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+              {[30, 60, 90, 120, 240].map(m => (
+                <button key={m} style={seg(Number(end.after_minutes) === m)}
+                  onClick={() => setEnd({ ...end, after_minutes: m })}>
+                  {prettyMinutes(m)}
+                </button>
+              ))}
+              <input type="number" min={1} step={15} inputMode="numeric"
+                value={endDraft ?? String(end.after_minutes ?? 60)}
+                onFocus={e => e.target.select()}
+                onChange={e => {
+                  const t = e.target.value;
+                  setEndDraft(t);
+                  if (t.trim() !== "" && !Number.isNaN(Number(t))) {
+                    setEnd({ ...end, after_minutes: Math.max(1, Math.round(Number(t))) });
+                  }
+                }}
+                onBlur={() => setEndDraft(null)}
+                style={{ ...field, width: 78, flex: "0 0 78px", textAlign: "center" }} />
+              <span style={{ fontSize: 12, color: "#94a3b8" }}>min</span>
+            </div>
+          )}
+
+          {end?.type === "weekly" && (
+            <input type="time" value={end.time || ""}
+              onChange={e => setEnd({ ...end, time: e.target.value })}
+              style={{ ...field, maxWidth: 200 }} />
+          )}
+
+          {end?.type === "sun" && (
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
+              <div style={{ flex: "1 1 140px" }}>
+                <div style={label}>Event</div>
+                <select value={end.event || "sunrise"}
+                  onChange={e => setEnd({ ...end, event: e.target.value })} style={field}>
+                  <option value="sunrise">Sunrise</option>
+                  <option value="sunset">Sunset</option>
+                </select>
+              </div>
+              <div style={{ flex: "1 1 200px" }}>
+                <div style={label}>Offset</div>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                  <div style={{ display: "flex", gap: 4, background: "#0f172a", borderRadius: 8, padding: 2 }}>
+                    {[["before", "Before"], ["after", "After"]].map(([k, lbl]) => (
+                      <button key={k}
+                        onClick={() => { setEndDir(k); setEnd({ ...end, offset_min: (k === "before" ? -1 : 1) * Math.abs(Number(end.offset_min) || 0) }); }}
+                        style={{
+                          padding: isMobile ? "6px 10px" : "6px 12px", borderRadius: 6, border: "none",
+                          background: endDir === k ? "#6366f1" : "transparent",
+                          color: endDir === k ? "#fff" : "#94a3b8",
+                          fontSize: isMobile ? 11 : 12, fontWeight: 600, cursor: "pointer",
+                        }}>{lbl}</button>
+                    ))}
+                  </div>
+                  {/* Same draft-string rule as the trigger's offset — a bound
+                      number can't be cleared, and "-" can't be typed. */}
+                  <input type="number" min={0} step={5} inputMode="numeric"
+                    value={endOffDraft ?? String(Math.abs(Number(end.offset_min) || 0))}
+                    onFocus={e => e.target.select()}
+                    onChange={e => {
+                      const t = e.target.value;
+                      setEndOffDraft(t);
+                      if (t.trim() !== "" && !Number.isNaN(Number(t))) {
+                        setEnd({ ...end, offset_min: (endDir === "before" ? -1 : 1) * Math.max(0, Math.round(Number(t))) });
+                      }
+                    }}
+                    onBlur={() => setEndOffDraft(null)}
+                    style={{ ...field, width: 76, flex: "0 0 76px", textAlign: "center" }} />
+                  <span style={{ fontSize: 12, color: "#94a3b8" }}>min</span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {end && (
+            <div style={{ fontSize: 10, color: "#64748b", marginTop: 6 }}>
+              Turns the same {isZone ? "zone" : "room"} off{endSummary(end).replace(/^, off/, "")}.
+              {end.type !== "after" && " Crossing midnight is fine — the days above apply to when it turns ON."}
+            </div>
+          )}
+        </div>
+      )}
+
       {error && (
         <div style={{ fontSize: 12, color: "#f87171", marginBottom: 12 }}>{error}</div>
       )}
@@ -949,7 +1089,17 @@ function SchedulesTab({ schedules, rooms, zones, location, favorites, onFavorite
               </div>
               <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 4 }}>
                 {triggerSummary(s.trigger)}
+                {s.end && (
+                  <span style={{ color: "#fbbf24" }}>{endSummary(s.end)}</span>
+                )}
               </div>
+              {/* An armed span is the one thing here that's happening RIGHT NOW,
+                  so it gets said plainly rather than left to be inferred. */}
+              {s.end_due && (
+                <div style={{ fontSize: 11, color: "#fbbf24", marginTop: 3 }}>
+                  ● On now — turning off at {prettyTime((s.end_due.split(" ")[1] || ""))}
+                </div>
+              )}
               <div style={{ fontSize: 12, color: "#64748b", marginTop: 2 }}>
                 {targetSummary(s.action)} · {actionSummary(s.action)}
               </div>
