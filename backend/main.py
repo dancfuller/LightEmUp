@@ -1319,6 +1319,25 @@ async def _fire_schedule(sched: dict):
             if not req.label:
                 req.label = "Scheduled scene"
             await _start_scene_apply(req)
+        elif atype == "colors":
+            # "My Colors": the colours are IN the schedule, so there's nothing to
+            # choose between. Wrapped as a one-off palette so it goes through the
+            # exact same builder — which is what makes alternating red/green come
+            # out ABABAB down a hexa strip (see _ColorDealer) rather than needing
+            # its own arrangement logic.
+            colors = [tuple(int(v) for v in c)
+                      for c in (action.get("colors") or [])
+                      if isinstance(c, (list, tuple)) and len(c) == 3]
+            if not colors:
+                log.warning("Scheduler: %r — colours action has no colours, skipped", name)
+                return
+            chosen = {"name": action.get("label") or "My Colors",
+                      "category": "custom", "featured": False, "colors": colors}
+            targets = _zone_rooms(zone, name) if zone else [room]
+            for target in targets:
+                await _apply_room_palette(
+                    target, chosen, brightness=int(action.get("brightness", 100)),
+                    source="schedule", source_detail=name)
         elif atype == "palette":
             # Choose ONCE, then fan out: a zone on "random Summer palette" should
             # look like one decision across the house, not six unrelated ones.
@@ -4235,7 +4254,7 @@ def _validate_schedule_action(action: dict):
     if not isinstance(action, dict):
         raise HTTPException(400, "action must be an object")
     atype = action.get("type")
-    if atype not in ("scene", "white", "color", "power", "palette"):
+    if atype not in ("scene", "white", "color", "power", "palette", "colors"):
         raise HTTPException(400, f"unknown action type {atype!r}")
     if action.get("zone"):
         if atype == "scene":
@@ -4248,9 +4267,15 @@ def _validate_schedule_action(action: dict):
         # Catch an empty selection HERE rather than at 3am, where the only
         # symptom is a schedule that silently does nothing.
         if not palettes.resolve_candidates(action):
-            if action.get("source") == "list":
-                raise HTTPException(400, "pick at least one palette")
-            raise HTTPException(400, f"no palettes in category {action.get('category')!r}")
+            if action.get("source") == "category":
+                raise HTTPException(400, f"no palettes in category {action.get('category')!r}")
+            raise HTTPException(400, "pick at least one palette")
+    if atype == "colors":
+        good = [c for c in (action.get("colors") or [])
+                if isinstance(c, (list, tuple)) and len(c) == 3
+                and all(isinstance(v, int) and 0 <= v <= 255 for v in c)]
+        if not good:
+            raise HTTPException(400, "pick at least one colour")
 
 
 class PaletteApplyRequest(BaseModel):
@@ -4259,9 +4284,12 @@ class PaletteApplyRequest(BaseModel):
     will run at sunset."""
     room: Optional[str] = None
     zone: Optional[str] = None
-    source: str = "category"           # "category" | "list"
+    source: str = "list"               # "list" | "category" (legacy)
     category: Optional[str] = None
     palettes: list[str] = []
+    # A "My Colors" try: inline colours instead of library palettes. Wrapped as a
+    # one-off palette so the same builder runs.
+    colors: list[list[int]] = []
     brightness: int = 100
     # No per-schedule segments flag: whether a device is painted per segment is a
     # property of the DEVICE (govee_scene_address, set in the Scenes panel), not
@@ -4289,10 +4317,17 @@ async def apply_palette_now(req: PaletteApplyRequest):
     """Pick from the same candidate set and apply it immediately, so a palette
     schedule can be seen before it's trusted to run unattended."""
     action = req.model_dump()
-    candidates = palettes.resolve_candidates(action)
-    if not candidates:
-        raise HTTPException(400, "no palettes matched that selection")
-    chosen = palettes.pick(candidates)
+    inline = [tuple(int(v) for v in c) for c in (req.colors or [])
+              if isinstance(c, (list, tuple)) and len(c) == 3]
+    if inline:
+        chosen = {"name": "My Colors", "category": "custom", "featured": False,
+                  "colors": inline}
+        candidates = [chosen]
+    else:
+        candidates = palettes.resolve_candidates(action)
+        if not candidates:
+            raise HTTPException(400, "no palettes matched that selection")
+        chosen = palettes.pick(candidates)
     targets = _zone_rooms(req.zone, "Try palette") if req.zone else ([req.room] if req.room else [])
     if not targets:
         raise HTTPException(400, "pick a room or a zone")

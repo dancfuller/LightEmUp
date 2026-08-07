@@ -61,10 +61,20 @@ function palettesFor(filter) {
 // previews has to be exactly what the Pi will choose between.
 function paletteCandidates(action) {
   if (!action) return [];
-  if (action.source === "list") {
-    return (action.palettes || []).map(n => PALETTE_BY_NAME[n]).filter(Boolean);
-  }
-  return palettesFor(action.category || "All");
+  // Legacy (pre-v3.28.0) actions stored a whole CATEGORY by reference. The
+  // backend still honours those, so they keep firing; the editor expands one
+  // into an explicit list the first time you open it (see expandLegacy), which
+  // is what makes individual palettes prunable.
+  if (action.source === "category") return palettesFor(action.category || "All");
+  return (action.palettes || []).map(n => PALETTE_BY_NAME[n]).filter(Boolean);
+}
+
+// Open a stored action for editing: a category reference becomes the explicit
+// set it currently resolves to, so every palette in it can be removed one by one.
+function expandLegacyPalettes(action) {
+  if (!action || action.type !== "palette" || action.source !== "category") return action;
+  const { source, category, ...rest } = action;
+  return { ...rest, palettes: palettesFor(category || "All").map(p => p.name) };
 }
 
 // The colour bar. Equal-width stops, no gaps — it reads as one object at 40px
@@ -130,7 +140,8 @@ function PaletteCard({ palette, selected, onClick, isMobile }) {
 const ACTION_DEFAULTS = {
   white: { kelvin: 2700, brightness: 100 },
   color: { rgb: { r: 255, g: 180, b: 100 }, brightness: 100 },
-  palette: { source: "category", category: "Summer", palettes: [], brightness: 100 },
+  palette: { palettes: [], brightness: 100 },
+  colors: { colors: [[255, 0, 0], [0, 200, 60]], brightness: 100 },
   power: { on: false },
 };
 
@@ -186,8 +197,11 @@ function actionSummary(action) {
     // "1 palette" isn't random at all, and saying so avoids someone wondering
     // why their "random" schedule shows the same look every night.
     if (cands.length === 1) return `Palette · always ${cands[0].name}`;
-    return `Random palette · ${action.source === "list"
-      ? `${cands.length} palettes` : `${action.category || "All"} (${cands.length})`}`;
+    return `Random palette · ${cands.length} palettes`;
+  }
+  if (action.type === "colors") {
+    const n = (action.colors || []).length;
+    return `My Colors · ${n} colour${n === 1 ? "" : "s"}`;
   }
   if (action.type === "white") return `White ${action.kelvin}K · ${action.brightness}%`;
   if (action.type === "color") {
@@ -272,20 +286,141 @@ function todayISO() {
 // render that list as swatches — the preview isn't decoration, it's the only way
 // to know what a schedule you'll never watch fire is actually going to do.
 
+// ─── Palette action editor ──────────────────────────────────────────────────
+// ONE curated set of palettes, not two competing modes (v3.28.0). It used to be
+// "a whole category" OR "hand-picked names", which fought the actual goal: you
+// want a shortlist of palettes you like, and a category is just a fast way to
+// throw ten candidates at it. So the category chips became bulk ADD/REMOVE into
+// the same list, which is what makes "Summer and Winter" and "Summer minus the
+// three I don't like" the same gesture instead of different features.
+//
+// The set is always rendered as swatches — the preview isn't decoration, it's
+// the only way to know what a schedule you'll never watch fire will do.
+
+// ─── "My Colors" action editor (v3.28.0) ────────────────────────────────────
+// Colours you name yourself, for a look with no palette behind it — alternating
+// red and green at Christmas being the case that prompted it. The colours live
+// IN the schedule, so nothing is chosen at fire time; the backend wraps them as
+// a one-off palette and runs the SAME builder, which is what makes two colours
+// come out ABABAB down a hexa strip instead of needing their own arrangement.
+function ColorsActionEditor({ action, patchAction, isMobile, label, seg, onTry,
+                              favorites, onFavoritesChange }) {
+  const colors = action.colors || [];
+  const [active, setActive] = useState(0);
+  const [trying, setTrying] = useState(false);
+  const [tried, setTried] = useState(null);
+
+  const setColor = (i, r, g, b) => patchAction({
+    colors: colors.map((c, j) => (j === i ? [r, g, b] : c)),
+  });
+  const addColor = () => {
+    patchAction({ colors: [...colors, [255, 255, 255]] });
+    setActive(colors.length);
+  };
+  const removeColor = (i) => {
+    patchAction({ colors: colors.filter((_, j) => j !== i) });
+    setActive(a => Math.max(0, a > i ? a - 1 : a));
+  };
+
+  const tryIt = async () => {
+    setTrying(true); setTried(null);
+    try { setTried({ ok: true, ...(await onTry()) }); }
+    catch (e) { setTried({ ok: false, message: e?.message || "the hub couldn't apply it" }); }
+    setTrying(false);
+  };
+
+  const cur = colors[Math.min(active, colors.length - 1)] || [255, 255, 255];
+
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <div style={label}>Colours — {colors.length || "none yet"}</div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+        {colors.map((c, i) => (
+          <div key={i} style={{ display: "flex", alignItems: "center", gap: 3 }}>
+            <button onClick={() => setActive(i)}
+              title={`rgb(${c[0]}, ${c[1]}, ${c[2]}) — tap to edit`}
+              style={{
+                width: 40, height: 32, borderRadius: 8, cursor: "pointer",
+                background: `rgb(${c[0]}, ${c[1]}, ${c[2]})`,
+                border: i === active ? "2px solid #fff" : "1px solid #334155",
+                boxShadow: i === active ? "0 0 0 2px #6366f1" : "none",
+              }} />
+            <button onClick={() => removeColor(i)} title="Remove this colour"
+              style={{
+                border: "none", background: "transparent", color: "#64748b",
+                fontSize: 14, fontWeight: 700, cursor: "pointer", padding: "0 2px",
+              }}>×</button>
+          </div>
+        ))}
+        {colors.length < 8 && (
+          <button onClick={addColor} style={{
+            padding: "8px 12px", borderRadius: 8, border: "1px dashed #475569",
+            background: "transparent", color: "#94a3b8",
+            fontSize: 12, fontWeight: 700, cursor: "pointer",
+          }}>+ Add colour</button>
+        )}
+      </div>
+
+      {colors.length === 0 && (
+        <div style={{ fontSize: 11, color: "#f59e0b", marginBottom: 10 }}>
+          Add at least one colour.
+        </div>
+      )}
+
+      {colors.length > 0 && (
+        <div style={{ marginBottom: 12 }}>
+          <ColorPicker
+            currentColor={{ r: cur[0], g: cur[1], b: cur[2] }}
+            onColorSelect={(r, g, b) => setColor(Math.min(active, colors.length - 1), r, g, b)}
+            favorites={favorites} onFavoritesChange={onFavoritesChange}
+          />
+        </div>
+      )}
+
+      <div>
+        <div style={label}>Brightness · {action.brightness ?? 100}%</div>
+        <input type="range" min={1} max={100} value={action.brightness ?? 100}
+          onChange={e => patchAction({ brightness: Number(e.target.value) })}
+          style={{ width: "100%", accentColor: "#6366f1" }} />
+      </div>
+
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 12 }}>
+        <button onClick={tryIt} disabled={trying || colors.length === 0} style={{
+          padding: "7px 14px", borderRadius: 8, border: "1px solid #334155",
+          background: "transparent", color: colors.length ? "#c7d2fe" : "#475569",
+          fontSize: 12, fontWeight: 600, cursor: trying ? "wait" : "pointer",
+        }}>{trying ? "Applying…" : "Try it now"}</button>
+        {tried && (
+          <span style={{ fontSize: 11, color: tried.ok ? "#4ade80" : "#f87171" }}>
+            {tried.ok ? `Now on ${(tried.rooms || []).join(", ")}` : `Couldn't apply — ${tried.message}`}
+          </span>
+        )}
+      </div>
+      <div style={{ fontSize: 10, color: "#64748b", marginTop: 6 }}>
+        Spread across the room's lights, alternating so neighbours differ — two colours
+        give a strict A-B-A-B down a segmented strip.
+      </div>
+    </div>
+  );
+}
+
 function PaletteActionEditor({ action, patchAction, isMobile, label, field, seg, onTry }) {
-  const isList = action.source === "list";
-  // The picker's browse filter is separate from the action's category: in list
-  // mode you want to wander through categories while your picks (which may span
-  // several) stay put.
-  const [filter, setFilter] = useState(action.category || "Featured");
+  const [filter, setFilter] = useState("Featured");
   const [trying, setTrying] = useState(false);
   const [tried, setTried] = useState(null);
 
   const selected = action.palettes || [];
-  const candidates = paletteCandidates(action);
+  const inFilter = palettesFor(filter);
+  const allShown = inFilter.length > 0 && inFilter.every(p => selected.includes(p.name));
 
   const toggle = (name) => patchAction({
     palettes: selected.includes(name) ? selected.filter(n => n !== name) : [...selected, name],
+  });
+  const addAll = () => patchAction({
+    palettes: [...selected, ...inFilter.map(p => p.name).filter(n => !selected.includes(n))],
+  });
+  const removeAll = () => patchAction({
+    palettes: selected.filter(n => !inFilter.some(p => p.name === n)),
   });
 
   const tryIt = async () => {
@@ -309,79 +444,46 @@ function PaletteActionEditor({ action, patchAction, isMobile, label, field, seg,
 
   return (
     <div style={{ marginBottom: 12 }}>
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
-        <button style={seg(!isList)}
-          onClick={() => patchAction({ source: "category", category: action.category || "Summer" })}>
-          {isMobile ? "A category" : "Random from a category"}
-        </button>
-        <button style={seg(isList)}
-          onClick={() => patchAction({ source: "list", palettes: selected })}>
-          {isMobile ? "Pick palettes" : "Pick specific palettes"}
-        </button>
-      </div>
-
-      {!isList && (
-        <div style={{ marginBottom: 12 }}>
-          <div style={label}>Category</div>
-          <select value={action.category || "Summer"}
-            onChange={e => patchAction({ category: e.target.value })} style={field}>
-            {PALETTE_FILTERS.map(c => (
-              <option key={c} value={c}>{c} ({palettesFor(c).length})</option>
-            ))}
-          </select>
-        </div>
-      )}
-
-      {isList && (
-        <div style={{ marginBottom: 10 }}>
-          <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 8 }}>
-            {PALETTE_FILTERS.map(c => (
-              <button key={c} onClick={() => setFilter(c)}
-                style={{ ...seg(filter === c), fontSize: isMobile ? 10 : 11, padding: "4px 8px" }}>
-                {c}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
+      {/* THE SET — always visible, whatever category you're browsing, because
+          picks span categories and you need to see the whole shortlist while
+          you prune it. Each chip removes itself. */}
       <div style={{
         display: "flex", justifyContent: "space-between", alignItems: "baseline",
         gap: 8, marginBottom: 6, flexWrap: "wrap",
       }}>
         <div style={{ ...label, marginBottom: 0 }}>
-          {isList ? `Chosen — ${selected.length} palette${selected.length === 1 ? "" : "s"}`
-                  : `Picks one of these ${candidates.length}`}
+          {selected.length === 0 ? "No palettes chosen yet"
+            : `Picks one of these ${selected.length}, fresh each time`}
         </div>
-        {isList && selected.length > 0 && (
+        {selected.length > 0 && (
           <button onClick={() => patchAction({ palettes: [] })} style={{
             border: "none", background: "transparent", color: "#818cf8",
             fontSize: 11, fontWeight: 600, cursor: "pointer", padding: 0,
-          }}>Clear</button>
+          }}>Clear all</button>
         )}
       </div>
 
-      {/* Picks can span categories, but the grid only ever shows ONE category —
-          so without this, choosing three Summer palettes and then browsing to
-          Winter would leave you with no idea what you'd chosen. Always visible,
-          and each chip removes itself. */}
-      {isList && selected.length > 0 && (
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+      {selected.length > 0 && (
+        <div style={{
+          display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12,
+          maxHeight: isMobile ? 150 : 190, overflowY: "auto",
+          padding: selected.length > 8 ? 2 : 0,
+        }}>
           {selected.map(name => {
             const p = PALETTE_BY_NAME[name];
             return (
-              <button key={name} onClick={() => toggle(name)}
-                title="Remove"
+              <button key={name} onClick={() => toggle(name)} title="Remove"
                 style={{
                   display: "flex", alignItems: "center", gap: 6, padding: "4px 8px",
                   borderRadius: 999, border: "1px solid #4338ca",
                   background: "rgba(99,102,241,0.15)", cursor: "pointer",
-                  fontSize: isMobile ? 10 : 11, fontWeight: 600, color: "#c7d2fe",
+                  fontSize: isMobile ? 10 : 11, fontWeight: 600,
+                  color: p ? "#c7d2fe" : "#f87171",
                 }}>
                 <span style={{ width: 32, display: "block" }}>
                   <PaletteStrip colors={p ? p.colors : []} height={8} radius={2} />
                 </span>
-                {name}
+                {name}{!p && " (gone)"}
                 <span style={{ color: "#818cf8" }}>×</span>
               </button>
             );
@@ -389,37 +491,51 @@ function PaletteActionEditor({ action, patchAction, isMobile, label, field, seg,
         </div>
       )}
 
-      {isList ? (
-        <div style={gridStyle}>
-          {palettesFor(filter).map(p => (
-            <PaletteCard key={p.name} palette={p} isMobile={isMobile}
-              selected={selected.includes(p.name)} onClick={() => toggle(p.name)} />
-          ))}
+      {selected.length === 0 && (
+        <div style={{ fontSize: 11, color: "#f59e0b", marginBottom: 12 }}>
+          Add at least one — tap a category below, then tap palettes (or "Add all").
         </div>
-      ) : (
-        <div style={gridStyle}>
-          {candidates.map(p => (
-            <PaletteCard key={p.name} palette={p} isMobile={isMobile}
-              selected={false} onClick={() => {
-                // Clicking a card in category mode is a natural "actually, just
-                // this one" — switch to a one-item list rather than ignoring it.
-                patchAction({ source: "list", palettes: [p.name] });
-              }} />
-          ))}
+      )}
+      {selected.length === 1 && (
+        <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 12 }}>
+          With one palette there's nothing to choose between — this will show{" "}
+          <strong>{selected[0]}</strong> every time.
         </div>
       )}
 
-      {isList && selected.length === 0 && (
-        <div style={{ fontSize: 11, color: "#f59e0b", marginTop: 8 }}>
-          Pick at least one palette — tap the cards above.
-        </div>
-      )}
-      {candidates.length === 1 && (
-        <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 8 }}>
-          With one palette there's nothing to choose between — this will show{" "}
-          <strong>{candidates[0].name}</strong> every time.
-        </div>
-      )}
+      {/* THE SOURCE — browse a category and add from it. Bulk add/remove is what
+          makes multi-category sets ("Summer and Winter") a two-tap job. */}
+      <div style={{ ...label, marginTop: 4 }}>Add from</div>
+      <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 8 }}>
+        {PALETTE_FILTERS.map(c => {
+          const n = palettesFor(c).filter(p => selected.includes(p.name)).length;
+          return (
+            <button key={c} onClick={() => setFilter(c)}
+              style={{ ...seg(filter === c), fontSize: isMobile ? 10 : 11, padding: "4px 8px" }}>
+              {c}{n > 0 && <span style={{ color: "#818cf8" }}> ·{n}</span>}
+            </button>
+          );
+        })}
+      </div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+        <button onClick={addAll} disabled={allShown} style={{
+          padding: "5px 12px", borderRadius: 7, border: "1px solid #4338ca",
+          background: "transparent", color: allShown ? "#475569" : "#c7d2fe",
+          fontSize: 11, fontWeight: 700, cursor: allShown ? "default" : "pointer",
+        }}>+ Add all {inFilter.length} from {filter}</button>
+        <button onClick={removeAll} style={{
+          padding: "5px 12px", borderRadius: 7, border: "1px solid #334155",
+          background: "transparent", color: "#94a3b8",
+          fontSize: 11, fontWeight: 700, cursor: "pointer",
+        }}>− Remove these</button>
+      </div>
+
+      <div style={gridStyle}>
+        {inFilter.map(p => (
+          <PaletteCard key={p.name} palette={p} isMobile={isMobile}
+            selected={selected.includes(p.name)} onClick={() => toggle(p.name)} />
+        ))}
+      </div>
 
       <div style={{ marginTop: 14 }}>
         <div style={label}>Brightness · {action.brightness ?? 100}%</div>
@@ -428,18 +544,10 @@ function PaletteActionEditor({ action, patchAction, isMobile, label, field, seg,
           style={{ width: "100%", accentColor: "#6366f1" }} />
       </div>
 
-      {/* No segments checkbox here (removed v3.18.0). Whether a Govee device is
-          painted per segment is a property of the DEVICE, set in that room's
-          Scenes panel and shared with the scheduler — a second switch on the
-          schedule could only disagree with the room. */}
-      <div style={{ fontSize: 10, color: "#64748b", marginTop: 10 }}>
-        Segmented Govee devices are painted the way that room's Scenes panel is set.
-      </div>
-
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 12 }}>
-        <button onClick={tryIt} disabled={trying || candidates.length === 0} style={{
+        <button onClick={tryIt} disabled={trying || selected.length === 0} style={{
           padding: "7px 14px", borderRadius: 8, border: "1px solid #334155",
-          background: "transparent", color: candidates.length ? "#c7d2fe" : "#475569",
+          background: "transparent", color: selected.length ? "#c7d2fe" : "#475569",
           fontSize: 12, fontWeight: 600, cursor: trying ? "wait" : "pointer",
         }}>{trying ? "Applying…" : "Try one now"}</button>
         {tried && (
@@ -452,7 +560,7 @@ function PaletteActionEditor({ action, patchAction, isMobile, label, field, seg,
       </div>
       <div style={{ fontSize: 10, color: "#64748b", marginTop: 6 }}>
         "Try one now" turns the lights on and applies a random pick, exactly as the
-        schedule will.
+        schedule will. Segmented Govee devices are painted the way that room's Scenes panel is set.
       </div>
     </div>
   );
@@ -463,7 +571,10 @@ function PaletteActionEditor({ action, patchAction, isMobile, label, field, seg,
 function ScheduleEditor({ initial, rooms, zoneNames, favorites, onFavoritesChange, onSave, onCancel, isMobile }) {
   const [name, setName] = useState(initial?.name || "");
   const [trigger, setTrigger] = useState(initial?.trigger || { type: "weekly", time: "07:00", days: [0, 1, 2, 3, 4] });
-  const [action, setAction] = useState(initial?.action || { type: "white", room: rooms[0] || "", kelvin: 2700, brightness: 100 });
+  // expandLegacyPalettes turns a stored "whole category" reference into the
+  // explicit set it resolves to, so opening an old schedule lets you prune it.
+  const [action, setAction] = useState(
+    expandLegacyPalettes(initial?.action) || { type: "white", room: rooms[0] || "", kelvin: 2700, brightness: 100 });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
 
@@ -542,11 +653,11 @@ function ScheduleEditor({ initial, rooms, zoneNames, favorites, onFavoritesChang
     body: JSON.stringify({
       room: action.zone ? null : action.room,
       zone: action.zone || null,
-      source: action.source || "category",
-      category: action.category || null,
+      // A "My Colors" action carries its colours inline; a palette action names
+      // library palettes. One endpoint, because both end up as the same builder.
+      colors: action.type === "colors" ? (action.colors || []) : [],
       palettes: action.palettes || [],
       brightness: action.brightness ?? 100,
-      segments: action.segments !== false,
     }),
   });
 
@@ -554,9 +665,10 @@ function ScheduleEditor({ initial, rooms, zoneNames, favorites, onFavoritesChang
     if (isZone) { if (!action.zone) { setError("Pick a zone."); return; } }
     else if (!action.room) { setError("Pick a room."); return; }
     if (action.type === "palette" && paletteCandidates(action).length === 0) {
-      setError(action.source === "list"
-        ? "Pick at least one palette." : "That category has no palettes.");
-      return;
+      setError("Pick at least one palette."); return;
+    }
+    if (action.type === "colors" && (action.colors || []).length === 0) {
+      setError("Add at least one colour."); return;
     }
     if (trigger.type !== "sun" && !/^\d{2}:\d{2}$/.test(trigger.time || "")) { setError("Pick a time."); return; }
     if (trigger.type === "oneoff" && !trigger.date) { setError("Pick a date."); return; }
@@ -683,6 +795,11 @@ function ScheduleEditor({ initial, rooms, zoneNames, favorites, onFavoritesChang
                 onClick={() => setActionType("color")}>Color</button>
               <button style={seg(action.type === "palette")}
                 onClick={() => setActionType("palette")}>Palette</button>
+              <button style={seg(action.type === "colors")}
+                onClick={() => setActionType("colors")}
+                title="Colours you pick yourself — e.g. alternating red and green">
+                My Colors
+              </button>
             </div>
 
             <div style={{ ...label, marginTop: 12 }}>Or just</div>
@@ -734,6 +851,12 @@ function ScheduleEditor({ initial, rooms, zoneNames, favorites, onFavoritesChang
         {action.type === "palette" && (
           <PaletteActionEditor action={action} patchAction={patchAction} isMobile={isMobile}
             label={label} field={field} seg={seg} onTry={tryPalette} />
+        )}
+
+        {action.type === "colors" && (
+          <ColorsActionEditor action={action} patchAction={patchAction} isMobile={isMobile}
+            label={label} seg={seg} onTry={tryPalette}
+            favorites={favorites} onFavoritesChange={onFavoritesChange} />
         )}
 
         {action.type === "color" && (
@@ -1108,6 +1231,14 @@ function SchedulesTab({ schedules, rooms, zones, location, favorites, onFavorite
                 {targetSummary(s.action)} · {actionSummary(s.action)}
               </div>
               {s.action?.type === "palette" && <PaletteCandidatePeek action={s.action} />}
+              {s.action?.type === "colors" && (s.action.colors || []).length > 0 && (
+                <div style={{ display: "flex", gap: 4, marginTop: 6 }}>
+                  <div style={{ width: 46 }}>
+                    <PaletteStrip height={8} radius={2}
+                      colors={(s.action.colors || []).map(c => ({ r: c[0], g: c[1], b: c[2] }))} />
+                  </div>
+                </div>
+              )}
               <div style={{ fontSize: 11, color: s.enabled ? "#34d399" : "#64748b", marginTop: 6 }}>
                 Next: {nextRunLabel(s)}
               </div>

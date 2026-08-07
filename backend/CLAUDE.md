@@ -525,6 +525,15 @@ Absent = `"segments"` for any device with >1 segment (the pre-v3.18.0 default).
 stores a **source, not a snapshot** — the look is resolved when it fires, which is the
 whole point: the same schedule has to look different tonight than it did last night.
 
+**Two colour actions, one engine (v3.28.0).** `type: "palette"` draws a random pick from a
+curated set of LIBRARY palettes; `type: "colors"` carries its colours inline
+(`{type:"colors", colors:[[r,g,b],…], brightness}`) for a look with no palette behind it —
+alternating red/green at Christmas being the case that prompted it. The colours action is
+wrapped as a one-off palette and handed to the SAME `_build_palette_scene`, which is what
+makes two colours come out A-B-A-B down a hexa strip (`_ColorDealer` never repeats
+consecutively) without its own arrangement logic. `/api/palettes/apply` takes `colors` too,
+so "Try it now" exercises the identical path.
+
 **Action shape** (`type: "palette"`), targets a room OR a zone:
 ```jsonc
 { "type": "palette", "room": "Living Room",   // or "zone": "Inside"
@@ -540,6 +549,12 @@ whole point: the same schedule has to look different tonight than it did last ni
   now, which was fine while they were a browser-only idea — the scheduler fires on the Pi
   with no browser attached. **Add a palette to the JSON, re-run the generator, commit
   both.** The generator refuses to write a file that fails its structural checks.
+- **The set is a LIST of names, not a category reference (v3.28.0).** `source:"category"`
+  is legacy: still honoured by `resolve_candidates` so old schedules keep firing, but the
+  editor expands one into its explicit palettes the moment you open it
+  (`expandLegacyPalettes`), because a category reference can't be pruned and pruning is the
+  whole point. Categories became bulk add/remove INTO the list, which is what makes
+  "Summer and Winter" and "Summer minus three" the same gesture.
 - **`palettes.py` is pure data + selection** — it knows nothing about rooms or devices.
   `resolve_candidates(action)` mirrors the frontend's `paletteCandidates()`; keep the two
   in step or the editor will preview a set the Pi won't draw from. Unknown names are
