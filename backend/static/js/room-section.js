@@ -265,7 +265,7 @@ function ControlSurface({ view, views, onView, onClose, roomName, isMobile, chil
   );
 }
 
-function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGovee, onControlRoom, favorites, onFavoritesChange, nicknames, onNicknameChange, lightningActive, onLightningStart, onLightningStop, segmentInfo, segmentState, onSegmentStateRefresh, deviceModes, onDeviceModeChange, onDeviceModesBulkChange, sceneAddress, onSceneAddressChange, unassignedDevices, onAssignDevices, segmentFillModes, onSegmentFillModeChange, onSegmentCountChange, roomLayouts, onLayoutChange, fixtures, onFixtureUpsert, onFixtureDelete, minSatEnabled, minSatPct, savedColorState, ctCorrection, onScheduleLook, lastApplied, lastStatus, onReapply, onRecheck }) {
+function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGovee, onControlRoom, favorites, onFavoritesChange, nicknames, onNicknameChange, lightningActive, onLightningStart, onLightningStop, segmentInfo, segmentState, onSegmentStateRefresh, deviceModes, onDeviceModeChange, onDeviceModesBulkChange, sceneAddress, onSceneAddressChange, unassignedDevices, onAssignDevices, onNavigate, segmentFillModes, onSegmentFillModeChange, onSegmentCountChange, roomLayouts, onLayoutChange, fixtures, onFixtureUpsert, onFixtureDelete, minSatEnabled, minSatPct, savedColorState, ctCorrection, onScheduleLook, lastApplied, lastStatus, onReapply, onRecheck }) {
   const isMobile = useIsMobile();
   const [collapsed, setCollapsed] = useState(true);
   // Single overlay surface state — replaces the old per-panel show* booleans.
@@ -656,7 +656,21 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
               <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>
                 {(unassignedDevices || []).length > 0
                   ? `${(unassignedDevices || []).length} light${(unassignedDevices || []).length === 1 ? " isn't" : "s aren't"} in a room yet.`
-                  : "Every light is already in another room — move one here from Assign Rooms."}
+                  : (
+                    <>
+                      Every light is already in another room — move one here from{" "}
+                      <button
+                        onClick={() => onNavigate && onNavigate("assign rooms")}
+                        disabled={!onNavigate}
+                        style={{
+                          border: "none", background: "transparent", padding: 0,
+                          font: "inherit", color: "#818cf8", fontWeight: 700,
+                          textDecoration: "underline", textUnderlineOffset: 2,
+                          cursor: onNavigate ? "pointer" : "default",
+                        }}
+                      >Assign Rooms</button>.
+                    </>
+                  )}
               </div>
             </div>
             {(unassignedDevices || []).length > 0 && onAssignDevices && (

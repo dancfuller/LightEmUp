@@ -1119,7 +1119,8 @@ function ScheduleEditor({ initial, rooms, zoneNames, favorites, onFavoritesChang
 // ─── Tab ────────────────────────────────────────────────────────────────────
 
 function SchedulesTab({ schedules, rooms, zones, location, favorites, onFavoritesChange,
-                        onSave, onDelete, onSaveZone, onDeleteZone, pendingScene, onConsumePending }) {
+                        onSave, onDelete, onSaveZone, onDeleteZone, pendingScene, onConsumePending,
+                        onNavigate }) {
   const isMobile = useIsMobile();
   const [editing, setEditing] = useState(null);   // null | {} (new) | schedule
   const [confirmDelete, setConfirmDelete] = useState(null);
@@ -1285,7 +1286,20 @@ function SchedulesTab({ schedules, rooms, zones, location, favorites, onFavorite
       }}>
         <strong style={{ color: "#e2e8f0" }}>Zones</strong> ({zoneNames.length}) let a
         schedule act on several rooms at once, and have On/Off buttons in the bar at the
-        top of every page. Create and edit them in <strong>Assign Rooms</strong>.
+        top of every page. Create and edit them in{" "}
+        {/* A link, not a sentence naming a tab. Telling someone where to go and
+            then making them walk is the part that reads as an apology for the
+            layout; the same words should just take them there. */}
+        <button
+          onClick={() => onNavigate && onNavigate("assign rooms")}
+          disabled={!onNavigate}
+          style={{
+            border: "none", background: "transparent", padding: 0,
+            font: "inherit", color: "#818cf8", fontWeight: 700,
+            textDecoration: "underline", textUnderlineOffset: 2,
+            cursor: onNavigate ? "pointer" : "default",
+          }}
+        >Assign Rooms</button>.
         {zoneNames.length > 0 && (
           <div style={{ marginTop: 6, color: "#64748b" }}>{zoneNames.join(" · ")}</div>
         )}

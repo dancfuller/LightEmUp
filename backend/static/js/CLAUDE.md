@@ -125,6 +125,14 @@ several rooms at once, so resync rather than trying to predict the result optimi
 `ScheduleEditor`) and shows a pointer to Assign Rooms instead of a second editor, so
 membership has exactly one place it can change.
 
+**A pointer to another tab must BE a link (v3.28.1).** Naming a destination in prose and
+then making the reader walk there is the layout apologising for itself. Both places that
+did it — the Schedules zones note and the empty-room text in `room-section.js` — now
+render "Assign Rooms" as an underlined indigo button wired to `onNavigate(tab)`, which
+`app.js` supplies as `setActiveTab`. **Any new copy that names a tab gets the same
+treatment**; thread `onNavigate` down rather than reaching for a global. It's optional
+everywhere it's used (the control renders inert, never broken, if a call site omits it).
+
 ## Recovering an unreachable light (v3.14.0)
 A Hue light wired to a wall switch reports `state.reachable: false` while the switch is
 off. Flip it back and the **bridge** sees it immediately — but the app only learns by

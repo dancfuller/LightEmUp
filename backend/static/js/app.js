@@ -1337,6 +1337,7 @@ function App() {
                   onSceneAddressChange={updateSceneAddress}
                   unassignedDevices={unassignedDevices}
                   onAssignDevices={assignDevicesToRoom}
+                  onNavigate={setActiveTab}
                   onDeviceModesBulkChange={updateDeviceModesBulk}
                   segmentFillModes={segmentFillModes}
                   onSegmentFillModeChange={updateSegmentFillMode}
@@ -1447,6 +1448,7 @@ function App() {
             onDeleteZone={deleteZone}
             pendingScene={pendingScheduleScene}
             onConsumePending={() => setPendingScheduleScene(null)}
+            onNavigate={setActiveTab}
           />
         )}
 
