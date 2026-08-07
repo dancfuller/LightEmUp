@@ -133,6 +133,14 @@ render "Assign Rooms" as an underlined indigo button wired to `onNavigate(tab)`,
 treatment**; thread `onNavigate` down rather than reaching for a global. It's optional
 everywhere it's used (the control renders inert, never broken, if a call site omits it).
 
+**A tab opens at ITS top (v3.28.2).** `setActiveTab` in app.js is a `useCallback` wrapping
+`setActiveTabRaw` + `window.scrollTo(0)` — the scroll offset belongs to the page you left.
+Switching tabs is a route change with no route, so nothing reset it: following the zones
+link from the bottom of Schedules (scrollY 255) landed on Assign Rooms at **scrollY 2836**,
+because it's a far taller page and the retained offset was still valid there. **Wrapped at
+the single setter, not at each link**, so no future call site can forget — use
+`setActiveTab` and never the raw setter.
+
 ## Recovering an unreachable light (v3.14.0)
 A Hue light wired to a wall switch reports `state.reachable: false` while the switch is
 off. Flip it back and the **bridge** sees it immediately — but the app only learns by

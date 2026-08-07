@@ -273,7 +273,16 @@ function App() {
   // so we narrate the phases to make the wait feel shorter and explain the pause.
   const [loadingStatus, setLoadingStatus] = useState("Connecting to the hub…");
   const [error, setError] = useState(null);
-  const [activeTab, setActiveTab] = useState("rooms");
+  const [activeTab, setActiveTabRaw] = useState("rooms");
+  // A tab is a new page, so it opens at ITS top — the scroll offset belongs to the
+  // page you left, not the one you arrived on. This bites hardest on the in-copy
+  // links (v3.28.1): the Schedules zones note sits near the bottom, so following it
+  // used to drop you into the middle of Assign Rooms with no sign of what happened.
+  // Wrapped here rather than at each link, so a future call site can't forget.
+  const setActiveTab = useCallback(tab => {
+    setActiveTabRaw(tab);
+    window.scrollTo({ top: 0, behavior: "auto" });
+  }, []);
   const [newRoomName, setNewRoomName] = useState("");
   const [showHueSetup, setShowHueSetup] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
