@@ -470,6 +470,20 @@ for one room (or, for everything except `scene`, a zone).
   (the cooperative-sleep idiom from `scenes.py`), so shutdown is instant. Each tick it
   fires every due schedule, stamps `last_fired`, disables fired one-offs, then
   `schedule_save()` + `publish_event("config")` once.
+- **The FIRST tick waits on `_recovery_done` (v3.29.1).** It used to run immediately at
+  startup — ~45s *before* `RECOVERY_SETTLE_S`, the delay that exists precisely because the
+  bridge and the Govee devices aren't back on the LAN yet. So on an outage boot an overdue
+  end fired into the void, cleared its `end_due`, and power recovery then replayed the
+  pre-outage look a minute later with no idea the span had ended. **Worked example:** room
+  green 09:00–10:00, power out 09:30, back 10:15. The 10:00 off fired at 10:16 against a
+  still-rebooting bridge; `set_hue_light_state` returned false so the success-gated
+  `record_hue_state` never recorded it, recovery restored **green**, and with `end_due`
+  consumed nothing would ever turn it off again. Ordering it after recovery fixes both
+  halves — the off reaches live devices, and it lands after the resume so it *corrects*
+  the restored look. On a normal restart/deploy the event is already set, so it's free.
+  A start falling due inside the settle window is simply skipped (the no-catch-up rule);
+  firing it at a dead bridge would only look like it ran. **Anything you add that drives
+  lights at startup belongs behind this same event.**
 - **No catch-up for a MOMENT; catch-up for a SPAN (v3.29.0).** A plain schedule missed
   while the Pi was off does NOT retro-fire — waking to a 7am scene at 9am is worse than
   skipping it. But a schedule with an `end` describes an interval, not an instant, and one
@@ -658,10 +672,14 @@ span which should be running right now, and arms its end.
   **arm the end without re-firing** (the start did happen, only the end was lost — and
   re-applying would re-roll a random palette for nothing).
 - **It runs AFTER power recovery**, waiting on the `_recovery_done` event (`_recover_then_
-  release` sets it in a `finally`, so recovery's early returns still release). Ordering is
-  the point: an outage boot goes recovery → catch-up, so a generic "force off overnight"
-  policy can't beat "the porch is on until sunrise". A schedule covering this exact hour is
-  the more specific instruction and gets the last word.
+  release` sets it in a `finally`, so recovery's early returns still release; the timeout
+  guard is `RECOVERY_WAIT_MAX_S`). Ordering is the point: an outage boot goes recovery →
+  catch-up, so a generic "force off overnight" policy can't beat "the porch is on until
+  sunrise". A schedule covering this exact hour is the more specific instruction and gets
+  the last word. **The scheduler loop's first tick waits on the same event** (v3.29.1, see
+  above) — catch-up and the loop can then run in either order without conflict: whichever
+  goes first leaves the other a no-op, because an armed `end_due` in the future isn't due
+  and a span whose end just fired is no longer active.
 - `last_fired` is stamped with the **occurrence**, not the boot time — that's the truth,
   and it keeps the normal tick's dedupe correct.
 

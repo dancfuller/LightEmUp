@@ -879,7 +879,7 @@ _catchup_task: "asyncio.Task | None" = None
 _recovery_done: "asyncio.Event | None" = None
 
 SPAN_CATCHUP_LOOKBACK_DAYS = 2   # how far back to look for a still-running span
-SPAN_CATCHUP_MAX_WAIT_S = 180    # give up waiting on power recovery after this
+RECOVERY_WAIT_MAX_S = 180        # give up waiting on power recovery after this
 
 
 def _hhmm_matches(hhmm: str, now) -> bool:
@@ -1557,6 +1557,37 @@ async def _scheduler_loop():
     from datetime import datetime
     log.info("Scheduler started")
     try:
+        # Drive nothing until power recovery has finished. On a normal restart or
+        # deploy `_recovery_done` is already set, so this costs nothing; on an
+        # OUTAGE boot it holds the first tick until the bridge and the Govee
+        # devices are actually back on the LAN.
+        #
+        # Without it the first tick ran IMMEDIATELY — ~45s before
+        # RECOVERY_SETTLE_S, the delay that exists precisely because the network
+        # isn't up yet. An overdue end therefore fired into the void, cleared its
+        # `end_due`, and then recovery replayed the pre-outage look with no idea
+        # the span had ended. Worked example: a room set green 09:00–10:00, power
+        # out 09:30, back 10:15. The 10:00 off fired at 10:16 against a Hue bridge
+        # that was still rebooting; `set_hue_light_state` failed, so
+        # `record_hue_state` (success-gated) never recorded it, so recovery
+        # restored GREEN a minute later — and with `end_due` already consumed,
+        # nothing would ever turn it off again.
+        #
+        # Ordering it after recovery fixes both halves: the late off reaches live
+        # devices, and it lands AFTER the resume, so it corrects the restored look
+        # instead of being clobbered by it. The room shows the old look for a few
+        # seconds first — correct beats flicker-free.
+        #
+        # A start that falls due inside the settle window is simply skipped, per
+        # the no-catch-up rule; firing it at a dead bridge would only look like it
+        # ran. Spans are covered by _catch_up_spans, which waits on the same event.
+        if _recovery_done is not None and not _recovery_done.is_set():
+            log.info("Scheduler: holding the first tick until power recovery finishes")
+            try:
+                await asyncio.wait_for(_recovery_done.wait(), timeout=RECOVERY_WAIT_MAX_S)
+            except asyncio.TimeoutError:
+                log.warning("Scheduler: power recovery still running after %ds — "
+                            "ticking anyway", RECOVERY_WAIT_MAX_S)
         while not _scheduler_stop.is_set():
             now = datetime.now()   # Pi runs in the user's local timezone
             location = config.get("location", {}) or {}
@@ -1636,10 +1667,10 @@ async def _catch_up_spans():
     from datetime import datetime
     if _recovery_done is not None:
         try:
-            await asyncio.wait_for(_recovery_done.wait(), timeout=SPAN_CATCHUP_MAX_WAIT_S)
+            await asyncio.wait_for(_recovery_done.wait(), timeout=RECOVERY_WAIT_MAX_S)
         except asyncio.TimeoutError:
             log.warning("Span catch-up: power recovery still running after %ds — "
-                        "proceeding anyway", SPAN_CATCHUP_MAX_WAIT_S)
+                        "proceeding anyway", RECOVERY_WAIT_MAX_S)
     now = datetime.now()   # Pi runs in the user's local timezone
     location = config.get("location", {}) or {}
     changed = False
