@@ -52,8 +52,35 @@ function PowerRecoveryCard({ settings, onChange, isMobile }) {
   return (
     <div style={{ background: "#1e293b", borderRadius: 16, padding: isMobile ? 16 : 20, border: "1px solid #334155", marginBottom: 16 }}>
       <h3 style={{ fontSize: 15, fontWeight: 600, color: "#e2e8f0", margin: 0, marginBottom: 6 }}>Power Recovery</h3>
-      <div style={{ fontSize: 12, color: "#64748b", marginBottom: 14, lineHeight: 1.5 }}>
+      <div style={{ fontSize: 12, color: "#64748b", marginBottom: 12, lineHeight: 1.5 }}>
         After a power outage, when the hub reboots it can bring your lights back gracefully instead of blasting them all on — especially in the middle of the night. A normal restart or reboot leaves your lights exactly as they were (your lights don't lose power when the hub reboots); only a real power outage triggers the rules below. (Lightning storms are never resumed.)
+      </div>
+
+      {/* The honest caveat, learned from a real outage. This feature reads as
+          "the hub restores my lights" until you watch it happen and see the
+          lights snap on by themselves a minute before the hub can say anything.
+          Better to state the gap here than to let it be discovered as a bug —
+          and the fix is in the lights' own apps, which the user has to be told
+          about because nothing in LightEmUp can reach that setting. */}
+      <div style={{
+        fontSize: 12, color: "#94a3b8", lineHeight: 1.55, marginBottom: 14,
+        background: "rgba(251,191,36,0.07)", border: "1px solid rgba(251,191,36,0.25)",
+        borderRadius: 10, padding: isMobile ? 10 : 12,
+      }}>
+        <div style={{ color: "#fbbf24", fontWeight: 700, marginBottom: 4 }}>
+          This can't be perfect on its own
+        </div>
+        The instant power returns, your lights do whatever their <em>own</em> hardware is set to do
+        — usually snapping to full brightness — and they do it immediately. The hub can't say anything
+        until it has finished booting and reconnected, a minute or two later. So the real sequence is:
+        lights come back by themselves → hub boots → the rule below is applied.
+        <div style={{ marginTop: 8 }}>
+          <strong style={{ color: "#e2e8f0" }}>To close the gap:</strong> in the Hue and Govee apps,
+          set each light's power-on behavior to come back <strong style={{ color: "#e2e8f0" }}>off</strong>
+          {" "}(Hue calls it "Power-on behavior"; Govee has a similar per-device setting). Then the lights
+          wait in the dark and LightEmUp performs the whole recovery. If a light only offers
+          "last state", that's the next best thing.
+        </div>
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>

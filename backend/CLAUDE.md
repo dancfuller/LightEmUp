@@ -448,6 +448,17 @@ which at 3am lights the whole house. On a **genuine fresh boot** the lifespan sc
   button); editing never drives lights — it only applies on the *next* boot. **This is
   device-state resume, not scene resume** — resuming an active lightning storm is separate
   (task #46).
+- **It can never be seamless, and the UI now says so (v3.29.0).** Watching a real outage
+  made the ceiling obvious: the lights come back on their OWN hardware default the instant
+  power returns, and the hub can't intervene until it has booted and reconnected — so the
+  true sequence is *lights snap on by themselves → Pi boots → recovery applies*. Nothing
+  server-side can close that gap; the only real fix is in the vendors' own apps (set each
+  light's power-on behaviour to come back **off**, so LightEmUp drives the whole resume).
+  `PowerRecoveryCard` carries that as an amber caveat block. **Don't quietly drop it** —
+  without it the feature reads as "the hub restores my lights" and the gap gets rediscovered
+  as a bug.
+- **Recovery is followed by span catch-up** (see "Span catch-up" under Time-based
+  schedules), which deliberately gets the last word over the overnight force-off.
 
 ## Time-based schedules (v3.8.0)
 `config["schedules"]` (a list) + `config["location"]` ({lat,lng}) — both additive, read
@@ -459,9 +470,12 @@ for one room (or, for everything except `scene`, a zone).
   (the cooperative-sleep idiom from `scenes.py`), so shutdown is instant. Each tick it
   fires every due schedule, stamps `last_fired`, disables fired one-offs, then
   `schedule_save()` + `publish_event("config")` once.
-- **No catch-up.** A schedule missed while the Pi was off does NOT retro-fire — waking
-  to a 7am scene at 9am is worse than skipping it. Dedupe is `last_fired ==
-  now.strftime("%Y-%m-%d %H:%M")`, so a schedule fires at most once per minute-occurrence.
+- **No catch-up for a MOMENT; catch-up for a SPAN (v3.29.0).** A plain schedule missed
+  while the Pi was off does NOT retro-fire — waking to a 7am scene at 9am is worse than
+  skipping it. But a schedule with an `end` describes an interval, not an instant, and one
+  that should be running right now is re-entered at startup — see "Span catch-up" below.
+  Dedupe is `last_fired == now.strftime("%Y-%m-%d %H:%M")`, so a schedule fires at most
+  once per minute-occurrence.
 - **`_schedule_due(sched, now, location, sun_resolver)` is PURE** — no lights, no I/O, and
   `sun_resolver` is injectable. Keep it that way; it's the piece worth unit-testing (see
   the 21-case scratch test written for v3.8.0). `now` is **naive Pi-local**
@@ -615,6 +629,41 @@ One entry that turns lights on and later off: "sunset−10 until sunrise+10", or
   `req.model_fields_set`. The frontend always sends it.
 - `_resolve_end_due` takes an injectable `sun_resolver` for the same reason `_schedule_due`
   does: astral is lazily imported and absent on dev boxes, so a test would silently get None.
+
+### Span catch-up — the outage that ate a whole night (v3.29.0)
+The armed-end model has one hole, and it cost a full night of exterior lighting: **an
+outage across the START loses BOTH halves.** A 19:30–21:45 outage on 2026-08-07 swallowed
+the 20:09 sunset fire, so `end_due` was never armed, so the 06:06 sunrise OFF had nothing
+to fire either — the porch was left to whatever a human did, all day. The config told the
+whole story: `last_fired` still read `2026-08-06 20:11` with `end_due: null`.
+
+`_catch_up_spans()` is a **one-shot task launched from the lifespan** that re-enters any
+span which should be running right now, and arms its end.
+- **The governing distinction: a span is not a moment.** "No catch-up" is right for a
+  point action, and it stays. But "on at sunset, off at sunrise" describes an interval
+  that is either currently true or not, and the Pi being down through its first minute
+  doesn't make it untrue. **Only schedules with an `end` are eligible** — a moment has no
+  "should be running" state to be wrong about.
+- **`_active_span(sched, now, location, sun_resolver)` is PURE**, like `_schedule_due`, and
+  finds the most recent start occurrence (looking back `SPAN_CATCHUP_LOOKBACK_DAYS`, which
+  overnight spans need — at 2am the start is on the previous calendar day) whose
+  `_resolve_end_due` is still in the future. Its helper `_start_hhmm_on` is `_schedule_due`
+  asked the other way round ("when today?" vs "is it now?"); **the two must agree on day
+  filtering** — weekly needs an explicit `days` list, an empty `days` on a *sun* trigger
+  means every day. A scratch test brute-forces every minute of two weeks against
+  `_schedule_due` to hold that.
+- **Two guards, and they're what make it safe to run on EVERY process start** rather than
+  only after an outage: `end_due` already set ⇒ skip (a span that fired normally and merely
+  outlived a deploy restart is already armed); `last_fired` already at that occurrence ⇒
+  **arm the end without re-firing** (the start did happen, only the end was lost — and
+  re-applying would re-roll a random palette for nothing).
+- **It runs AFTER power recovery**, waiting on the `_recovery_done` event (`_recover_then_
+  release` sets it in a `finally`, so recovery's early returns still release). Ordering is
+  the point: an outage boot goes recovery → catch-up, so a generic "force off overnight"
+  policy can't beat "the porch is on until sunrise". A schedule covering this exact hour is
+  the more specific instruction and gets the last word.
+- `last_fired` is stamped with the **occurrence**, not the boot time — that's the truth,
+  and it keeps the normal tick's dedupe correct.
 
 ## Zones + safe room rename + Power action (v3.9.0, live control v3.15.0)
 **Zones** (`config["zones"]`, additive `{ zoneName: { rooms: [name,…] } }`, name-keyed

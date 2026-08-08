@@ -673,6 +673,14 @@ the short abbr) purely as a callout — the hub compares wall-clock `HH:MM` agai
 local clock, which is DST-safe by construction (10 PM is always 10 PM), and the hub shares
 the browser's zone (same LAN, same house). No timezone picker — it's local-only by design.
 
+**The amber "This can't be perfect on its own" block is load-bearing copy (v3.29.0).** The
+card used to imply the hub restores your lights, full stop. A real outage showed the truth:
+the lights come back on their own hardware default *immediately*, and the hub can't say
+anything until it has booted and reconnected a minute or two later. The block states that
+sequence plainly and tells the user the only actual fix — set each light's power-on
+behaviour to **off** in the Hue/Govee apps, which is a setting LightEmUp cannot reach.
+**Don't trim it for tidiness**; an unstated limitation gets rediscovered as a bug report.
+
 ## app.js — orchestration
 State, routing, API calls. **Fast initial load (v3.5.0):** `loadAll(isFirst)` paints from
 `/config` + `/discover/govee/cached` (instant, no LAN scan) + the quick segment/lightning/

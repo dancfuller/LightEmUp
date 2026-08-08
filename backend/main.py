@@ -849,6 +849,18 @@ async def _apply_power_recovery(clean_shutdown: bool):
         log.exception("Power recovery: apply failed")
 
 
+async def _recover_then_release(clean_shutdown: bool):
+    """Run power recovery, then release the span catch-up that's waiting on it.
+    The `finally` matters: every early return in _apply_power_recovery (mode=off,
+    clean shutdown) must still release, or the catch-up sits out its full timeout
+    for no reason."""
+    try:
+        await _apply_power_recovery(clean_shutdown)
+    finally:
+        if _recovery_done is not None:
+            _recovery_done.set()
+
+
 # ─── Time-based scheduler ──────────────────────────────────────────────────────
 # Fire a room "look" at a wall-clock time. The three trigger types (weekly,
 # one-off, sunrise/sunset) all resolve to a target HH:MM on a matching day and are
@@ -860,6 +872,14 @@ async def _apply_power_recovery(clean_shutdown: bool):
 
 _scheduler_task: "asyncio.Task | None" = None
 _scheduler_stop: "asyncio.Event | None" = None
+_catchup_task: "asyncio.Task | None" = None
+# Set once power recovery has finished (or immediately, when none is scheduled).
+# The span catch-up waits on this so the two can't fight over the same lights —
+# see _catch_up_spans for why the schedule deliberately gets the last word.
+_recovery_done: "asyncio.Event | None" = None
+
+SPAN_CATCHUP_LOOKBACK_DAYS = 2   # how far back to look for a still-running span
+SPAN_CATCHUP_MAX_WAIT_S = 180    # give up waiting on power recovery after this
 
 
 def _hhmm_matches(hhmm: str, now) -> bool:
@@ -1445,6 +1465,76 @@ def _resolve_end_due(sched: dict, started: "datetime", location: dict,
     return None
 
 
+def _start_hhmm_on(sched: dict, d, location: dict = None, sun_resolver=None):
+    """(hour, minute) this schedule's START lands on the date `d`, or None if it
+    has no occurrence that day. PURE (the sun lookup is injectable).
+
+    This is `_schedule_due` asked the other way round — "when today?" rather than
+    "is it now?" — and the two MUST agree on day filtering: weekly requires an
+    explicit day list, while an empty `days` on a sun trigger means every day."""
+    trig = sched.get("trigger") or {}
+    ttype = trig.get("type")
+
+    if ttype == "weekly":
+        if d.weekday() not in (trig.get("days") or []):
+            return None
+        hm = _parse_hhmm(trig.get("time"))
+        return hm if hm[0] >= 0 else None
+
+    if ttype == "oneoff":
+        if trig.get("date") != d.strftime("%Y-%m-%d"):
+            return None
+        hm = _parse_hhmm(trig.get("time"))
+        return hm if hm[0] >= 0 else None
+
+    if ttype == "sun":
+        days = trig.get("days")
+        if days and d.weekday() not in days:
+            return None
+        lat, lng = (location or {}).get("lat"), (location or {}).get("lng")
+        if lat is None or lng is None:
+            return None
+        resolver = sun_resolver or (lambda ev, dt, off: _sun_hhmm(ev, dt, lat, lng, off))
+        hm = resolver(trig.get("event", "sunrise"), d, int(trig.get("offset_min", 0) or 0))
+        # Same defensive range check as _resolve_end_due: a bad resolver must not
+        # throw out of the scheduler tick.
+        if not hm or not (0 <= hm[0] <= 23 and 0 <= hm[1] <= 59):
+            return None
+        return hm
+
+    return None
+
+
+def _active_span(sched: dict, now, location: dict = None, sun_resolver=None):
+    """Should this schedule's span be RUNNING at `now`? Returns
+    `(started_datetime, end_due_str)` for the most recent start occurrence whose
+    end is still in the future, else None. PURE.
+
+    Only schedules with an `end` can have a span — a schedule that just fires at a
+    moment has no "should be running" state to be wrong about."""
+    from datetime import timedelta
+    if not sched.get("enabled") or not (sched.get("end") or {}).get("type"):
+        return None
+    for back in range(0, SPAN_CATCHUP_LOOKBACK_DAYS + 1):
+        d = (now - timedelta(days=back)).date()
+        hm = _start_hhmm_on(sched, d, location, sun_resolver)
+        if not hm:
+            continue
+        started = now.replace(year=d.year, month=d.month, day=d.day,
+                              hour=hm[0], minute=hm[1], second=0, microsecond=0)
+        if started > now:
+            continue                      # today's occurrence hasn't arrived yet
+        # The MOST RECENT start is the only one that can still be running, so this
+        # answers for it and stops — an older one is necessarily already over.
+        end_due = _resolve_end_due(sched, started, location, sun_resolver)
+        if not end_due:
+            return None
+        # 'YYYY-MM-DD HH:MM' sorts chronologically, and the loop fires an end when
+        # now >= end_due — so the span is live while now is strictly before it.
+        return (started, end_due) if now.strftime("%Y-%m-%d %H:%M") < end_due else None
+    return None
+
+
 async def _fire_schedule_end(sched: dict):
     """The OFF half of a paired schedule — same target as the start."""
     action = sched.get("action") or {}
@@ -1514,6 +1604,72 @@ async def _scheduler_loop():
         log.info("Scheduler stopped")
 
 
+async def _catch_up_spans():
+    """Re-enter, once at startup, any paired schedule whose span should be
+    RUNNING right now — and re-arm its end.
+
+    A missed START is normally skipped on purpose ("no catch-up": waking to a 7am
+    scene at 9am is worse than nothing). **But a span is not a moment.** "On at
+    sunset, off at sunrise" describes an interval that is either currently true or
+    not, and the Pi being down through its first minute doesn't make it untrue.
+
+    This is the exact hole that lost a whole night: an outage spanning sunset meant
+    the start never fired, so `end_due` was never armed, so the sunrise OFF had
+    nothing to fire either — the lights were left to whatever a human did in the
+    meantime, all day. Both halves are fixed here, because arming the end IS the
+    fix for the missing off.
+
+    Two guards keep it from re-firing things that are fine:
+      - **`end_due` already set ⇒ skip.** A span that fired normally and merely
+        outlived a deploy restart is already armed and needs nothing. That single
+        check is what makes this safe to run on *every* process start rather than
+        only after an outage.
+      - **`last_fired` already at this occurrence ⇒ arm the end, don't re-fire.**
+        The start did happen; only the end went missing (a save clears it). The
+        lights are already in the span, so re-applying would just re-roll a
+        random palette for no reason.
+
+    It runs AFTER power recovery (which is why it waits on `_recovery_done`) so an
+    outage boot lands in this order: recovery restores/forces-off, then the
+    schedule that explicitly covers this hour gets the last word. A generic
+    "stay off overnight" policy must not beat "the porch is on until sunrise"."""
+    from datetime import datetime
+    if _recovery_done is not None:
+        try:
+            await asyncio.wait_for(_recovery_done.wait(), timeout=SPAN_CATCHUP_MAX_WAIT_S)
+        except asyncio.TimeoutError:
+            log.warning("Span catch-up: power recovery still running after %ds — "
+                        "proceeding anyway", SPAN_CATCHUP_MAX_WAIT_S)
+    now = datetime.now()   # Pi runs in the user's local timezone
+    location = config.get("location", {}) or {}
+    changed = False
+    for sched in list(config.get("schedules", []) or []):
+        name = sched.get("name") or sched.get("id")
+        try:
+            if sched.get("end_due"):
+                continue                      # already armed — it survived the restart
+            span = _active_span(sched, now, location)
+            if not span:
+                continue
+            started, end_due = span
+            stamp = started.strftime("%Y-%m-%d %H:%M")
+            if sched.get("last_fired") == stamp:
+                log.info("Span catch-up: %r already started at %s but lost its end — "
+                         "re-arming the off for %s", name, stamp, end_due)
+            else:
+                log.info("Span catch-up: %r should have started at %s and runs until "
+                         "%s — starting it now", name, stamp, end_due)
+                await _fire_schedule(sched)
+                sched["last_fired"] = stamp   # the OCCURRENCE, not now: it's the truth
+            sched["end_due"] = end_due
+            changed = True
+        except Exception:
+            log.exception("Span catch-up: error on schedule %s", sched.get("id"))
+    if changed:
+        schedule_save()
+        publish_event("config")
+
+
 # ─── App ─────────────────────────────────────────────────────────────────────
 
 def reload_segment_state():
@@ -1553,18 +1709,24 @@ async def lifespan(app: FastAPI):
     # Power-recovery: on a genuine fresh boot, gracefully resume or force-off the
     # lights. Skip on a normal deploy/service restart (machine up for a while) so
     # we never disturb lights that are intentionally on.
+    global _recovery_done
+    _recovery_done = asyncio.Event()
     _uptime = _system_uptime_s()
     if _uptime is not None and _uptime <= FRESH_BOOT_MAX_UPTIME_S:
         log.info("Fresh boot detected (uptime %.0fs, clean_shutdown=%s) — scheduling power recovery",
                  _uptime, _clean_shutdown)
-        asyncio.create_task(_apply_power_recovery(_clean_shutdown))
+        asyncio.create_task(_recover_then_release(_clean_shutdown))
     else:
         log.info("Not a fresh boot (uptime=%s) — skipping power recovery",
                  f"{_uptime:.0f}s" if _uptime is not None else "unknown")
+        _recovery_done.set()
 
     # Time-based scheduler: fires room scenes / white / color at wall-clock times.
-    global _scheduler_task
+    global _scheduler_task, _catchup_task
     _scheduler_task = asyncio.create_task(_scheduler_loop())
+    # One-shot: re-enter any on/off span that should be running right now (an
+    # outage across its start would otherwise lose BOTH halves — see _catch_up_spans).
+    _catchup_task = asyncio.create_task(_catch_up_spans())
 
     yield
 
@@ -1573,6 +1735,8 @@ async def lifespan(app: FastAPI):
         _scheduler_stop.set()
     if _scheduler_task is not None:
         _scheduler_task.cancel()
+    if _catchup_task is not None:
+        _catchup_task.cancel()   # may still be waiting on power recovery
 
     # Mark this as a clean stop FIRST (before the flush, which could be slow), so
     # even if shutdown is force-killed after SIGTERM the marker is already down —
