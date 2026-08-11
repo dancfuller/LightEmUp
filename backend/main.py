@@ -142,6 +142,24 @@ DEFAULT_CONFIG = {
                           # A zone is a scheduling target that fans a white/color/power
                           # action out over every device in every member room. Scenes
                           # stay room-only (a scene is a device-specific snapshot).
+    # The five below were written by their features but never declared here — found
+    # by diffing DEFAULT_CONFIG against a live export (v3.30.0). A key missing from
+    # this dict is invisible to the restore preview and absent after importing an
+    # older backup that predates it, so THIS DICT IS THE REGISTRY OF WHAT SETTINGS
+    # EXIST. Add a key here in the same commit that starts writing it.
+    "favorites": [],      # saved colours [[r,g,b],…]. Empty is falsy on purpose:
+                          # /api/config falls back to DEFAULT_FAVORITES (defined much
+                          # further down, so it can't be referenced from here).
+    "lightning_scenes": {},      # room name → saved storm settings
+    "govee_segment_counts": {},  # govee slug → real panel count (a 7-panel Hexa, not
+                                 # the SKU's 15). User ground truth; beats the SKU table.
+    "govee_segment_mode": {},    # govee slug → bool: per-segment LIGHTNING. NOT scene
+                                 # addressing (that's govee_scene_address above).
+    "room_presets": {},          # room name → saved preset list (GET/POST /api/room-presets)
+    # NOT here on purpose: "schema_version". It's a migration marker, not a setting.
+    # Defaulting it to the current version would make an ancient backup that carries
+    # no schema_version look already-migrated, so migrate_govee_to_mac would skip an
+    # IP-keyed config and silently orphan every Govee association.
 }
 
 
@@ -4093,6 +4111,128 @@ def _export_envelope(include_credentials: bool = True) -> dict:
     }
 
 
+# ─── Restore preview: EVERY setting, without a list to keep in step ──────────
+# The export itself can't have gaps — _export_envelope deep-copies the whole live
+# config, so a new key ships automatically. The PREVIEW was the gap: it was a
+# hand-written list of 14 fields, and every feature since v3.11.0 widened the
+# hole. Restoring an older backup silently discarded white calibration, your
+# location (which sun schedules need), favourites, per-device segment counts and
+# scene addressing — and the diff said nothing, so "replace all settings" was a
+# bigger promise than it looked.
+#
+# So the rows are DERIVED from the config keys themselves, not listed. Anything
+# in DEFAULT_CONFIG or in either file appears, whether or not anyone remembered
+# it. The tables below only make the output nicer:
+#   _SETTING_LABELS   — a human name (unlabelled keys get one generated)
+#   _SETTING_RENDER   — a custom cell (unrendered keys get a sensible default)
+#   _SETTING_INTERNAL — derived/runtime state a person wouldn't miss, hidden
+#   _SETTING_ORDER    — the few that should lead; the rest sort alphabetically
+# Adding a setting therefore degrades to "it shows up with a plain label", never
+# to "it's invisible".
+
+_SETTING_INTERNAL = {
+    "device_state",       # last state we sent each device — rebuilt by use
+    "segment_state",      # mirror of the in-memory segment store
+    "hue_missing_since",  # a clock, reset the moment a light returns
+    "room_last_applied",  # "Now showing" display record
+    "schema_version",     # migration marker, not a setting
+}
+
+_SETTING_LABELS = {
+    "rooms": "Rooms",
+    "nicknames": "Custom names",
+    "room_layouts": "Room layouts",
+    "schedules": "Schedules",
+    "zones": "Zones",
+    "fixtures": "Fixtures",
+    "favorites": "Favourite colours",
+    "location": "Location (for sunrise/sunset)",
+    "power_recovery": "Power-outage recovery",
+    "lightning_scenes": "Saved lightning scenes",
+    "room_color_state": "Saved room scenes",
+    "room_presets": "Room presets",
+    "ct_rgb": "White calibration (RGB)",
+    "ct_correction": "White calibration (legacy)",
+    "govee_scene_address": "Segments-or-whole per device",
+    "govee_segment_counts": "Segment counts set by hand",
+    "govee_segment_mode": "Lightning per-segment",
+    "segment_fill_modes": "Segment fill modes",
+    "device_modes": "Device control modes",
+    "ui_prefs": "Interface preferences",
+    "known_devices": "Known Govee devices",
+    "hue_bridge_ip": "Hue Bridge",
+    "hue_username": "Hue Bridge pairing",
+    "govee_api_key": "Govee API key",
+}
+
+_SETTING_ORDER = ["rooms", "nicknames", "room_layouts", "schedules", "zones",
+                  "fixtures", "location", "favorites"]
+
+
+def _render_setting(key: str, value):
+    """One cell of the restore preview. Falls back to a count for containers and
+    set/not set for scalars, so an unregistered key still renders something true."""
+    if key in ("hue_username", "govee_api_key"):
+        return "set" if value else "not set"        # never echo a credential
+    if key == "hue_bridge_ip":
+        return value or "none"
+    if key == "location":
+        if isinstance(value, dict) and value.get("lat") is not None:
+            return f"{value['lat']:.3f}, {value['lng']:.3f}"
+        return "not set"
+    if key == "power_recovery":
+        mode = (value or {}).get("mode") or "resume_unless_night"
+        return {"resume_unless_night": "Resume unless overnight",
+                "resume_always": "Always resume",
+                "off": "Do nothing"}.get(mode, mode)
+    if key == "known_devices":
+        return len((value or {}).get("govee") or {})
+    if isinstance(value, (dict, list)):
+        return len(value)
+    if isinstance(value, bool):
+        return "on" if value else "off"
+    if value is None or value == "":
+        return "not set"
+    return value
+
+
+def _config_diff_rows(cur: dict, inc: dict, keep_credentials: bool = True) -> list:
+    """Every setting, current vs incoming, for the pre-import preview.
+
+    The key set is the UNION of DEFAULT_CONFIG and both configs, so a setting is
+    listed whether it's one this build knows, one only the backup has (imported
+    from a newer build), or one only the live config has (about to be lost).
+
+    `keep_credentials` mirrors the import's own flag: a credential-free backup does
+    NOT unpair the bridge, so showing "set → not set" for it would be a false alarm
+    about the one thing that needs a physical button press to undo."""
+    keys = (set(DEFAULT_CONFIG) | set(cur or {}) | set(inc or {})) - _SETTING_INTERNAL
+    def sort_key(k):
+        return (_SETTING_ORDER.index(k) if k in _SETTING_ORDER else len(_SETTING_ORDER),
+                _SETTING_LABELS.get(k, k).lower())
+    rows = []
+    for key in sorted(keys, key=sort_key):
+        current = _render_setting(key, (cur or {}).get(key))
+        incoming = _render_setting(key, (inc or {}).get(key))
+        changed = str(current) != str(incoming)
+        # Match what the import will actually do with credentials: carried over, so
+        # the effective state does NOT change and the row must not be flagged.
+        if (key in _CREDENTIAL_KEYS and keep_credentials
+                and not (inc or {}).get(key) and (cur or {}).get(key)):
+            incoming, changed = "kept", False
+        rows.append({
+            "key": key,
+            "label": _SETTING_LABELS.get(key) or key.replace("_", " ").capitalize(),
+            "current": current,
+            "incoming": incoming,
+            "changed": changed,
+            # Not in this build's registry — flagged so the UI can say the backup
+            # carries a setting this version doesn't know about.
+            "unknown": key not in DEFAULT_CONFIG,
+        })
+    return rows
+
+
 def _config_summary(cfg: dict) -> dict:
     """Counts for the pre-import preview, so replacing everything is never a leap
     of faith. Room/zone NAMES are listed (not just counted) because that's what
@@ -4178,8 +4318,16 @@ async def import_config(req: ConfigImportRequest):
     new_cfg, meta = _unwrap_import(req.payload)
 
     # Preview first: the UI shows current-vs-incoming before anything happens.
+    # `server_version` rides along so the browser can compare it with the backup's
+    # `meta.app_version` and warn about a cross-version restore. The comparison is
+    # deliberately NOT made here: a version difference is a caution, not an error,
+    # and the only hard refusal is the schema check in _unwrap_import. Raising on a
+    # mismatch would block the most valuable restore there is — an old backup onto
+    # a rebuilt Pi running the current build.
     if req.dry_run:
         return {"dry_run": True, "meta": meta,
+                "server_version": APP_VERSION,
+                "rows": _config_diff_rows(config, new_cfg, req.keep_credentials),
                 "current": _config_summary(config),
                 "incoming": _config_summary(new_cfg)}
 

@@ -13,11 +13,18 @@ function BackupDiffRow({ label, current, incoming }) {
   const same = String(current) === String(incoming);
   return (
     <div style={{ display: "flex", alignItems: "baseline", gap: 8, padding: "5px 0", borderBottom: "1px solid #263449" }}>
-      <div style={{ flex: "1 1 auto", fontSize: 12, color: "#94a3b8" }}>{label}</div>
-      <div style={{ flex: "0 0 auto", fontSize: 12, color: "#64748b", textAlign: "right", minWidth: 0 }}>{current}</div>
+      {/* All three cells must be able to SHRINK. The rows are generated from the
+          config now, so a value can be any length ("Resume unless overnight",
+          a lat/lng pair) — with flex 0 0 auto those clipped off the right edge at
+          390px instead of wrapping. */}
+      <div style={{ flex: "1 1 auto", minWidth: 0, fontSize: 12, color: "#94a3b8",
+                    overflowWrap: "anywhere" }}>{label}</div>
+      <div style={{ flex: "0 1 auto", minWidth: 0, fontSize: 12, color: "#64748b",
+                    textAlign: "right", overflowWrap: "anywhere" }}>{current}</div>
       <div style={{ flex: "0 0 auto", fontSize: 11, color: "#475569" }}>→</div>
       <div style={{
-        flex: "0 0 auto", fontSize: 12, textAlign: "right",
+        flex: "0 1 auto", minWidth: 0, fontSize: 12, textAlign: "right",
+        overflowWrap: "anywhere",
         color: same ? "#64748b" : "#fbbf24", fontWeight: same ? 400 : 700,
       }}>{incoming}</div>
     </div>
@@ -33,11 +40,15 @@ function BackupRestoreCard({ onImported, isMobile }) {
   const [payload, setPayload] = useState(null);  // parsed backup awaiting confirm
   const [preview, setPreview] = useState(null);  // dry-run response
   const [dragging, setDragging] = useState(false);
+  // Cross-version restores are allowed but acknowledged — see the warning block.
+  const [versionOk, setVersionOk] = useState(false);
   const fileRef = useRef(null);
 
   const pad = isMobile ? 14 : 20;
 
-  const reset = () => { setPayload(null); setPreview(null); setFileName(""); setError(""); };
+  const reset = () => {
+    setPayload(null); setPreview(null); setFileName(""); setError(""); setVersionOk(false);
+  };
 
   const doExport = async () => {
     setBusy("export"); setError(""); setNotice("");
@@ -77,6 +88,7 @@ function BackupRestoreCard({ onImported, isMobile }) {
       });
       setPayload(parsed);
       setPreview(res);
+      setVersionOk(false);   // a new file re-asks, even if the last one was accepted
     } catch (e) {
       setError(e instanceof SyntaxError ? "That file isn't valid JSON." : e.message);
       setFileName("");
@@ -102,6 +114,12 @@ function BackupRestoreCard({ onImported, isMobile }) {
   const meta = preview && preview.meta;
   const cur = preview && preview.current;
   const inc = preview && preview.incoming;
+  // Only a KNOWN difference warns. A bare config.json carries no app_version, and
+  // "unknown vs 3.30.0" is not a mismatch worth crying about — the file's own
+  // shape is what's checked there.
+  const versionMismatch = !!(meta && meta.app_version && preview.server_version
+                             && meta.app_version !== preview.server_version);
+  const blockedOnVersion = versionMismatch && !versionOk;
 
   return (
     <div style={{ ...BR_CARD, padding: pad }}>
@@ -200,17 +218,24 @@ function BackupRestoreCard({ onImported, isMobile }) {
               <div>now</div><div style={{ width: 10 }} /><div>after</div>
             </div>
 
-            <BackupDiffRow label="Rooms" current={cur.rooms.length} incoming={inc.rooms.length} />
-            <BackupDiffRow label="Hue lights assigned" current={cur.hue_lights} incoming={inc.hue_lights} />
-            <BackupDiffRow label="Govee devices assigned" current={cur.govee_devices} incoming={inc.govee_devices} />
-            <BackupDiffRow label="Custom names" current={cur.nicknames} incoming={inc.nicknames} />
-            <BackupDiffRow label="Room layouts" current={cur.room_layouts} incoming={inc.room_layouts} />
-            <BackupDiffRow label="Schedules" current={cur.schedules} incoming={inc.schedules} />
-            <BackupDiffRow label="Zones" current={cur.zones.length} incoming={inc.zones.length} />
-            <BackupDiffRow label="Fixtures" current={cur.fixtures} incoming={inc.fixtures} />
-            <BackupDiffRow label="Saved lightning scenes" current={cur.lightning_scenes} incoming={inc.lightning_scenes} />
-            <BackupDiffRow label="Known Govee devices" current={cur.known_govee} incoming={inc.known_govee} />
-            <BackupDiffRow label="Hue Bridge" current={cur.hue_bridge_ip || "none"} incoming={inc.hue_bridge_ip || "none"} />
+            {/* Rows come from the SERVER, derived from the config keys themselves —
+                they are not listed here. That's deliberate: this used to be eleven
+                hand-written lines, and every setting added after v3.11.0 was simply
+                missing from the preview. Don't reintroduce a hand-list; if a row
+                reads badly, give the key a label in _SETTING_LABELS in main.py. */}
+            {(preview.rows || []).map((r) => (
+              <BackupDiffRow
+                key={r.key}
+                label={r.unknown ? `${r.label} *` : r.label}
+                current={r.current}
+                incoming={r.incoming}
+              />
+            ))}
+            {(preview.rows || []).some((r) => r.unknown) && (
+              <div style={{ fontSize: 10, color: "#64748b", marginTop: 6 }}>
+                * a setting this version doesn't recognise — it's carried over untouched.
+              </div>
+            )}
 
             {/* Naming the rooms that disappear is the check that catches a wrong file. */}
             {(() => {
@@ -231,13 +256,57 @@ function BackupRestoreCard({ onImported, isMobile }) {
               );
             })()}
 
+            {/* Cross-version restore: a CAUTION, not a block. A backup from another
+                build is the normal case for the restore that matters most — an old
+                file onto a rebuilt Pi running the current version — so the only hard
+                refusal stays the schema check in _unwrap_import. This just makes sure
+                the user saw it. Acknowledging gates the destructive button rather
+                than firing the import, so "OK" never means "do it now". */}
+            {versionMismatch && !versionOk && (
+              <div style={{
+                marginTop: 12, padding: isMobile ? 10 : 12, borderRadius: 10,
+                background: "rgba(251,191,36,0.07)", border: "1px solid rgba(251,191,36,0.3)",
+              }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "#fbbf24", marginBottom: 4 }}>
+                  Different version
+                </div>
+                <div style={{ fontSize: 12, color: "#cbd5e1", lineHeight: 1.55 }}>
+                  This backup was made by LightEmUp <strong>v{meta.app_version}</strong>, but this
+                  hub is running <strong>v{preview.server_version}</strong>. Restoring across
+                  versions normally works — settings added since are kept at their defaults, and
+                  anything this build doesn't recognise is carried over untouched. Check the list
+                  above before continuing.
+                </div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+                  <button
+                    onClick={() => setVersionOk(true)}
+                    style={{
+                      padding: "8px 16px", borderRadius: 8, border: "1px solid #b45309",
+                      background: "rgba(251,191,36,0.15)", color: "#fde68a",
+                      fontSize: 12, fontWeight: 700, cursor: "pointer",
+                    }}
+                  >OK, continue</button>
+                  <button
+                    onClick={reset}
+                    style={{
+                      padding: "8px 16px", borderRadius: 8, border: "1px solid #334155",
+                      background: "transparent", color: "#94a3b8",
+                      fontSize: 12, fontWeight: 600, cursor: "pointer",
+                    }}
+                  >Cancel import</button>
+                </div>
+              </div>
+            )}
+
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 14 }}>
               <button
-                onClick={doImport} disabled={busy === "import"}
+                onClick={doImport} disabled={busy === "import" || blockedOnVersion}
+                title={blockedOnVersion ? "Acknowledge the version difference above first" : ""}
                 style={{
                   padding: "10px 18px", borderRadius: 10, border: "1px solid #b91c1c",
                   background: "#b91c1c", color: "#fff", fontSize: 13, fontWeight: 700,
-                  cursor: busy === "import" ? "default" : "pointer", opacity: busy === "import" ? 0.6 : 1,
+                  cursor: (busy === "import" || blockedOnVersion) ? "default" : "pointer",
+                  opacity: (busy === "import" || blockedOnVersion) ? 0.5 : 1,
                   flex: isMobile ? "1 1 100%" : "0 0 auto",
                 }}
               >{busy === "import" ? "Restoring…" : "Replace all settings"}</button>

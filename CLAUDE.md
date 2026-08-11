@@ -24,6 +24,34 @@ instead of spelunking, and **update them when you change how something works.**
   comment fix, or a workflow-rule change ships as e.g. `Update commit trailer rule…`
   with no `(vX.Y.Z)`. Only a change to shipped behavior earns a version.
 
+### Adding a setting — the config-key checklist (every session)
+Any feature that persists something new writes a key into `backend/config.json`, and
+that key is now part of the user's **backup**. Run this checklist in the *same commit*
+that starts writing the key. It exists because six keys (`favorites`,
+`lightning_scenes`, `govee_segment_counts`, `govee_segment_mode`, `room_presets`,
+`schema_version`) were being written for months while `DEFAULT_CONFIG` never mentioned
+them, and the restore preview couldn't see half the settings in the app.
+
+1. **Declare it in `DEFAULT_CONFIG`** (`backend/main.py`) with a one-line comment.
+   That dict is the registry of what settings exist — not just a defaults table.
+   Import merges a backup over it, so an undeclared key is *absent* after restoring a
+   backup that predates the feature.
+2. **Give it a label in `_SETTING_LABELS`** so the restore preview names it in
+   English. This is cosmetic only: the preview derives its rows from the config keys,
+   so an unlabelled key still appears — it just reads as `Govee scene address`
+   instead of `Segments-or-whole per device`. Add a `_render_setting` case if a raw
+   count would be meaningless (see `location`, `power_recovery`).
+3. **Is it derived/runtime state rather than a setting?** Then add it to
+   `_SETTING_INTERNAL` instead, so the preview doesn't list churn nobody would miss.
+4. **Room- or zone-name-keyed?** Add it to `rename_room`, `delete_room` and
+   `rename_zone` too, or a rename silently orphans it.
+5. **Needs a migration?** Only if existing configs must be rewritten; guard it on the
+   key's presence, not its contents.
+
+**The export itself needs nothing** — `_export_envelope` deep-copies the whole live
+config, so every key ships automatically. **Keep it that way.** If you ever find
+yourself hand-listing keys to export, that's the bug this checklist exists to prevent.
+
 ### Commits
 - Subject: imperative summary + ` (vX.Y.Z)`, e.g.
   `Batch cloud_v2 segment apply by color to stop dropped segments (v2.10.0)`.

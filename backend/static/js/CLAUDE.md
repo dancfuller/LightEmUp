@@ -536,6 +536,20 @@ set to?").
 - A `SyntaxError` from `JSON.parse` is reported as "That file isn't valid JSON"; every other
   failure surfaces the backend's `detail` (schema too new, not a LightEmUp file, …) via
   `api()`'s error path. Drag-and-drop hits the same `loadFile` as the picker.
+- **The diff rows come from the SERVER now (v3.30.0) — don't hand-list them again.** This
+  file used to hard-code eleven `BackupDiffRow`s, and every setting added after v3.11.0 was
+  missing from the preview (white calibration, location, favourites, segment counts, scene
+  addressing). `preview.rows` is derived from the config keys themselves in `main.py`, so a
+  new setting appears automatically; a row that reads badly is fixed by adding a label to
+  `_SETTING_LABELS` there, **not** by adding JSX here. A key this build doesn't recognise
+  renders with a `*` and a footnote rather than being dropped.
+- **A version difference warns and gates, it doesn't block.** `versionMismatch` compares
+  the envelope's `meta.app_version` with `preview.server_version`; when they differ an amber
+  block offers "OK, continue" / "Cancel import" and `blockedOnVersion` disables the red
+  button until acknowledged. **"OK" must not fire the import** — it only unlocks the button,
+  so the destructive action still takes its own deliberate click. A bare `config.json` has
+  no `app_version` and deliberately does NOT warn: "unknown vs 3.30.0" isn't a mismatch.
+  `versionOk` resets on every new file, so accepting one backup never pre-approves the next.
 
 ## ct-calibration.js — RGB-space white calibration UI
 Drives the device by **RGB** while tuning (so it warms past Govee's blue CT floor),

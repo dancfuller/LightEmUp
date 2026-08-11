@@ -284,6 +284,28 @@ schedules, zones) lives in ONE file on the Pi's microSD card, and those cards we
 card** — so `GET /api/config/export` serves the config as a **browser download**
 (`Content-Disposition: attachment`), getting the backup *off the machine*. That's the whole
 point; don't "improve" this into writing a backup file on the Pi.
+- **The export cannot have gaps, and that's structural** — `_export_envelope` deep-copies
+  the *whole* live `config` dict, so a key added by any feature ships without anyone
+  remembering. Don't "improve" this into a hand-listed allowlist; see the config-key
+  checklist in the root `CLAUDE.md`.
+- **The PREVIEW was the gap, and it's now derived (v3.30.0).** `_config_diff_rows(cur,
+  inc)` builds one row per key from `set(DEFAULT_CONFIG) | set(cur) | set(inc)`, so a new
+  setting shows up whether or not anyone registered it. `_SETTING_LABELS` /
+  `_SETTING_RENDER`-style special cases in `_render_setting` only make the output nicer;
+  `_SETTING_INTERNAL` hides derived state (`device_state`, `segment_state`,
+  `hue_missing_since`, `room_last_applied`, `schema_version`). It replaced eleven
+  hand-written `BackupDiffRow`s that had silently fallen behind: white calibration, the
+  location sun schedules need, favourites, per-device segment counts and scene addressing
+  were all being replaced with **nothing shown in the diff**. A key the build doesn't know
+  is rendered with an asterisk rather than dropped — a backup from a newer build still
+  previews honestly.
+- **Cross-version restores warn, they never block (v3.30.0).** The dry run returns
+  `server_version` next to the envelope's `app_version`; the browser compares them and, on
+  a difference, gates the destructive button behind an explicit "OK, continue". The
+  comparison is deliberately not made server-side: the most valuable restore there is — an
+  old backup onto a rebuilt Pi running the current build — is *by definition* a version
+  mismatch, so refusing it would break the feature's whole purpose. The only hard refusal
+  stays `schema_version > SUPPORTED_SCHEMA`, which is about keys we'd actively mangle.
 - **It's an envelope, not raw config.json**: `{lightemup_export, app_version,
   schema_version, exported_at, hostname, includes_credentials, config}`. The wrapper is what
   lets import recognise a real backup, **refuse one written by a newer build**
