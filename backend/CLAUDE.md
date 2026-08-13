@@ -116,6 +116,43 @@ fixes nothing.** The two vendors need opposite treatments:
   callers collect faithful expectations, and the repair re-sends that **full** dict — so a
   repaired light keeps its colour, not just on/brightness.
 
+### Govee verify-and-repair — POWER ONLY (v3.31.0)
+The Govee half of v3.10.0 was a **blind** double-send, and blind is exactly the problem:
+`govee_lan_send` returns when the datagram leaves the box, so `control_room`'s
+`"success": True` never meant more than *issued*. A device that isn't on the LAN at all
+receives neither copy and nothing noticed.
+
+**The case that forced it (2026-08-13):** the sunrise `Exterior On (end)` turned 7 of 9
+outdoor devices off; the two patio bulbs stayed lit all day while the room's strip read
+*Turned off*. Both took an identical off instantly that evening, so they were simply
+unreachable at 06:10 — and every layer reported success. Addressing was fine (the macs
+mapped to the same IPs before and after), so **this was not a DHCP miss**; don't go
+looking for one next time.
+
+- **`schedule_govee_verify({ip: (want_on, room)})`** mirrors `schedule_hue_verify`:
+  synchronous, coalesced into `_govee_verify_pending`, drained once by
+  `_govee_verify_drain` after `GOVEE_VERIFY_SETTLE_S`. A zone off spanning several rooms
+  costs one pass. Registered from `control_room` whenever `on` is present — which covers
+  the room toggle, `_apply_room_power`, zone control, schedule ends and reapply.
+- **ON/OFF ONLY. Never colour.** devStatus reports `onOff` reliably; colour it does not,
+  and a Govee-app animation isn't a static state at all. Verifying colour would
+  manufacture the false confidence the whole area exists to avoid.
+- **Three outcomes, and the last two are different things.** Took it ⇒ silent. Wrong state
+  ⇒ the command was lost, so re-send **once** and re-read to confirm (never a loop). **No
+  reply ⇒ the device is off the LAN, so do NOT re-send** — a second datagram can't land
+  either — and report it. That last case is the one the old code recorded as success.
+- **Reads are sequential and that's inherent**: every Govee device answers on port 4002
+  and only one socket may hold it. `discovery.py` now owns a `_govee_state_lock` around
+  `govee_lan_get_state` so no caller has to remember (the scene engine and discovery both
+  read state too). It's O(devices) round-trips ⇒ **background task only, never in a
+  request**.
+- **`record_govee_state` still records INTENT, deliberately.** It's what power recovery
+  replays after an outage, and replaying a command that failed to land is not a recovery.
+  What actually happened is reported separately, on the room record.
+- **`_mark_room_not_applied` writes `govee_failed: [device labels]` onto
+  `room_last_applied[room]`** — stored ON the entry so it dies the moment a new look is
+  recorded. A stale "didn't take" outliving the problem would be its own lie.
+
 ### Coalescing + what gets verified (v3.10.1)
 Callers never invoke `_hue_verify_repair` directly — they call **`schedule_hue_verify(
 {light_id: state_as_sent})`**, which is synchronous and cheap: it merges into a module-level
@@ -167,9 +204,18 @@ trust it can't keep.
   be: mode alone (xy vs ct) can't tell your palette from someone else's colour scene.
   `HUE_XY_TOLERANCE` 0.06 (gamut clamping shifts xy slightly; a different scene shifts it
   a lot), `HUE_CT_TOLERANCE` 25 mireds. Unreachable / `hs` mode / no xy reported ⇒ None.
-- **Govee is deliberately not judged.** LAN devStatus reports colour unreliably and a
-  running Govee-app animation isn't a static state at all, so "verifying" it would
+- **Govee COLOUR is deliberately not judged.** LAN devStatus reports colour unreliably and
+  a running Govee-app animation isn't a static state at all, so "verifying" it would
   manufacture exactly the false confidence this exists to avoid.
+- **Govee POWER is judged, from evidence already gathered (v3.31.0).** `_room_status`
+  reads `govee_failed` off the room record — what the power verify *proved* by reading the
+  device — and never queries a device itself. That matters: devStatus is a blocking
+  sequential read, so polling every room here would cost tens of seconds per page load.
+  It reports `reason: "not_applied"` when the divergence is entirely Govee misses and no
+  Hue light changed, because "our command never landed" and "something else set these
+  lights" have different remedies and must not wear the same words. Before this, a
+  Govee-only room was structurally **`unknown`, forever** — it had no `expect_hue`, so the
+  one mechanism built to catch a stale record was blind to exactly the room that needed it.
 - `GET /api/rooms/status` does **one** bridge read for all rooms. `POST /api/rooms/reapply`
   replays the stored look — which is why scenes also store their resolved `payload`, the
   same snapshot mechanism a scheduled scene uses (and it's re-freshened through

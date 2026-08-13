@@ -2440,6 +2440,152 @@ async def _hue_verify_repair(expectations: dict):
         log.exception("Hue verify-and-repair failed")
 
 
+# ─── Govee verify-and-repair — POWER ONLY (v3.31.0) ─────────────────────────
+# Govee LAN control is UNACKNOWLEDGED UDP. `govee_lan_send` returns the moment
+# the datagram leaves the box, so its "success" only ever meant *sent*. The
+# v3.10.0 double-send covers ordinary packet loss, but a device that isn't on the
+# LAN at all — asleep, or on the far side of a weak outdoor link — receives
+# neither copy, and nothing noticed.
+#
+# 2026-08-13 is why this exists: the sunrise "Exterior On (end)" turned 7 of 9
+# outdoor devices off, and the two patio bulbs stayed lit all day. The room's
+# "Now showing" strip read *Turned off* the whole time, because the record is
+# written whether or not the command lands. Both bulbs took an identical off
+# command instantly that evening, so they were simply unreachable at 06:10.
+#
+# So read it back, exactly as Hue does — but ONLY on/off. devStatus reports
+# `onOff` reliably; colour it does not, and a Govee-app animation isn't a static
+# state at all (see `rooms_status`). Verifying colour would manufacture the false
+# confidence this is meant to remove. Power is the one claim we can prove.
+GOVEE_VERIFY_SETTLE_S = 1.5    # let both copies of the double-send land first
+
+# Verification is COALESCED like Hue's: a zone off spanning several rooms
+# registers into one pending map and costs a single pass.
+_govee_verify_pending: dict = {}
+_govee_verify_task: Optional[asyncio.Task] = None
+
+
+def schedule_govee_verify(expectations: dict):
+    """Queue {ip: (want_on, room_name)} for read-back. Synchronous and cheap —
+    merges into the pending map and ensures the drain task is running, so no
+    caller ever waits out the settle."""
+    global _govee_verify_task
+    if not expectations:
+        return
+    _govee_verify_pending.update(expectations)
+    if _govee_verify_task is None or _govee_verify_task.done():
+        _govee_verify_task = asyncio.create_task(_govee_verify_drain())
+
+
+async def _govee_verify_drain(settle_s: float = GOVEE_VERIFY_SETTLE_S):
+    """Wait out the settle, then verify everything queued in one pass. Loops so
+    commands arriving mid-pass get their own pass rather than being dropped."""
+    try:
+        while _govee_verify_pending:
+            await asyncio.sleep(settle_s)
+            batch = dict(_govee_verify_pending)
+            _govee_verify_pending.clear()
+            await _govee_verify_repair(batch)
+    except asyncio.CancelledError:
+        pass
+    except Exception:
+        log.exception("Govee verify drain failed")
+
+
+def _govee_label(ip: str) -> str:
+    """Best human name for a Govee device addressed by IP — the nickname if the
+    user set one, else the product name, else the bare address. This ends up in
+    the UI, so an IP is the last resort, not the default."""
+    nick = (config.get("nicknames") or {}).get(gv_key_for_ip(ip))
+    if nick:
+        return nick
+    mac = gv_mac_for_ip(ip)
+    if mac:
+        known = ((config.get("known_devices", {}) or {}).get("govee") or {}).get(mac) or {}
+        if known.get("name"):
+            return known["name"]
+    return ip
+
+
+async def _govee_verify_repair(expectations: dict):
+    """expectations: {ip: (want_on, room_name)}. Reads each device back and
+    re-sends once to any that didn't take. Queries are SEQUENTIAL — every Govee
+    device answers on port 4002 and only one socket may hold it (discovery.py
+    serialises this), so this is O(devices) round-trips and belongs in a
+    background task, never in a request.
+
+    Three outcomes, and the difference between the last two matters:
+      • took it       — nothing to do, the overwhelmingly common case.
+      • wrong state   — the command was lost. Re-send once, then re-read to
+                        confirm; report it only if the second attempt fails too.
+      • no reply      — the device is off the LAN. A re-send cannot land either,
+                        so don't pretend it did. This is the patio case, and it's
+                        the one the old code silently recorded as success.
+    """
+    if not expectations:
+        return
+    failed = {}    # room name -> [device label, ...]
+    for ip, (want_on, room_name) in expectations.items():
+        want_word = "on" if want_on else "off"
+        try:
+            state = await govee_lan_get_state(ip)
+        except Exception:
+            state = None
+        label = _govee_label(ip)
+
+        if state is None:
+            log.warning("Govee verify: %s (%s) didn't answer — can't confirm it "
+                        "turned %s", label, ip, want_word)
+            failed.setdefault(room_name, []).append(label)
+            continue
+        if bool(state.get("on")) == bool(want_on):
+            continue
+
+        log.info("Govee verify: %s (%s) didn't take — re-sending %s",
+                 label, ip, want_word)
+        try:
+            await govee_lan_turn(ip, bool(want_on))
+            await asyncio.sleep(GOVEE_VERIFY_SETTLE_S)
+            again = await govee_lan_get_state(ip)
+        except Exception:
+            again = None
+        if again is not None and bool(again.get("on")) == bool(want_on):
+            log.info("Govee verify: %s repaired", label)
+            continue
+        log.warning("Govee verify: %s is still not %s after a re-send", label, want_word)
+        failed.setdefault(room_name, []).append(label)
+
+    if failed:
+        _mark_room_not_applied(failed)
+        publish_event("config")
+
+
+def _mark_room_not_applied(failed: dict):
+    """Record on the room's "Now showing" entry which Govee devices provably did
+    NOT take the command.
+
+    This is what makes the strip honest for a Govee-only room. `rooms_status`
+    can't afford to poll devices on demand — devStatus is a blocking sequential
+    read, so judging every room would cost tens of seconds per page load — but
+    the verify has *already* learned the truth, so it stores the evidence and the
+    status endpoint reads it for free.
+
+    Deliberately stored ON the entry, so it dies the moment a new look is
+    recorded for that room. A stale "didn't take" outliving the problem would be
+    its own lie, and this feature exists to stop the app claiming things it can't
+    stand behind."""
+    store = config.get("room_last_applied", {}) or {}
+    touched = False
+    for room_name, names in failed.items():
+        entry = store.get(room_name)
+        if entry is None:
+            continue          # room record replaced or removed meanwhile
+        entry["govee_failed"] = names
+        touched = True
+    if touched:
+        schedule_save()
+
+
 # ─── Govee Control Endpoints ────────────────────────────────────────────────
 
 @app.post("/api/govee/control")
@@ -2607,6 +2753,7 @@ async def control_room(req: RoomStateRequest):
 
     # Control Govee devices in the room (membership is by mac slug; resolve the
     # current IP to actually address the device over LAN).
+    govee_sent = {}
     for slug in room.get("govee_devices", []):
         device_ip = gv_ip_for_slug(slug)
         if not device_ip:
@@ -2618,19 +2765,29 @@ async def control_room(req: RoomStateRequest):
             persist_segments()
         if req.on is not None:
             await govee_lan_turn(device_ip, req.on)
+            govee_sent[device_ip] = (bool(req.on), req.room_name)
         if req.brightness is not None:
             await govee_lan_brightness(device_ip, req.brightness)
         if req.r is not None and req.g is not None and req.b is not None:
             await govee_lan_color(device_ip, req.r, req.g, req.b)
+        # Records INTENT, not outcome — deliberately. This is what power recovery
+        # replays after an outage, and replaying a command that failed to land is
+        # not a recovery. What actually happened is settled by the verify below,
+        # and reported on the room record.
         record_govee_state(
             device_ip, on=req.on, brightness=req.brightness,
             r=req.r, g=req.g, b=req.b,
         )
+        # "success" here means the datagram was ISSUED — Govee LAN control is
+        # unacknowledged, so nothing at this point can mean more than that.
         results["govee"].append({"ip": device_ip, "slug": slug, "success": True})
 
     # Read the Hue lights back and repair any that silently didn't take. The
     # drain runs as a background task so the caller isn't held for the settle.
     schedule_hue_verify(hue_sent)
+    # Same for Govee, power only — see _govee_verify_repair. Registered here
+    # rather than per-device so a room (or a zone) costs one pass.
+    schedule_govee_verify(govee_sent)
 
     # Note what the room is now showing. A brightness-ONLY call is deliberately not
     # recorded: that's the room slider, which fires repeatedly while dragging and
@@ -3864,7 +4021,12 @@ async def _room_status(room_name: str, lights_by_id: dict) -> dict:
     if not entry:
         return {"state": "none"}
     expect = entry.get("expect_hue") or {}
-    if not expect:
+    # Govee devices the power verify PROVED didn't take the command (v3.31.0).
+    # No network cost here: the verify already read them back and left its
+    # findings on the record. This is the only claim we make about Govee, and we
+    # can stand behind it — unlike colour, on/off is reported reliably.
+    gov_failed = entry.get("govee_failed") or []
+    if not expect and not gov_failed:
         # Nothing recorded to compare against (a pre-v3.16.0 record, or a look we
         # can't verify such as a Govee-only room). Stay quiet rather than guess.
         return {"state": "unknown", "checked": 0}
@@ -3883,11 +4045,23 @@ async def _room_status(room_name: str, lights_by_id: dict) -> dict:
         else:
             unknown += 1
 
+    hue_changed = changed
+    changed += len(gov_failed)
+    for nm in gov_failed:
+        if len(changed_names) < 4:
+            changed_names.append(nm)
+
     if changed:
-        return {"state": "diverged", "changed": changed, "matched": matched,
-                "unknown": unknown, "changed_names": changed_names,
-                "can_reapply": bool(entry.get("payload") or entry.get("kind") in
-                                    ("white", "color", "power"))}
+        out = {"state": "diverged", "changed": changed, "matched": matched,
+               "unknown": unknown, "changed_names": changed_names,
+               "can_reapply": bool(entry.get("payload") or entry.get("kind") in
+                                   ("white", "color", "power"))}
+        if gov_failed and not hue_changed:
+            # Nothing *changed* this room — the command never landed on it. A
+            # different problem with a different remedy (send it again, don't go
+            # hunting for the app that overrode you), so it says so.
+            out["reason"] = "not_applied"
+        return out
     if matched:
         return {"state": "match", "matched": matched, "unknown": unknown}
     return {"state": "unknown", "checked": len(expect)}
@@ -3897,10 +4071,16 @@ async def _room_status(room_name: str, lights_by_id: dict) -> dict:
 async def rooms_status():
     """Per-room: does the room still look like what LightEmUp last set?
 
-    One bridge read serves every room. Govee is deliberately NOT judged — LAN
-    devStatus reports colour unreliably, and a running Govee-app animation isn't
-    a static state at all, so pretending to verify it would manufacture exactly
-    the false confidence this endpoint exists to avoid."""
+    One bridge read serves every room, and this endpoint touches NO Govee device
+    — devStatus is a blocking sequential read, so polling every device here would
+    cost tens of seconds per page load.
+
+    Govee colour is still never judged: LAN devStatus reports it unreliably, and
+    a running Govee-app animation isn't a static state at all, so verifying it
+    would manufacture exactly the false confidence this endpoint exists to avoid.
+    Govee POWER is different — `onOff` is reported reliably — but it's judged from
+    what the power verify already proved (`govee_failed` on the room record), not
+    by asking again now. See `_govee_verify_repair`."""
     ip = config.get("hue_bridge_ip")
     username = config.get("hue_username")
     lights_by_id = {}

@@ -783,8 +783,17 @@ async def govee_lan_color_temp(ip: str, kelvin: int) -> Optional[dict]:
     })
 
 
+# Every Govee device replies on port 4002, and only ONE socket may hold it at a
+# time — so state queries must be strictly sequential. discover_govee() already
+# loops sequentially, but it isn't the only caller any more (the scene engine and
+# the power verify-and-repair both read state), and two of them overlapping would
+# have replies land on whichever socket bound first. Serialising inside the
+# function means no caller has to remember the rule.
+_govee_state_lock = asyncio.Lock()
+
+
 async def govee_lan_get_state(ip: str) -> Optional[dict]:
-    """Query a Govee device's current state via LAN."""
+    """Query a Govee device's current state via LAN. Serialised process-wide."""
     loop = asyncio.get_event_loop()
 
     def _query():
@@ -814,7 +823,8 @@ async def govee_lan_get_state(ip: str) -> Optional[dict]:
             recv_sock.close()
         return None
 
-    return await loop.run_in_executor(None, _query)
+    async with _govee_state_lock:
+        return await loop.run_in_executor(None, _query)
 
 
 # ─── Govee Razer Protocol (Per-Segment) ──────────────────────────────────

@@ -276,8 +276,11 @@ All endpoints are under `/api/`. Key groups:
 - `/api/rooms/status` — has anything ELSE changed each room since LightEmUp set it? (The
   Hue/Govee apps and Google Home routines all drive these lights, so the record goes
   stale.) Proves divergence where it can, reports `unknown` where it can't, and **never
-  certifies a match**. `/api/rooms/reapply` is the "Set here" button that puts the stored
-  look back. See `backend/CLAUDE.md` "Detecting that something ELSE changed a room"
+  certifies a match**. Since v3.31.0 it also reports a Govee device that provably didn't
+  take a power command (`reason: "not_applied"`) — read from evidence the verify already
+  gathered, so the endpoint still touches no Govee device. `/api/rooms/reapply` is the
+  "Set here" / "Try again" button that puts the stored look back. See `backend/CLAUDE.md`
+  "Detecting that something ELSE changed a room" + "Govee verify-and-repair"
 - `/api/room-layouts` — floor plan / line layout CRUD (auto-saved from frontend)
 - `/api/nicknames` — device nickname CRUD
 - `/api/identify` — flash a device to locate it (Hue native `alert`; Govee on/off blink then restore)

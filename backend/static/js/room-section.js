@@ -86,6 +86,13 @@ function RoomLastApplied({ entry, status, onReapply, isMobile, applying }) {
   // only the diverged state is announced. "match" and "can't tell" both render
   // quietly, because a confident tick we can't stand behind is worse than none.
   const diverged = status && status.state === "diverged";
+  // Two very different failures wear the same amber panel, and conflating them
+  // sends you to the wrong place. "Changed since" = something ELSE set these
+  // lights (a Google Home routine, the Hue/Govee app) and you want your look
+  // back. "Didn't take" = our own command never landed on a Govee device — the
+  // backend proved it by reading the device — and the fix is simply to send it
+  // again. See `_govee_verify_repair` in main.py.
+  const notApplied = diverged && status.reason === "not_applied";
 
   // White is stored as a Kelvin value rather than swatches, so the backend never
   // needs colour math just to label a temperature — render the chip here.
@@ -99,13 +106,19 @@ function RoomLastApplied({ entry, status, onReapply, isMobile, applying }) {
   const bySchedule = entry.source === "schedule";
   const dot = isMobile ? 13 : 15;
 
-  const changedBy = diverged && status.changed_names && status.changed_names.length
-    ? `Changed since — ${status.changed_names.join(", ")} no longer match`
+  const names = (diverged && status.changed_names) || [];
+  const changedBy = names.length
+    ? `Changed since — ${names.join(", ")} no longer match`
     : "Changed since LightEmUp set this";
+  const notAppliedBy = names.length
+    ? `${names.join(", ")} didn't take this`
+    : "Some lights in this room didn't take this";
 
   return (
     <div
-      title={diverged
+      title={notApplied
+        ? `${notAppliedBy} — unreachable, or the command was lost on the way. Nothing else changed the room; "Try again" re-sends it.`
+        : diverged
         ? `${changedBy}. Something else (a Google Home routine, the Hue or Govee app) has set these lights since. "Set here" puts this look back.`
         : `${entry.label}${bySchedule && entry.source_detail ? ` — set by schedule "${entry.source_detail}"` : ""}${when ? ` · ${when}` : ""}`}
       style={{
@@ -119,7 +132,7 @@ function RoomLastApplied({ entry, status, onReapply, isMobile, applying }) {
         fontSize: 9, fontWeight: 700, letterSpacing: 0.7, textTransform: "uppercase",
         color: diverged ? "#fbbf24" : "#64748b",
       }}>
-        {diverged ? "Changed since" : "Now showing"}
+        {notApplied ? "Didn't take" : diverged ? "Changed since" : "Now showing"}
       </span>
 
       {swatches.length > 0 && (
@@ -162,14 +175,16 @@ function RoomLastApplied({ entry, status, onReapply, isMobile, applying }) {
             Promise.resolve(onReapply()).finally(() => setBusy(false));
           }}
           disabled={busy}
-          title="Re-apply this look to the room"
+          title={notApplied
+            ? "Send this look to the room again"
+            : "Re-apply this look to the room"}
           style={{
             fontSize: isMobile ? 11 : 12, fontWeight: 700,
             padding: isMobile ? "3px 10px" : "3px 12px", borderRadius: 7,
             border: "1px solid #b45309", background: "#b45309", color: "#fff",
             cursor: busy ? "wait" : "pointer", whiteSpace: "nowrap",
           }}
-        >{busy ? "Setting…" : "Set here"}</button>
+        >{busy ? "Setting…" : notApplied ? "Try again" : "Set here"}</button>
       )}
 
       {/* Attribution only when it wasn't a person in the app — "you did this" is

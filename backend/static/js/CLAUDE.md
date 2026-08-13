@@ -455,6 +455,15 @@ the strip's record can be stale. `RoomLastApplied` takes a `status` from
   colour temperature, and what you want is your look back — one tap beats hunting for the
   scene. `reapplyRoom` in app.js waits ~3s for an async scene replay before `loadAll()`,
   or the status would still read diverged.
+- **"Didn't take" is a SECOND failure wearing the same amber panel (v3.31.0), and
+  conflating them sends you to the wrong place.** `status.reason === "not_applied"` means
+  the backend proved our own command never landed on a Govee device (it read the device
+  back — see `_govee_verify_repair`), not that something else changed the room. So the
+  label reads **Didn't take**, the button reads **Try again**, and the tooltip says the
+  command was lost rather than blaming a Google Home routine. Everything else about the
+  panel is shared on purpose — it's still "the strip is lying, here's one tap to fix it".
+  A room with BOTH a Hue divergence and a Govee miss stays "Changed since": the override
+  is the bigger claim and the retry wouldn't explain it.
 
 ## Assigning lights from the Rooms tab (v3.26.0)
 Creating a room in **Rooms** produced an empty card with every control inert and no way
