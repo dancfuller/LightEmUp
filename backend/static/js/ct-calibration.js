@@ -242,7 +242,7 @@ function CTCalibrationPanel({ hueLights, goveeDevices, nicknames, ctRgb, onContr
                         <span style={{ fontSize: 11, color: "#fb923c" }}>warmer</span>
                         <input type="range" min={CT_RGB_MIN_K} max={CT_MAX_K} step={50} value={cur}
                           onChange={e => tune(d, Number(e.target.value))}
-                          style={{ flex: 1, accentColor: "#6366f1" }} />
+                          style={{ flex: 1, accentColor: "#6366f1", touchAction: "pan-y" }} />
                         <span style={{ fontSize: 11, color: "#93c5fd" }}>cooler</span>
                       </div>
                     </div>

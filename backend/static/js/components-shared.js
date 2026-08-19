@@ -73,7 +73,7 @@ function HueBar({ currentColor, onChange, height = 22 }) {
 }
 
 function RgbSliderInput({ label, value, onChange, color }) {
-  const [local, onInput] = useThrottledControl(value, onChange, 180);
+  const [local, onInput, guard] = useThrottledControl(value, onChange, 180);
   // The number box keeps its own draft string while focused: without it, clearing
   // the field to retype snaps the value to 0 mid-keystroke (and fires the light).
   // A draft that isn't a number is simply not committed; blur restores the real value.
@@ -85,7 +85,10 @@ function RgbSliderInput({ label, value, onChange, color }) {
       <input
         type="range" min={0} max={255} value={local}
         onChange={(e) => onInput(Number(e.target.value))}
+        {...guard}
         style={{
+          // pan-y: a vertical swipe scrolls the page instead of dragging this.
+          touchAction: "pan-y",
           flex: 1, minWidth: 0, height: 5, appearance: "none", borderRadius: 3,
           background: `linear-gradient(to right, ${
             label === "R" ? `rgb(0,0,0), rgb(255,0,0)` :
@@ -544,7 +547,7 @@ function ColorWheel({ size = 180, onColorSelect }) {
 }
 
 function Slider({ label, value, min, max, onChange, color, unit = "", throttleMs = 180 }) {
-  const [local, onInput] = useThrottledControl(value, onChange, throttleMs);
+  const [local, onInput, guard] = useThrottledControl(value, onChange, throttleMs);
   const pct = ((local - min) / (max - min)) * 100;
   return (
     <div style={{ marginBottom: 12 }}>
@@ -555,7 +558,9 @@ function Slider({ label, value, min, max, onChange, color, unit = "", throttleMs
       <input
         type="range" min={min} max={max} value={local}
         onChange={(e) => onInput(Number(e.target.value))}
+        {...guard}
         style={{
+          touchAction: "pan-y",
           width: "100%", height: 6, appearance: "none", borderRadius: 3,
           background: `linear-gradient(to right, ${color || "#6366f1"} ${pct}%, #334155 ${pct}%)`,
           cursor: "pointer", outline: "none",
@@ -570,7 +575,7 @@ function Slider({ label, value, min, max, onChange, color, unit = "", throttleMs
 function ColorTempSlider({ label = "Color Temperature", kelvin, onChange, min = CT_MIN_K, max = CT_MAX_K, throttleMs = 180 }) {
   const warm = kelvinToRGB(min), cool = kelvinToRGB(max);
   const mid = kelvinToRGB(Math.round((min + max) / 2));
-  const [local, onInput] = useThrottledControl(kelvin, onChange, throttleMs);
+  const [local, onInput, guard] = useThrottledControl(kelvin, onChange, throttleMs);
   return (
     <div style={{ marginBottom: 12 }}>
       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
@@ -580,7 +585,9 @@ function ColorTempSlider({ label = "Color Temperature", kelvin, onChange, min = 
       <input
         type="range" min={min} max={max} step={50} value={local}
         onChange={(e) => onInput(Number(e.target.value))}
+        {...guard}
         style={{
+          touchAction: "pan-y",
           width: "100%", height: 10, appearance: "none", borderRadius: 5,
           background: `linear-gradient(to right, rgb(${warm.r},${warm.g},${warm.b}), rgb(${mid.r},${mid.g},${mid.b}), rgb(${cool.r},${cool.g},${cool.b}))`,
           cursor: "pointer", outline: "none",

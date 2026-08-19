@@ -2525,6 +2525,7 @@ async def _govee_verify_repair(expectations: dict):
     if not expectations:
         return
     failed = {}    # room name -> [device label, ...]
+    tally = {"correct": 0, "repaired": 0, "unreachable": 0, "stuck": 0}
     for ip, (want_on, room_name) in expectations.items():
         want_word = "on" if want_on else "off"
         try:
@@ -2536,9 +2537,11 @@ async def _govee_verify_repair(expectations: dict):
         if state is None:
             log.warning("Govee verify: %s (%s) didn't answer — can't confirm it "
                         "turned %s", label, ip, want_word)
+            tally["unreachable"] += 1
             failed.setdefault(room_name, []).append(label)
             continue
         if bool(state.get("on")) == bool(want_on):
+            tally["correct"] += 1
             continue
 
         log.info("Govee verify: %s (%s) didn't take — re-sending %s",
@@ -2551,9 +2554,21 @@ async def _govee_verify_repair(expectations: dict):
             again = None
         if again is not None and bool(again.get("on")) == bool(want_on):
             log.info("Govee verify: %s repaired", label)
+            tally["repaired"] += 1
             continue
         log.warning("Govee verify: %s is still not %s after a re-send", label, want_word)
+        tally["stuck"] += 1
         failed.setdefault(room_name, []).append(label)
+
+    # ALWAYS log the outcome, including the all-clear (v3.32.0). The happy path
+    # used to be silent, which is the worst possible record for the fire that
+    # matters most: a 6am scheduled off that nobody is awake to watch. When the
+    # porch was found lit hours later, "no warnings in the journal" could not
+    # distinguish "read all 7 back, all off" from "the verify never ran" — so it
+    # proved nothing and the investigation stalled. One line ends that ambiguity.
+    log.info("Govee verify: %d device(s) — %d already correct, %d repaired, "
+             "%d unreachable, %d still wrong", len(expectations),
+             tally["correct"], tally["repaired"], tally["unreachable"], tally["stuck"])
 
     if failed:
         _mark_room_not_applied(failed)

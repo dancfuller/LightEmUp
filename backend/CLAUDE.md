@@ -149,6 +149,13 @@ looking for one next time.
 - **`record_govee_state` still records INTENT, deliberately.** It's what power recovery
   replays after an outage, and replaying a command that failed to land is not a recovery.
   What actually happened is reported separately, on the room record.
+- **The outcome is ALWAYS logged, including the all-clear (v3.32.0)** —
+  `Govee verify: N device(s) - N already correct, N repaired, N unreachable, N still
+  wrong`. The happy path used to be silent, which is the worst possible record for the
+  fire that matters most: a 6am scheduled off nobody is awake to watch. When the porch was
+  found lit hours later, "no warnings in the journal" could not distinguish *read all
+  seven back, all off* from *the verify never ran* — so it proved nothing and the
+  investigation stalled on an inference. **Don't make this conditional again.**
 - **`_mark_room_not_applied` writes `govee_failed: [device labels]` onto
   `room_last_applied[room]`** — stored ON the entry so it dies the moment a new look is
   recorded. A stale "didn't take" outliving the problem would be its own lie.

@@ -57,6 +57,27 @@ A new file must be added to index.html in the correct slot (after its dependenci
   Every slider that drives a light routes through it (wired into the shared Slider /
   ColorTempSlider / RgbSliderInput). This is why sliders feel instant despite slow
   LAN apply — don't fire raw commands on every onChange tick (that floods the LAN).
+- **An accidental TOUCH must never drive a light (v3.32.0).** Two separate gestures could,
+  and the fixes are separate too — **a new light-driving slider needs BOTH**:
+  1. **`touchAction: "pan-y"` on the `<input type="range">`.** Range inputs default to
+     `touch-action: auto`, so a swipe that *begins* on a slider is captured by the slider
+     instead of scrolling the page. `pan-y` gives vertical gestures back to the page and
+     keeps horizontal ones for the control.
+  2. **Spread the hook's third return value, `guard`, onto the input.**
+     `const [local, onInput, guard] = useThrottledControl(...)`. A range input's TRACK is
+     tappable — landing a finger anywhere on it jumps the thumb, which the browser reports
+     as input, which `onInput` committed **immediately** (the throttle only ever governed
+     the *second* command onward). So on touch the guard waits for `TAP_SLOP_PX` of real
+     travel before anything is sent; the thumb still follows the finger, and a tap that
+     never moved snaps back to the device's real value.
+  **A mouse is deliberately exempt** — clicking a track to jump to 60% is a normal desktop
+  interaction, and a pointer can't brush a control while scrolling. Verified with
+  synthetic pointer sequences: touch-tap ⇒ 0 commands, touch-drag ⇒ 1, mouse-click ⇒ 1.
+  This came from a real report: scrolling the All Lights list to reach the hexa panels
+  sent a command to the patio bulb sitting directly above them.
+  **This is not stage-then-apply, and shouldn't become it** — a dimmer you have to confirm
+  stops being a dimmer. The `ColorPicker`'s staging exists because picking a colour has a
+  discrete "I chose this" moment; brightness has none.
 
 ## components-shared.js — manual color entry (v3.7.0)
 The ColorPicker's **RGB** tab is not slider-only: each channel has a number box, and a

@@ -66,18 +66,44 @@ function seededRng(seed) {
 // committing onChange at most every `ms` (trailing — the final value always
 // lands). External value changes are honored except mid-drag, so the thumb
 // never jumps backward while the user is dragging.
+// Below this much travel, a touch is a tap and not a drag.
+const TAP_SLOP_PX = 6;
+
+// Instant thumb + coalesced commands, AND a guard so an accidental touch never
+// reaches a light (v3.32.0).
+//
+// The accident is specific, and was reported from a phone: a range input's TRACK
+// is tappable, so landing a finger anywhere on it jumps the thumb — and the
+// browser reports that as input, which `onInput` used to commit immediately (the
+// throttle only ever governed the second command onward). Scrolling a long list
+// of lights and brushing a slider therefore put a real command on the wire, for
+// whichever light happened to sit under your thumb.
+//
+// So on TOUCH we wait for real movement before committing anything. The thumb
+// still follows the finger, so the control stays alive; but nothing is sent
+// until you actually drag, and a tap that never moved snaps back to the device's
+// real value. A MOUSE is deliberately exempt — clicking a track to jump to 60%
+// is a normal desktop interaction, and a pointer can't brush a control while
+// scrolling.
+//
+// Spread the returned `guard` onto the <input type="range"> and give it
+// `touchAction: "pan-y"`. The two halves fix different gestures and BOTH are
+// needed: pan-y keeps a vertical swipe scrolling the page instead of being
+// captured by the slider, and the guard stops the stationary tap.
 function useThrottledControl(value, onCommit, ms = 180) {
   const [local, setLocal] = useState(value);
   const dragging = useRef(false);
   const slot = useRef({ timer: null, pending: null });
   const commitRef = useRef(onCommit);
   commitRef.current = onCommit;
+  const touch = useRef({ active: false, moved: false, x: 0 });
+  // The device's real value, for putting the thumb back after a tap.
+  const valueRef = useRef(value);
+  valueRef.current = value;
 
   useEffect(() => { if (!dragging.current) setLocal(value); }, [value]);
 
-  const onInput = useCallback((v) => {
-    dragging.current = true;
-    setLocal(v);
+  const flush = useCallback((v) => {
     const s = slot.current;
     s.pending = v;
     if (s.timer) return;
@@ -90,7 +116,46 @@ function useThrottledControl(value, onCommit, ms = 180) {
     fire();
   }, [ms]);
 
-  return [local, onInput];
+  const onInput = useCallback((v) => {
+    dragging.current = true;
+    setLocal(v);
+    // A touch that hasn't travelled yet: show it, don't send it.
+    if (touch.current.active && !touch.current.moved) return;
+    flush(v);
+  }, [flush]);
+
+  const endTouch = useCallback(() => {
+    const t = touch.current;
+    if (t.active && !t.moved) {
+      // A tap that drove nothing. Put the thumb back where the device actually
+      // is, or the control would keep claiming a value it never sent.
+      dragging.current = false;
+      setLocal(valueRef.current);
+    }
+    touch.current = { active: false, moved: false, x: 0 };
+  }, []);
+
+  const guard = {
+    onPointerDown: (e) => {
+      if (e.pointerType !== "touch") return;
+      touch.current = { active: true, moved: false, x: e.clientX };
+    },
+    onPointerMove: (e) => {
+      const t = touch.current;
+      if (!t.active || t.moved) return;
+      if (Math.abs(e.clientX - t.x) > TAP_SLOP_PX) {
+        t.moved = true;
+        // Now it's a real drag: send where the thumb has already got to.
+        flush(Number(e.currentTarget.value));
+      }
+    },
+    onPointerUp: endTouch,
+    // A vertical scroll under `touch-action: pan-y` cancels the pointer rather
+    // than ending it — same treatment, or the guard would stay armed forever.
+    onPointerCancel: endTouch,
+  };
+
+  return [local, onInput, guard];
 }
 
 // ─── Color Utilities ────────────────────────────────────────────────────────

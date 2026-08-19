@@ -28,7 +28,7 @@ function relativeTime(iso) {
 // A slider that silently turns the room off while the toggle still reads "On"
 // would be two controls disagreeing about the same fact.
 function InlineBrightness({ value, onChange, isMobile }) {
-  const [local, onInput] = useThrottledControl(value, onChange, 180);
+  const [local, onInput, guard] = useThrottledControl(value, onChange, 180);
   const pct = Math.max(1, Math.min(100, Math.round(local)));
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}
@@ -36,7 +36,11 @@ function InlineBrightness({ value, onChange, isMobile }) {
       <input
         type="range" min={1} max={100} value={pct}
         onChange={(e) => onInput(Number(e.target.value))}
+        {...guard}
         style={{
+          // This one sits in a long scrolling list of rooms — the exact place a
+          // thumb brushes a control on the way past.
+          touchAction: "pan-y",
           width: isMobile ? 88 : 116, height: 6, appearance: "none", borderRadius: 3,
           background: `linear-gradient(to right, #fbbf24 ${pct}%, #334155 ${pct}%)`,
           cursor: "pointer", outline: "none",
