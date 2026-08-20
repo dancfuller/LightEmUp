@@ -668,7 +668,8 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
   useEffect(() => {
     const onProgress = (e) => {
       const d = e.detail;
-      if (!d || d.room !== roomName) return;
+      // Scope, not room — see the same filter in room-section.js (v3.34.0).
+      if (!d || (d.scope || d.room) !== roomName) return;
       if (d.active === false) {
         setApplying(false);
         setApplyPhase(null);

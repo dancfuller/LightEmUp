@@ -23,7 +23,11 @@ page.on('pageerror', e => console.log('[pageerror]', e.message));
 
 // `load`, not `networkidle` — the SSE /events stream never goes idle.
 await page.goto(url, { waitUntil: 'load', timeout: 20000 }).catch(e => console.log('goto:', e.message));
-await page.waitForTimeout(2800); // Babel transpile + React mount + first data load
+// Babel transpile + React mount + first data load. 2800ms was enough at ~15
+// files and is not at 22 — a short wait screenshots the "Connecting to the
+// hub…" loader and every in-DOM assertion comes back false, which reads as a
+// broken change rather than a slow one. Err long; it's a dev tool.
+await page.waitForTimeout(6500);
 
 for (const raw of steps) {
   const m = String(raw).match(/^(.*)@(\d+)$/);

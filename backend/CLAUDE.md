@@ -461,6 +461,28 @@ not in the browser (v2.14.0):
   refresh is emitted at the end. One task per room (`_scene_tasks`); a new apply
   cancels the previous. `POST /api/scenes/room-apply/cancel` cancels by room.
 
+### `scope` — the same apply, narrowed to one device (v3.34.0)
+The endpoint was never really room-scoped: the payload is fully resolved per device and
+`room` is only a label plus a task key. `SceneApplyRequest.scope` makes that explicit so
+the light card's scene panel can paint a single Govee strip. **`scope` is the channel;
+`room` rides along for context.** Absent ⇒ `scope = room`, which is every pre-v3.34.0
+caller and the scheduler, so their behaviour is bit-identical.
+- **It keys `_scene_tasks`.** One task per *room* would mean painting a hexa cancels its
+  room's in-flight scene and vice versa — two applies fighting over devices that don't
+  even overlap. Same-scope re-apply still supersedes, which is what you want.
+- **It keys the SSE events**, so `ColorMode` and `RoomSection` (which now filter on
+  `d.scope`, not `d.room`) don't put a whole room into "Applying…" for 13 seconds
+  because one light is being painted.
+- **A scoped apply records NOTHING** — no `record_room_applied`, no `expect_hue`, no
+  re-verify. "Now showing" is a whole-room claim and one hexa going rainbow doesn't make
+  the room rainbow; stamping it would replace an accurate record with a wrong one and
+  leave "Set here" replaying a plan that only ever touched one light. This matches every
+  other single-device path (picking a colour on a light card doesn't touch the record
+  either). Consequence to accept: the room's strip is now slightly stale — as it already
+  was in that case.
+- Covered by the scratch test `test_scene_scope.py` (17 assertions): the record-skip,
+  the scope-vs-room event fields, and that a device apply leaves its room's task running.
+
 ## Device identify (flash to locate)
 `POST /api/identify` flashes one device so the user can physically find it.
 - Hue (`light_id`): sends the bridge's native `alert: "lselect"` (~15s breathe). It's

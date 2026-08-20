@@ -8,9 +8,9 @@ rules that apply to every UI change. **Keep this file current when behavior chan
 
 ## Load order (from index.html)
 utils → audio → components-shared → light-card → favorite-lights → lightning-panel →
-room-map → palette-data → palette-library → color-mode → location-data → schedules →
-segment-reset-debug → room-section → zones → room-assignment → setup-wizard →
-server-logs → ct-calibration → backup-restore → app
+room-map → palette-data → palette-library → color-mode → light-scene → location-data →
+schedules → segment-reset-debug → room-section → zones → room-assignment →
+setup-wizard → server-logs → ct-calibration → backup-restore → app
 
 A new file must be added to index.html in the correct slot (after its dependencies).
 
@@ -378,6 +378,45 @@ Assigns colors/temperatures across a room's devices and applies them.
   ColorMode effect (filtered by `roomName`) drives `applying`/`applyPhase`/`applyDone`/
   `applyTotal`/`applyLabel`/`applyEndAt`. So any open session shows live progress, not
   just the one that pressed Apply. Cancel → `POST /api/scenes/room-apply/cancel`.
+
+## light-scene.js — scenes for ONE segmented light (v3.34.0)
+`LightScenePanel` renders inside a LightCard's Segments section (any Govee device with
+>1 segment) and offers Rainbow / Palette / My colours / Shades / Beacon / One colour /
+Teams / College / Flags / Last colours across that device's segments.
+- **Why it's not ColorMode with a filter.** A room is a 2D arrangement needing an
+  adjacency graph, fixtures, a vendor filter and a spatial walk; one strip is a **1D run
+  where segment index IS position**. That makes Shades and Beacon meaningful here (the
+  direction is *along* the run — forward / reverse / middle-out / ends-in) at a fraction
+  of the machinery. Threading a `restrictToKey` through color-mode.js's ~2800 lines and
+  hiding half its UI would have been worse in both directions.
+- **The backend needed almost nothing.** `/api/scenes/room-apply` already takes a fully-
+  resolved device payload; `room` was only ever a label and a task key. The panel builds
+  the same plan shape for one device and adds `scope` — see the backend note for what
+  that keys. **Nothing is recorded to "Now showing"**: one hexa going rainbow does not
+  make the room rainbow.
+- **Reuses the pure helpers from color-mode.js** (`orderPaletteForCycle`,
+  `presetColors`, `PresetPicker`) rather than copying them, which is why it must load
+  after it. **`orderPaletteForCycle` returns INDICES, not colours** — treating the
+  return as colours renders every segment transparent, and that shipped-looking bug was
+  caught only by screenshotting the preview.
+- **Rainbow deliberately skips that re-ordering** (`preserveOrder`). The function
+  maximises contrast between adjacent positions, which is right for a palette and wrong
+  here: it turns ROYGBIV into R,G,V,Y,B,O,I — seven nice colours that aren't a rainbow.
+  For Rainbow the *sequence* is the look.
+- **`ROYGBIV` is LED-tuned, not textbook.** Pigment indigo (#4B0082) and violet
+  (#9400D3) are ~7° apart in hue and both dark, so on a panel they read as two dim
+  purples and one band looks nearly off. The constant keeps the seven named bands but
+  spreads them across the hue circle at full saturation.
+- **The cost is stated in the UI, on purpose.** Segments go over Govee's **cloud** V2
+  API (every segmented SKU in `GOVEE_SEGMENT_INFO` is `cloud_v2`), rate-limited to about
+  one colour change every 1.8s. Colours are batched — each distinct colour is one call —
+  but a 7-colour rainbow on 7 panels is the worst case for batching and genuinely takes
+  ~13s. **Don't remove the estimate**; a user who isn't told assumes it hung. The LAN
+  razer protocol would be instant and is deliberately not used (it reverts after 60s
+  without keepalives).
+- "Last colours" re-sends the stored `segment_state`, which survives restarts — the
+  useful case being a device that was power-cycled, clearing its segments while the hub
+  still remembers them.
 
 ## schedules.js — Schedules tab + Settings Location card (v3.8.0)
 `SchedulesTab` (its own nav tab) lists schedules with a human trigger summary, a

@@ -24,6 +24,7 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
   const effectiveMode = controlMode || (hasInitialSegmentState ? "segments" : "whole");
   const setControlMode = (m) => onControlModeChange && onControlModeChange(m);
   const [selectedSegment, setSelectedSegment] = useState(0);
+  const [showScene, setShowScene] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
   // Color vs tunable-white control. Default "color" (color-first UX).
   const [colorMode, setColorMode] = useState("color");
@@ -396,6 +397,36 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
                   </div>
                   <span style={{ fontSize: 9, color: "#475569" }}>match your actual panel count</span>
                 </div>
+              )}
+              {/* Scenes for ONE light (v3.34.0). Everything below this button
+                  paints a single segment at a time, which is minutes of work
+                  for a 7-panel rainbow — and the palette/teams/flags libraries
+                  were room-only until now. Sits above the per-segment editor
+                  because it's the faster answer to the same question. */}
+              {segCount > 1 && (
+                <button
+                  onClick={() => setShowScene(!showScene)}
+                  style={{
+                    width: "100%", marginBottom: 8, padding: "7px 10px", borderRadius: 8,
+                    border: `1px solid ${showScene ? "#6366f1" : "#334155"}`,
+                    background: showScene ? "rgba(99,102,241,0.18)" : "transparent",
+                    color: showScene ? "#c7d2fe" : "#a5b4fc",
+                    fontSize: 11, fontWeight: 700, cursor: "pointer",
+                    display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+                  }}
+                >
+                  <span>&#127752;</span>
+                  {showScene ? "Hide scenes" : "Scenes — rainbow, palettes, teams…"}
+                </button>
+              )}
+              {showScene && segCount > 1 && (
+                <LightScenePanel
+                  light={light} segCount={segCount}
+                  segmentColors={segmentColors} segmentInfo={segmentInfo}
+                  nicknames={nicknames} roomName={roomName} favorites={favorites}
+                  onClose={() => setShowScene(false)}
+                  onApplied={onSegmentStateRefresh}
+                />
               )}
               <div style={{ fontSize: 10, color: "#64748b", marginBottom: 6 }}>
                 Tap a segment to edit, then pick a color below

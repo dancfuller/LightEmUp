@@ -156,6 +156,11 @@ backend/
                           # PALETTE_CATEGORIES, the 160 curated palettes. Never hand-edit;
                           # edit backend/palette_library.json and regenerate.
       color-mode.js       # Room color tool — palette/gradient/beacon/custom/teams/ncaa/flags + apply pipeline
+      light-scene.js      # LightScenePanel — the same libraries (rainbow/palette/teams/
+                          # flags/shades/beacon) applied to ONE segmented light, from its
+                          # card. 1D maths (segment index IS position), applied through a
+                          # `scope`d room-apply. Loads after color-mode.js: reuses its pure
+                          # helpers from the shared scope
       location-data.js    # GENERATED (tools/build-location-data.py) — ZIP3 + world city
                           # coordinates for offline location entry. Never hand-edit.
       schedules.js        # SchedulesTab (time-based automation, incl. the random-palette
@@ -319,6 +324,10 @@ All endpoints are under `/api/`. Key groups:
 - `/api/scenes/lightning/*` — lightning storm scene start/stop/settings
 - `/api/scenes/room-apply` — backend-driven room color-scene apply (staggered in a
   background task so the browser can close); `/cancel` to stop. Progress via SSE.
+  **Optional `scope` (v3.34.0)** narrows it to one device: it becomes the task key and
+  the SSE channel, so a scene painted on one hexa doesn't cancel its room's scene, no
+  room UI reports itself as applying, and nothing is written to "Now showing" (one
+  light isn't the room). Absent = a whole-room apply, which is every other caller
 - `/api/govee/segment-*` — per-segment mode and count config (the `segment-mode` one is
   the **lightning** scene's switch, not the colour tool's)
 - `/api/govee/scene-address` — per-device "do room scenes paint this as segments or as

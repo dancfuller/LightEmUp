@@ -81,6 +81,10 @@
        (the palette picker) AND schedules.js (the random-palette action). -->
   <script type="text/babel" src="js/palette-library.js"></script>
   <script type="text/babel" src="js/color-mode.js"></script>
+  <!-- After color-mode: reuses its pure helpers (orderPaletteForCycle, presetColors,
+       PresetPicker) from the shared scope. LightCard renders it, and light-card.js
+       loads earlier — that's fine, the reference resolves at render time. -->
+  <script type="text/babel" src="js/light-scene.js"></script>
   <script type="text/babel" src="js/location-data.js"></script>
   <script type="text/babel" src="js/schedules.js"></script>
   <script type="text/babel" src="js/segment-reset-debug.js"></script>

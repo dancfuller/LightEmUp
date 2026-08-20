@@ -310,7 +310,11 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
   useEffect(() => {
     const onProgress = (e) => {
       const d = e.detail || {};
-      if (d.room !== name) return;
+      // Filter on SCOPE, not room (v3.34.0). A scene painted on a single hexa
+      // from its light card carries this room's name for context but is scoped
+      // to the device — the ROOM isn't applying, and saying so would replace an
+      // accurate "Now showing" with a spinner for 13 seconds.
+      if ((d.scope || d.room) !== name) return;
       setApplying(d.active !== false && d.phase !== "done" && d.phase !== "canceled");
     };
     window.addEventListener("lightemup-scene-apply", onProgress);

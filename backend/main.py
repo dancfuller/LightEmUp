@@ -3594,10 +3594,17 @@ class SceneApplyRequest(BaseModel):
     # room was changed by a schedule rather than by someone in the app.
     source: Optional[str] = None
     source_detail: Optional[str] = None
+    # Narrows this apply to a slice of the room — currently one device, from the
+    # light card's scene panel (v3.34.0). It is the TASK KEY and the SSE channel,
+    # so a hexa scene doesn't cancel the room's scene (one task per room would
+    # make them fight) and no room UI reports itself as applying. Absent = a
+    # whole-room apply, which is every pre-v3.34.0 caller and the scheduler.
+    scope: Optional[str] = None
 
 
 class SceneCancelRequest(BaseModel):
     room: str
+    scope: Optional[str] = None
 
 
 # room name → running apply task. One scene per room; a new apply cancels the
@@ -3605,13 +3612,17 @@ class SceneCancelRequest(BaseModel):
 _scene_tasks: "dict[str, asyncio.Task]" = {}
 
 
-def _scene_emit(room: str, **fields):
+def _scene_emit(scope: str, room: str, **fields):
     # scene_apply events bypass the per-run publish suppression (by type).
-    publish_event("scene_apply", room=room, **fields)
+    # `scope` is the CHANNEL (a room name, or a device key for a one-light
+    # apply); `room` rides along for context. Clients must filter on scope, or a
+    # scene painted on one hexa would put its whole room into "Applying…".
+    publish_event("scene_apply", scope=scope, room=room, **fields)
 
 
 async def _run_scene_apply(req: SceneApplyRequest):
     room = req.room
+    scope = req.scope or req.room
     # Suppress the noisy per-call device events for this task's context; we emit
     # one "config" refresh at the end instead.
     _suppress_publish.set(True)
@@ -3635,13 +3646,13 @@ async def _run_scene_apply(req: SceneApplyRequest):
         nonlocal done
         async with prog_lock:
             done += 1
-            _scene_emit(room, phase=phase, total=total, done=done, label=label, active=True)
+            _scene_emit(scope, room, phase=phase, total=total, done=done, label=label, active=True)
 
     try:
         # ── Phase 1: fast whole-device base color (parallel LAN) ──
         if req.base_seeds:
             done = 0
-            _scene_emit(room, phase="resetting", total=len(req.base_seeds), done=0,
+            _scene_emit(scope, room, phase="resetting", total=len(req.base_seeds), done=0,
                         label="Setting base color…", active=True, end_at=end_at_ms)
 
             async def seed(s: SceneBaseSeed):
@@ -3660,7 +3671,7 @@ async def _run_scene_apply(req: SceneApplyRequest):
         # ── Phase 2: hue + govee whole + razer + cloud segments ──
         done = 0
         hue_expect = {}   # filled by do_hue; recorded for later divergence checks
-        _scene_emit(room, phase="applying", total=apply_total, done=0, active=True, end_at=end_at_ms)
+        _scene_emit(scope, room, phase="applying", total=apply_total, done=0, active=True, end_at=end_at_ms)
 
         async def do_hue():
             sent = {}
@@ -3728,6 +3739,18 @@ async def _run_scene_apply(req: SceneApplyRequest):
 
         await asyncio.gather(do_hue(), do_govee_whole(), do_razer(), do_cloud())
 
+        # A device-scoped apply records NOTHING (v3.34.0). "Now showing" is a
+        # whole-room claim, and one hexa going rainbow doesn't make the room
+        # rainbow — stamping the room with this look would overwrite an accurate
+        # record with a wrong one, and "Set here" would then replay a plan that
+        # only ever touched one light. This matches every other single-device
+        # path (picking a colour on a light card doesn't touch the room record
+        # either); the cost is that the room's strip is now slightly stale,
+        # which it already was in that case.
+        if req.scope:
+            _scene_emit(scope, room, phase="done", total=apply_total,
+                        done=apply_total, label="", active=False)
+            return
         # Record only on COMPLETION — a cancelled apply left the room half-set, so
         # claiming it's "now showing" that look would be a lie.
         record_room_applied(
@@ -3745,23 +3768,28 @@ async def _run_scene_apply(req: SceneApplyRequest):
         # that the expectation is stored, which pins each colour to whatever the
         # bridge settled on (and re-checks the lights while it's there).
         schedule_hue_verify(hue_expect)
-        _scene_emit(room, phase="done", total=apply_total, done=apply_total, label="", active=False)
+        _scene_emit(scope, room, phase="done", total=apply_total, done=apply_total, label="", active=False)
     except asyncio.CancelledError:
-        _scene_emit(room, phase="canceled", active=False, label="")
+        _scene_emit(scope, room, phase="canceled", active=False, label="")
         raise
     finally:
         # Re-enable events and emit one refresh so all sessions resync once.
         _suppress_publish.set(False)
         publish_event("config")
-        _scene_tasks.pop(room, None)
+        _scene_tasks.pop(scope, None)
 
 
 @app.post("/api/scenes/room-apply")
 async def scene_room_apply(req: SceneApplyRequest):
     """Apply a fully-resolved room scene server-side. Returns immediately; the
     lights fill in via a background task, so the browser can be closed right
-    after pressing Apply."""
-    existing = _scene_tasks.get(req.room)
+    after pressing Apply.
+
+    `scope` narrows it to one device (the light card's scene panel). It keys the
+    task, so painting a hexa no longer cancels its ROOM's in-flight scene — one
+    task per room would make the two fight over devices that don't overlap."""
+    scope = req.scope or req.room
+    existing = _scene_tasks.get(scope)
     if existing and not existing.done():
         existing.cancel()
         try:
@@ -3769,17 +3797,18 @@ async def scene_room_apply(req: SceneApplyRequest):
         except BaseException:
             pass
     task = asyncio.create_task(_run_scene_apply(req))
-    _scene_tasks[req.room] = task
-    return {"started": True, "room": req.room}
+    _scene_tasks[scope] = task
+    return {"started": True, "room": req.room, "scope": scope}
 
 
 @app.post("/api/scenes/room-apply/cancel")
 async def scene_room_apply_cancel(req: SceneCancelRequest):
-    task = _scene_tasks.get(req.room)
+    scope = req.scope or req.room
+    task = _scene_tasks.get(scope)
     if task and not task.done():
         task.cancel()
-        return {"canceled": True, "room": req.room}
-    return {"canceled": False, "room": req.room}
+        return {"canceled": True, "room": req.room, "scope": scope}
+    return {"canceled": False, "room": req.room, "scope": scope}
 
 
 class GoveeSegmentsBrightnessRequest(BaseModel):
