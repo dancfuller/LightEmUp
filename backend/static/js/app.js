@@ -316,6 +316,11 @@ function App() {
   const [versionInfo, setVersionInfo] = useState(null);
   // Favorites live in backend config (loaded in loadAll); [] until then.
   const [favoriteColors, setFavoriteColors] = useState([]);
+  // Favourite LIGHTS — device keys pinned to the strip at the top of Rooms and
+  // All Lights. Ordered: the array order is the render order, so starring
+  // appends rather than sorting. Distinct from favoriteColors above; the two
+  // are unrelated despite the shared word.
+  const [favoriteLights, setFavoriteLights] = useState([]);
   const [nicknames, setNicknames] = useState({});
   const [refreshing, setRefreshing] = useState(false);
   const [lightningActiveRooms, setLightningActiveRooms] = useState([]);
@@ -390,6 +395,20 @@ function App() {
     setFavoriteColors(newFavs);  // optimistic; backend is the source of truth
     api("/favorites", { method: "POST", body: JSON.stringify({ favorites: newFavs }) })
       .catch(e => console.warn("Failed to save favorites:", e));
+  };
+
+  // Star / unstar one light. Toggling APPENDS to the end rather than inserting
+  // by device order, so the strip reads in the order they were pinned — which is
+  // roughly "most wanted first" for whoever built the list.
+  const toggleFavoriteLight = (deviceKey) => {
+    setFavoriteLights(prev => {
+      const next = prev.includes(deviceKey)
+        ? prev.filter(k => k !== deviceKey)
+        : [...prev, deviceKey];
+      api("/favorite-lights", { method: "POST", body: JSON.stringify({ favorite_lights: next }) })
+        .catch(e => console.warn("Failed to save favourite lights:", e));
+      return next;   // optimistic; backend is the source of truth
+    });
   };
 
   const updateNickname = async (deviceKey, nickname) => {
@@ -500,6 +519,7 @@ function App() {
       setSegmentFillModes(cfg.segment_fill_modes || {});
       setSceneAddress(cfg.govee_scene_address || {});
       if (Array.isArray(cfg.favorites)) setFavoriteColors(cfg.favorites);
+      if (Array.isArray(cfg.favorite_lights)) setFavoriteLights(cfg.favorite_lights);
       setPickerStyle(cfg.ui_prefs?.color_picker_style === "wheel" ? "wheel" : "huebar");
       if (cfg.ui_prefs?.min_saturation_enabled !== undefined) {
         setMinSatEnabled(!!cfg.ui_prefs.min_saturation_enabled);
@@ -1117,6 +1137,69 @@ function App() {
   const unassignedHue = hueLights.filter(l => !Object.values(rooms).some(r => (r.hue_light_ids || []).includes(l.id)));
   const unassignedGovee = goveeDevices.filter(d => !Object.values(rooms).some(r => (r.govee_devices || []).includes(goveeSlug(d))));
 
+  // device_key → room name, for the room caption on a card.
+  const deviceRoomMap = {};
+  Object.entries(rooms).forEach(([rn, room]) => {
+    (room.hue_light_ids || []).forEach(id => { deviceRoomMap[`hue:${id}`] = rn; });
+    (room.govee_devices || []).forEach(slug => { deviceRoomMap[`govee:${slug}`] = rn; });
+  });
+
+  // ONE place that assembles a LightCard's props (v3.33.0). All Lights and the
+  // Favourites strip both render through it, so an expanded favourite behaves
+  // identically to the same light in the grid — there's no second prop list to
+  // fall behind (the Govee segment context below is exactly the sort of thing a
+  // copy would miss).
+  const renderLightCard = (light) => {
+    if (light.type === "hue") {
+      const key = `hue:${light.id}`;
+      return (
+        <LightCard key={`hue-${light.id}`} light={light} onControl={controlHueLight}
+          favorites={favoriteColors} onFavoritesChange={updateFavorites}
+          nicknames={nicknames} onNicknameChange={updateNickname}
+          onRecheck={recheckDevice}
+          isFavorite={favoriteLights.includes(key)}
+          onToggleFavorite={() => toggleFavoriteLight(key)}
+          roomName={deviceRoomMap[key]} />
+      );
+    }
+    // Pass the same segment context the room view uses, so segmented (hexa)
+    // lights stay in segment mode here. Without it the card falls back to
+    // whole-light brightness, which can't take on a device showing segments
+    // (needs a power-cycle) and wipes the applied palette. With it, brightness
+    // scales segments in place.
+    const devKey = `govee:${goveeSlug(light)}`;
+    const persistedEntry = light.ip && segmentState ? segmentState[light.ip] : null;
+    const segColors = {};
+    if (persistedEntry?.colors) {
+      Object.entries(persistedEntry.colors).forEach(([k, v]) => { segColors[parseInt(k)] = v; });
+    }
+    return (
+      <LightCard key={`govee-${light.ip}`} light={light}
+        onControl={(l, cmd) => {
+          controlGoveeDevice(l, cmd);
+          if (refreshSegmentState && (cmd.r !== undefined || cmd.on === false)) {
+            setTimeout(refreshSegmentState, 200);
+          }
+        }}
+        favorites={favoriteColors} onFavoritesChange={updateFavorites}
+        nicknames={nicknames} onNicknameChange={updateNickname}
+        onRecheck={recheckDevice}
+        isFavorite={favoriteLights.includes(devKey)}
+        onToggleFavorite={() => toggleFavoriteLight(devKey)}
+        roomName={deviceRoomMap[devKey]}
+        segmentInfo={segmentInfo}
+        segmentColors={Object.keys(segColors).length > 0 ? segColors : null}
+        segmentBrightness={persistedEntry?.brightness}
+        onSegmentStateRefresh={refreshSegmentState}
+        controlMode={deviceModes?.[devKey]}
+        onControlModeChange={(m) => updateDeviceMode && updateDeviceMode(devKey, m)}
+        segmentFillMode={segmentFillModes?.[devKey]}
+        onSegmentFillModeChange={(m) => updateSegmentFillMode && updateSegmentFillMode(devKey, m)}
+        onSegmentCountChange={updateSegmentCount}
+        ctCorrection={ctCalibrated} />
+    );
+  };
+
   return (
     <PickerStyleContext.Provider value={pickerStyle}>
     <div style={{
@@ -1314,6 +1397,18 @@ function App() {
 
         {activeTab === "rooms" && (
           <>
+            {/* Pinned lights come FIRST — above the add-room field and every room
+                card — because reaching them without scrolling is the entire
+                point. No empty hint here: the star lives on a LightCard, which
+                on this tab is inside a collapsed room drawer. */}
+            <FavoriteLightsBar
+              favoriteKeys={favoriteLights}
+              hueLights={hueLights} goveeDevices={goveeDevices}
+              nicknames={nicknames} deviceRoomMap={deviceRoomMap}
+              onControlHue={controlHueLight} onControlGovee={controlGoveeDevice}
+              onToggleFavorite={toggleFavoriteLight}
+              renderCard={renderLightCard}
+            />
             {/* Add-room control — top of the Rooms tab so a new room can be
                 created without detouring through Assign Rooms. */}
             <div style={{
@@ -1415,60 +1510,23 @@ function App() {
           </>
         )}
 
-        {activeTab === "all lights" && (() => {
-          const deviceRoomMap = {};
-          Object.entries(rooms).forEach(([rn, room]) => {
-            (room.hue_light_ids || []).forEach(id => { deviceRoomMap[`hue:${id}`] = rn; });
-            (room.govee_devices || []).forEach(slug => { deviceRoomMap[`govee:${slug}`] = rn; });
-          });
-          return (
+        {activeTab === "all lights" && (
+          <>
+            <FavoriteLightsBar
+              favoriteKeys={favoriteLights}
+              hueLights={hueLights} goveeDevices={goveeDevices}
+              nicknames={nicknames} deviceRoomMap={deviceRoomMap}
+              onControlHue={controlHueLight} onControlGovee={controlGoveeDevice}
+              onToggleFavorite={toggleFavoriteLight}
+              renderCard={renderLightCard}
+              showEmptyHint={true}
+            />
             <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fill, minmax(260px, 1fr))", gap: 12 }}>
-              {hueLights.map(light => (
-                <LightCard key={`hue-${light.id}`} light={light} onControl={controlHueLight}
-                  favorites={favoriteColors} onFavoritesChange={updateFavorites}
-                  nicknames={nicknames} onNicknameChange={updateNickname}
-                  onRecheck={recheckDevice}
-                  roomName={deviceRoomMap[`hue:${light.id}`]} />
-              ))}
-              {goveeDevices.map(device => {
-                // Pass the same segment context the room view uses, so segmented
-                // (hexa) lights stay in segment mode here. Without it the card
-                // falls back to whole-light brightness, which can't take on a
-                // device showing segments (needs a power-cycle) and wipes the
-                // applied palette. With it, brightness scales segments in place.
-                const devKey = `govee:${goveeSlug(device)}`;
-                const persistedEntry = device.ip && segmentState ? segmentState[device.ip] : null;
-                const segColors = {};
-                if (persistedEntry?.colors) {
-                  Object.entries(persistedEntry.colors).forEach(([k, v]) => { segColors[parseInt(k)] = v; });
-                }
-                return (
-                  <LightCard key={`govee-${device.ip}`} light={device}
-                    onControl={(l, cmd) => {
-                      controlGoveeDevice(l, cmd);
-                      if (refreshSegmentState && (cmd.r !== undefined || cmd.on === false)) {
-                        setTimeout(refreshSegmentState, 200);
-                      }
-                    }}
-                    favorites={favoriteColors} onFavoritesChange={updateFavorites}
-                    nicknames={nicknames} onNicknameChange={updateNickname}
-                    onRecheck={recheckDevice}
-                    roomName={deviceRoomMap[devKey]}
-                    segmentInfo={segmentInfo}
-                    segmentColors={Object.keys(segColors).length > 0 ? segColors : null}
-                    segmentBrightness={persistedEntry?.brightness}
-                    onSegmentStateRefresh={refreshSegmentState}
-                    controlMode={deviceModes?.[devKey]}
-                    onControlModeChange={(m) => updateDeviceMode && updateDeviceMode(devKey, m)}
-                    segmentFillMode={segmentFillModes?.[devKey]}
-                    onSegmentFillModeChange={(m) => updateSegmentFillMode && updateSegmentFillMode(devKey, m)}
-                    onSegmentCountChange={updateSegmentCount}
-                    ctCorrection={ctCalibrated} />
-                );
-              })}
+              {hueLights.map(renderLightCard)}
+              {goveeDevices.map(renderLightCard)}
             </div>
-          );
-        })()}
+          </>
+        )}
 
         {activeTab === "schedules" && (
           <SchedulesTab

@@ -7,8 +7,8 @@ authoritative (utils first, app last). See root `CLAUDE.md` for the mobile/respo
 rules that apply to every UI change. **Keep this file current when behavior changes.**
 
 ## Load order (from index.html)
-utils → audio → components-shared → light-card → lightning-panel → room-map →
-palette-data → palette-library → color-mode → location-data → schedules →
+utils → audio → components-shared → light-card → favorite-lights → lightning-panel →
+room-map → palette-data → palette-library → color-mode → location-data → schedules →
 segment-reset-debug → room-section → zones → room-assignment → setup-wizard →
 server-logs → ct-calibration → backup-restore → app
 
@@ -196,6 +196,36 @@ unchanged, because blur fires on every dismissal.
   (`SettingsDeviceRow`) keeps its Rename button; both hit the same `POST /api/nicknames`.
 - This matches room rename in `room-assignment.js`, so the app has one rule: **click the
   name (or its pencil) to rename it.**
+
+## favorite-lights.js — the pinned Favourites strip (v3.33.0)
+Star a light and it's pinned to the top of **both** Rooms and All Lights, on screen
+before any scrolling happens. Config key `favorite_lights` (an ORDERED list of device
+keys — array order is render order, so starring appends and nothing sorts it).
+- **The problem is distance, not discoverability.** With 26 devices, All Lights renders
+  13 Hue cards then 13 Govee ones — single-column on a phone — so the three accent
+  lights someone uses nightly sit past twenty they don't. The Rooms tab buries the same
+  three inside a twelve-light room. Neither is fixable by tuning; the lights have to move.
+- **Rows are compact and carry NO slider** — name + room + power toggle. Six favourites
+  still fit above the fold, and there's no drag surface to brush past (see the
+  `useThrottledControl` note above for why that matters on this exact list). Tapping the
+  name expands the full card underneath.
+- **The expanded card comes from `renderLightCard` in app.js** — the same function All
+  Lights maps over. That's deliberate: the Govee segment context (`segmentColors`,
+  `controlMode`, `segmentFillMode`, …) is a long prop list, and a hand-copied second one
+  would fall behind and quietly give the hexa whole-light brightness. **New LightCard
+  props go in `renderLightCard`, not at a call site.**
+- **`All on` / `All off` over the strip is the point of it being a group**, not just a
+  shortcut list: "turn on the hexa, globe and rope" is one press.
+- **Deliberately a FLAT list, not named groups.** Starring needs nothing named or
+  managed, and in practice the list *is* the group ("the lights I reach for"). Named
+  groups stay a clean superset if several sets are ever wanted. Note `fixtures` was
+  considered and rejected for this: fixture membership feeds scene adjacency (mates are
+  forced distinct and borrow each other's spatial edges), so overloading it would
+  silently change how every room scene colours those lights.
+- The empty-state hint renders **only on All Lights** (`showEmptyHint`), because that's
+  the one tab where the star it names is actually visible — on Rooms it's inside a
+  collapsed room drawer. An unresolvable key renders a muted row with an **Unpin**
+  button rather than vanishing.
 
 ## color-mode.js — the room color tool (most complex file)
 Assigns colors/temperatures across a room's devices and applies them.

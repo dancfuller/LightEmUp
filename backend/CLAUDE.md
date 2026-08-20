@@ -426,6 +426,13 @@ not in the browser (v2.14.0):
 - Favorite colors live in config (`GET /api/config` → `favorites`, default
   `DEFAULT_FAVORITES`; `POST /api/favorites` to save) instead of browser
   localStorage, so they sync across sessions/devices.
+- **Favourite LIGHTS are a separate key (v3.33.0):** `favorite_lights` is an ORDERED
+  list of device keys pinned to the strip at the top of Rooms and All Lights.
+  `GET/POST /api/favorite-lights` replaces the whole list (the client owns the order —
+  **never sort it here**, the array order is the render order) and de-dupes. It's
+  device-keyed, not room-keyed, so `rename_room`/`delete_room` don't touch it — but
+  `_purge_hue_light` does, or a removed phantom would leave a dead row in the most
+  visible place in the app.
 - `GET /api/config` also returns `device_modes`, `segment_fill_modes`, `ui_prefs`
   (the frontend reads them on load). `room_color_state` persists the **full** per-mode
   color-tool selection so a fresh UI session rehydrates *every* scene mode, not just

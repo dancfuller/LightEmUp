@@ -1,6 +1,6 @@
 // ─── Light Card Component ───────────────────────────────────────────────────
 
-function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, onNicknameChange, roomName, segmentColors, segmentInfo, segmentBrightness, onSegmentStateRefresh, controlMode, onControlModeChange, segmentFillMode, onSegmentFillModeChange, onSegmentCountChange, ctCorrection, onRecheck }) {
+function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, onNicknameChange, roomName, segmentColors, segmentInfo, segmentBrightness, onSegmentStateRefresh, controlMode, onControlModeChange, segmentFillMode, onSegmentFillModeChange, onSegmentCountChange, ctCorrection, onRecheck, isFavorite, onToggleFavorite }) {
   const isMobile = useIsMobile();
   const deviceBrightness = light.type === "hue"
     ? Math.round((light.state?.brightness || 0) / 254 * 100)
@@ -167,6 +167,23 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
             }}>{displayName}</span>
             <span style={{ flexShrink: 0, fontSize: 11, color: "#475569", lineHeight: 1 }}>&#x270E;</span>
           </button>
+        )}
+        {/* Star = pin this light to the Favourites strip at the top of Rooms and
+            All Lights (v3.33.0). It sits ON the card because that's where you
+            are when you notice you keep hunting for this light — the same
+            idiom as click-the-name-to-rename. Optional, so call sites that
+            don't manage favourites render no star at all. */}
+        {onToggleFavorite && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onToggleFavorite(); }}
+            title={isFavorite ? "Remove from Favourites" : "Pin to Favourites (top of the page)"}
+            aria-pressed={!!isFavorite}
+            style={{
+              flexShrink: 0, background: "none", border: "none", padding: "0 2px",
+              cursor: "pointer", lineHeight: 1,
+              fontSize: 15, color: isFavorite ? "#fbbf24" : "#475569",
+            }}
+          >{isFavorite ? "★" : "☆"}</button>
         )}
         {isCalibrated && (
           <span title="White-balance calibrated" style={{

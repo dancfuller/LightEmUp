@@ -150,6 +150,13 @@ DEFAULT_CONFIG = {
     "favorites": [],      # saved colours [[r,g,b],…]. Empty is falsy on purpose:
                           # /api/config falls back to DEFAULT_FAVORITES (defined much
                           # further down, so it can't be referenced from here).
+    "favorite_lights": [],  # device keys ("hue:12" / "govee:<slug>") pinned to the
+                            # Favourites strip at the top of Rooms and All Lights
+                            # (v3.33.0). ORDER IS THE USER'S — it's the order the
+                            # strip renders in, so append on star and never sort.
+                            # Deliberately NOT a room-level or zone-level thing:
+                            # the point is reaching three specific lights out of 26
+                            # without scrolling past the other 23.
     "lightning_scenes": {},      # room name → saved storm settings
     "govee_segment_counts": {},  # govee slug → real panel count (a 7-panel Hexa, not
                                  # the SKU's 15). User ground truth; beats the SKU table.
@@ -3036,6 +3043,14 @@ def _purge_hue_light(light_id: str) -> list[str]:
     if (config.get("hue_missing_since") or {}).pop(lid, None) is not None:
         touched.append("hue_missing_since")
 
+    # A pinned favourite outlives the light itself otherwise, leaving a dead row
+    # at the very top of the app — the most visible place a stale entry can sit.
+    favs = config.get("favorite_lights") or []
+    kept_favs = [k for k in favs if k != key]
+    if len(kept_favs) != len(favs):
+        config["favorite_lights"] = kept_favs
+        touched.append("favorite_lights")
+
     for layout_name, layout in (config.get("room_layouts", {}) or {}).items():
         for sub in ("devices", "segments"):
             if (layout.get(sub) or {}).pop(key, None) is not None:
@@ -4234,6 +4249,33 @@ async def set_favorites(req: FavoritesRequest):
     return {"success": True}
 
 
+class FavoriteLightsRequest(BaseModel):
+    """Whole-list replace, like /api/favorites. The list is ORDERED — it's the
+    render order of the Favourites strip — so the client sends the order it
+    wants rather than a star/unstar delta the server would have to re-sort."""
+    favorite_lights: list[str]
+
+
+@app.get("/api/favorite-lights")
+async def get_favorite_lights():
+    return {"favorite_lights": config.get("favorite_lights", [])}
+
+
+@app.post("/api/favorite-lights")
+async def set_favorite_lights(req: FavoriteLightsRequest):
+    # De-dupe while preserving order: a double-tap on the star shouldn't be able
+    # to pin the same light twice, and React keys would collide if it did.
+    seen, ordered = set(), []
+    for key in req.favorite_lights:
+        if key and key not in seen:
+            seen.add(key)
+            ordered.append(key)
+    config["favorite_lights"] = ordered
+    save_config(config)
+    publish_event("config")
+    return {"success": True, "favorite_lights": ordered}
+
+
 @app.get("/api/config")
 async def get_config():
     return {
@@ -4258,6 +4300,7 @@ async def get_config():
         "location": config.get("location", {}),
         "zones": config.get("zones", {}),
         "favorites": config.get("favorites") or DEFAULT_FAVORITES,
+        "favorite_lights": config.get("favorite_lights", []),
     }
 
 
@@ -4341,6 +4384,7 @@ _SETTING_LABELS = {
     "zones": "Zones",
     "fixtures": "Fixtures",
     "favorites": "Favourite colours",
+    "favorite_lights": "Favourite lights",
     "location": "Location (for sunrise/sunset)",
     "power_recovery": "Power-outage recovery",
     "lightning_scenes": "Saved lightning scenes",
@@ -4361,7 +4405,7 @@ _SETTING_LABELS = {
 }
 
 _SETTING_ORDER = ["rooms", "nicknames", "room_layouts", "schedules", "zones",
-                  "fixtures", "location", "favorites"]
+                  "fixtures", "location", "favorites", "favorite_lights"]
 
 
 def _render_setting(key: str, value):

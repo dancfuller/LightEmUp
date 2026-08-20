@@ -144,6 +144,11 @@ backend/
       audio.js            # Thunder synth (WebAudio), fart sounds (preloaded MP3s)
       components-shared.js # ColorPicker, ColorWheel, Slider, ColorTempSlider, StatusBadge, RgbSliderInput
       light-card.js       # LightCard — per-device control (toggle, brightness, color, nickname)
+      favorite-lights.js  # FavoriteLightsBar — the starred-lights strip pinned to the top
+                          # of Rooms and All Lights, so three lights out of 26 are reachable
+                          # without scrolling. Compact rows + set-level All on/off; a row
+                          # expands into app.js's renderLightCard (the SAME card All Lights
+                          # shows — don't build a second prop list)
       lightning-panel.js  # LightningPanel — storm scene UI with presets and SSE sync
       room-map.js         # RoomMap — interactive SVG floor plan & linear layout editor
       palette-data.js     # Static color datasets for Teams/NCAA/Flags modes (PRESET_TEAMS/NCAA/FLAGS)
@@ -285,6 +290,10 @@ All endpoints are under `/api/`. Key groups:
 - `/api/nicknames` — device nickname CRUD
 - `/api/identify` — flash a device to locate it (Hue native `alert`; Govee on/off blink then restore)
 - `/api/favorites` — favorite colors (stored in config, synced across sessions)
+- `/api/favorite-lights` — GET/POST the ordered list of device keys pinned to the
+  Favourites strip (config key `favorite_lights`). Whole-list replace; the array order
+  IS the render order, so never sort it server-side. Unrelated to `/api/favorites`
+  despite the name — one is colours, the other is lights
 - `/api/power-recovery` — how a fresh boot after a power outage treats the lights
   (resume last state / stay off overnight); applied on the Pi's next boot only
 - `/api/schedules` — time-based schedules CRUD (GET list, POST upsert-by-id,
