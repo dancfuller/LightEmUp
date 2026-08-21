@@ -26,6 +26,14 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
   const [selectedSegment, setSelectedSegment] = useState(0);
   const [showScene, setShowScene] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
+  // Scene-apply progress for THIS device, so the card can report it in its own
+  // header — the mirror of the room header's "Applying…" strip. A segmented
+  // apply takes 13+ seconds and the panel's footer is a long way down a tall
+  // card (further still on a phone), so the status has to exist somewhere you
+  // can see while the panel is scrolled past or closed. Hook is unconditional
+  // per the rules of hooks; only segmented Govee devices ever render it.
+  const sceneScopeKey = light.type === "hue" ? null : `govee:${goveeSlug(light)}`;
+  const [sceneProgress] = useSceneProgress(sceneScopeKey);
   // Color vs tunable-white control. Default "color" (color-first UX).
   const [colorMode, setColorMode] = useState("color");
   // Seed the white slider from the device's reported CT when available.
@@ -230,6 +238,23 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
           }} />
         </button>
       </div>
+
+      {/* Live scene status, directly under the name. Deliberately OUTSIDE the
+          scene panel and outside the segments gate — it's the one thing about
+          this card that changes on its own, and it stays useful when the panel
+          is shut. Same intent as the room header's "Applying…" strip. */}
+      {sceneProgress.active && (
+        <div style={{
+          marginBottom: 10, padding: "7px 9px", borderRadius: 8,
+          background: "rgba(99,102,241,0.12)", border: "1px solid #4f5d7a",
+        }}>
+          <div style={{
+            fontSize: 9, fontWeight: 800, color: "#a5b4fc", letterSpacing: 0.5,
+            textTransform: "uppercase", marginBottom: 4,
+          }}>Applying scene</div>
+          <SceneProgressBar progress={sceneProgress} compact />
+        </div>
+      )}
 
       {/* Whole / Segments mode toggle — outside the isOn gate so the user
           can switch modes while the light is off (e.g. set up segments

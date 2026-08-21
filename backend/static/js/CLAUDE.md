@@ -52,6 +52,20 @@ A new file must be added to index.html in the correct slot (after its dependenci
   every SKU and a `size.max` that's a per-request batch limit, not the panel count (a
   2-pack reported 15, a 7-panel Hexa reported 21). Neither reflects reality; manual is the
   only reliable source.
+- **`useSceneProgress(scope)` + `<SceneProgressBar>` (v3.35.0)** — one listener for the
+  `lightemup-scene-apply` window event, filtered by **scope** (a room name, or a device
+  key for a one-light scene). Returns `[state, begin, clear]`; `begin(total, endAt)` lets
+  a caller show progress the instant it presses Apply, because the backend spends ~2.6s
+  on the base seed + settle hold before the first segment event lands and a silent panel
+  reads as a dead button.
+  - **It's a hook because three surfaces need the same answer** — the scene panel, the
+    light card's header, and the favorites row. A segmented apply runs 13+ seconds, so
+    "is this still working?" has to be answerable from wherever the user is looking.
+  - **Always pass the backend's `label` through.** It names what is being set *right
+    now* ("Hex Lights · 2 panels"). The first per-light implementation hand-rolled its
+    own listener and dropped it, leaving a bare count buried at the bottom of an open
+    panel — which is why the per-light status was reported as missing entirely while the
+    room's looked fine. That's the drift this hook exists to prevent.
 - `useThrottledControl(value, onCommit, ms=180)` — instant local thumb/label +
   trailing-throttled commit + drag guard so external updates don't yank the thumb back.
   Every slider that drives a light routes through it (wired into the shared Slider /
@@ -197,10 +211,21 @@ unchanged, because blur fires on every dismissal.
 - This matches room rename in `room-assignment.js`, so the app has one rule: **click the
   name (or its pencil) to rename it.**
 
-## favorite-lights.js — the pinned Favorites strip (v3.33.0)
-Star a light and it's pinned to the top of **both** Rooms and All Lights, on screen
-before any scrolling happens. Config key `favorite_lights` (an ORDERED list of device
-keys — array order is render order, so starring appends and nothing sorts it).
+## favorite-lights.js — the pinned Favorites section (v3.33.0, promoted v3.35.0)
+Star a light and it's pinned to the top of the app, on screen before any scrolling
+happens. Config key `favorite_lights` (an ORDERED list of device keys — array order is
+render order, so starring appends and nothing sorts it).
+- **It is APP CHROME, not page content (v3.35.0).** It renders between the Live bar and
+  `<main>`, so it's on **every** tab. It shipped inside the Rooms and All Lights tabs,
+  which made it a sub-section of a page and meant it vanished the moment you went
+  anywhere else — while its entire reason to exist is being the shortest path to a few
+  specific lights. Same argument as the Live bar: a control you reach for constantly has
+  to be reachable from where you already are. `FavoriteBand` gives it a full-bleed band
+  (matching the Live bar's border) with the card constrained to `<main>`'s 1200px column,
+  so it still lines up with the page below.
+- **Each row reports scene progress** via `useSceneProgress` — a scene on the hexa runs
+  13+ seconds, and this strip is where that light is actually reached, so a silent row
+  would look inert mid-change.
 - **The problem is distance, not discoverability.** With 26 devices, All Lights renders
   13 Hue cards then 13 Govee ones — single-column on a phone — so the three accent
   lights someone uses nightly sit past twenty they don't. The Rooms tab buries the same
@@ -417,6 +442,14 @@ Teams / College / Flags / Last colors across that device's segments.
 - "Last colors" re-sends the stored `segment_state`, which survives restarts — the
   useful case being a device that was power-cycled, clearing its segments while the hub
   still remembers them.
+- **Status is reported in THREE places, deliberately (v3.35.0):** the panel footer (bar +
+  the backend's live label + countdown, replacing the Apply button), the **light card's
+  own header** ("Applying scene" + a compact bar), and the **favorites row**. The room
+  equivalent has always had this — the room header strip says "Applying…" whether or not
+  the Scenes panel is open — and the per-light version originally had progress only at
+  the bottom of an open panel, on a card tall enough that it's off-screen on a phone. For
+  a 13-second operation that reads as no feedback at all. All three go through
+  `useSceneProgress`, so there is one listener implementation, not three.
 
 ## schedules.js — Schedules tab + Settings Location card (v3.8.0)
 `SchedulesTab` (its own nav tab) lists schedules with a human trigger summary, a

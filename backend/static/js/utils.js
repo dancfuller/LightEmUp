@@ -90,6 +90,96 @@ const TAP_SLOP_PX = 6;
 // `touchAction: "pan-y"`. The two halves fix different gestures and BOTH are
 // needed: pan-y keeps a vertical swipe scrolling the page instead of being
 // captured by the slider, and the guard stops the stationary tap.
+// ─── Scene-apply progress, by scope (v3.35.0) ──────────────────────────────
+// The backend streams `scene_apply` SSE events and app.js re-broadcasts them as
+// a window CustomEvent. `scope` is the channel: a room name for a room scene, a
+// device key for a one-light scene (see the backend's SceneApplyRequest.scope).
+//
+// This is a HOOK rather than a snippet because three places need the same
+// answer — the scene panel, the light card's header, and (already) RoomSection —
+// and a segmented apply runs 13+ seconds, so "is this thing still working?" has
+// to be answerable from wherever the user happens to be looking. Two hand-rolled
+// copies of this listener would drift on exactly the fields that matter (`label`
+// was dropped by the first copy, which is what made the per-light status read as
+// missing entirely).
+function useSceneProgress(scope) {
+  const [state, setState] = useState({ active: false, phase: null, done: 0, total: 0, label: "", endAt: 0 });
+  useEffect(() => {
+    if (!scope) return;
+    const onProgress = (e) => {
+      const d = e.detail;
+      if (!d || d.scope !== scope) return;
+      setState(prev => {
+        if (d.active === false) {
+          return { ...prev, active: false, phase: d.phase || "done", label: "" };
+        }
+        return {
+          active: true,
+          phase: d.phase || prev.phase,
+          done: typeof d.done === "number" ? d.done : prev.done,
+          total: typeof d.total === "number" ? d.total : prev.total,
+          label: d.label !== undefined ? d.label : prev.label,
+          endAt: typeof d.end_at === "number" ? d.end_at : prev.endAt,
+        };
+      });
+    };
+    window.addEventListener("lightemup-scene-apply", onProgress);
+    return () => window.removeEventListener("lightemup-scene-apply", onProgress);
+  }, [scope]);
+  // Let a caller show progress the instant it presses Apply, before the first
+  // event arrives — a 2.6s silent gap at the start otherwise reads as nothing
+  // having happened.
+  const begin = useCallback((total, endAt) => {
+    setState({ active: true, phase: "applying", done: 0, total, label: "Starting…", endAt });
+  }, []);
+  const clear = useCallback(() => {
+    setState({ active: false, phase: null, done: 0, total: 0, label: "", endAt: 0 });
+  }, []);
+  return [state, begin, clear];
+}
+
+// A thin progress bar + countdown, shared by every surface that reports a scene
+// apply. Renders nothing when idle.
+function SceneProgressBar({ progress, compact }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!progress.active) return;
+    setNow(Date.now());
+    const id = setInterval(() => setNow(Date.now()), 250);
+    return () => clearInterval(id);
+  }, [progress.active]);
+  if (!progress.active) return null;
+  const pct = progress.total ? Math.min(100, Math.round(progress.done / progress.total * 100)) : 0;
+  const left = Math.max(0, Math.ceil((progress.endAt - now) / 1000));
+  return (
+    <div style={{ width: "100%" }}>
+      <div style={{
+        height: compact ? 3 : 5, borderRadius: 3, background: "#1e293b", overflow: "hidden",
+      }}>
+        <div style={{
+          width: `${pct}%`, height: "100%", background: "#6366f1",
+          transition: "width 0.3s ease",
+        }} />
+      </div>
+      <div style={{
+        display: "flex", gap: 6, alignItems: "baseline", flexWrap: "wrap",
+        marginTop: 4, fontSize: compact ? 10 : 11, color: "#94a3b8",
+      }}>
+        <span style={{ fontWeight: 700, color: "#c7d2fe" }}>
+          {progress.total ? `${progress.done}/${progress.total}` : "Working"}
+        </span>
+        {progress.label && (
+          <span style={{
+            minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+          }}>{progress.label}</span>
+        )}
+        <div style={{ flex: 1 }} />
+        {left > 0 && <span style={{ color: "#64748b" }}>~{left}s left</span>}
+      </div>
+    </div>
+  );
+}
+
 function useThrottledControl(value, onCommit, ms = 180) {
   const [local, setLocal] = useState(value);
   const dragging = useRef(false);

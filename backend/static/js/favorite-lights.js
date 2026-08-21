@@ -15,8 +15,35 @@
 // to name or manage, and in practice the list IS the group — "the lights I
 // reach for". Groups remain a clean superset if several sets are ever needed.
 
+// The strip renders as APP CHROME above <main>, not inside a page (v3.35.0), so
+// it owns its own full-bleed band: a horizontal rule of the same weight as the
+// Live bar above it, with the content constrained to <main>'s 1200px column so
+// the card still lines up with the page below rather than floating loose.
+function FavoriteBand({ children }) {
+  const isMobile = useIsMobile();
+  return (
+    <div style={{
+      padding: isMobile ? "10px 12px" : "14px 24px",
+      background: "rgba(2,6,23,0.35)",
+      borderBottom: "1px solid #1e293b",
+    }}>
+      <div style={{
+        maxWidth: 1200, margin: "0 auto",
+        padding: isMobile ? 10 : 14,
+        borderRadius: 14,
+        background: "linear-gradient(135deg, #1a2338 0%, #131c2e 100%)",
+        border: "1px solid #334155",
+      }}>{children}</div>
+    </div>
+  );
+}
+
 function FavoriteLightRow({ light, deviceKey, roomName, nicknames, expanded, onToggleExpand,
                             onControl, isMobile }) {
+  // A scene applied to this light takes 13+ seconds (Govee's cloud segment
+  // limit), and this strip is where someone actually reaches the hexa — so it
+  // has to report that, or the row looks inert while the light is mid-change.
+  const [sceneProgress] = useSceneProgress(light.type === "hue" ? null : deviceKey);
   const isOn = light.state?.on ?? false;
   const isReachable = light.state?.reachable ?? true;
   const nickname = nicknames?.[deviceKey] || "";
@@ -30,13 +57,13 @@ function FavoriteLightRow({ light, deviceKey, roomName, nicknames, expanded, onT
 
   return (
     <div style={{
-      display: "flex", alignItems: "center", gap: isMobile ? 8 : 10,
       padding: isMobile ? "8px 10px" : "8px 12px",
       borderRadius: 10,
       background: isOn ? "rgba(99,102,241,0.10)" : "rgba(15,23,42,0.6)",
-      border: `1px solid ${isOn ? "#3f4a6b" : "#1e293b"}`,
+      border: `1px solid ${sceneProgress.active ? "#6366f1" : isOn ? "#3f4a6b" : "#1e293b"}`,
       opacity: isReachable ? 1 : 0.55,
     }}>
+    <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 8 : 10 }}>
       <span style={{
         width: 10, height: 10, borderRadius: "50%", flexShrink: 0,
         background: isOn ? dotColor : "#1e293b",
@@ -84,6 +111,12 @@ function FavoriteLightRow({ light, deviceKey, roomName, nicknames, expanded, onT
         }} />
       </button>
     </div>
+    {sceneProgress.active && (
+      <div style={{ marginTop: 6 }}>
+        <SceneProgressBar progress={sceneProgress} compact />
+      </div>
+    )}
+    </div>
   );
 }
 
@@ -109,16 +142,18 @@ function FavoriteLightsBar({ favoriteKeys, hueLights, goveeDevices, nicknames, d
     // drawer would be worse than saying nothing.
     if (!showEmptyHint) return null;
     return (
-      <div style={{
-        display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
-        padding: isMobile ? "8px 10px" : "9px 14px", marginBottom: isMobile ? 12 : 16,
-        borderRadius: 10, border: "1px dashed #334155", background: "rgba(15,23,42,0.5)",
-        fontSize: isMobile ? 11 : 12, color: "#64748b",
-      }}>
-        <span style={{ color: "#475569", fontSize: 14 }}>&#9734;</span>
-        Tap the star on any light to pin it here — pinned lights sit at the top of
-        Rooms and All Lights, so you don't have to scroll to reach them.
-      </div>
+      <FavoriteBand>
+        <div style={{
+          display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
+          padding: isMobile ? "8px 10px" : "9px 14px",
+          borderRadius: 10, border: "1px dashed #334155", background: "rgba(15,23,42,0.5)",
+          fontSize: isMobile ? 11 : 12, color: "#64748b",
+        }}>
+          <span style={{ color: "#475569", fontSize: 14 }}>&#9734;</span>
+          Tap the star on any light to pin it here — pinned lights then sit at the top
+          of every tab, so you never have to scroll to reach them.
+        </div>
+      </FavoriteBand>
     );
   }
 
@@ -129,13 +164,7 @@ function FavoriteLightsBar({ favoriteKeys, hueLights, goveeDevices, nicknames, d
   const setAll = (on) => found.forEach(({ light }) => control(light, { on }));
 
   return (
-    <div style={{
-      marginBottom: isMobile ? 12 : 16,
-      padding: isMobile ? 10 : 14,
-      borderRadius: 14,
-      background: "linear-gradient(135deg, #1a2338 0%, #131c2e 100%)",
-      border: "1px solid #334155",
-    }}>
+    <FavoriteBand>
       <div style={{
         display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
         marginBottom: 8,
@@ -217,6 +246,6 @@ function FavoriteLightsBar({ favoriteKeys, hueLights, goveeDevices, nicknames, d
           </div>
         ))}
       </div>
-    </div>
+    </FavoriteBand>
   );
 }

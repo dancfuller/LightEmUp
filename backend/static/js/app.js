@@ -1386,6 +1386,26 @@ function App() {
         <ZoneBar zones={zones} onControl={controlZone} isMobile={isMobile} />
       </div>
 
+      {/* Favorites is APP CHROME, not page content (v3.35.0). It started inside
+          the Rooms and All Lights tabs, which made it a sub-section of a page
+          and meant it vanished the moment you went anywhere else — while the
+          whole reason it exists is to be the shortest path to a few specific
+          lights. It now sits directly under the Live bar, on every tab, for the
+          same reason that bar does: a control you reach for constantly has to
+          be reachable from wherever you already are.
+          Renders nothing at all when nothing is pinned (bar the one-line hint on
+          All Lights), so it costs nothing for anyone not using it. */}
+      <FavoriteLightsBar
+        favoriteKeys={favoriteLights}
+        hueLights={hueLights} goveeDevices={goveeDevices}
+        nicknames={nicknames} deviceRoomMap={deviceRoomMap}
+        onControlHue={controlHueLight} onControlGovee={controlGoveeDevice}
+        onToggleFavorite={toggleFavoriteLight}
+        renderCard={renderLightCard}
+        showEmptyHint={activeTab === "all lights"}
+        isMobile={isMobile}
+      />
+
       <main style={{ padding: isMobile ? 12 : 24, maxWidth: 1200, margin: "0 auto" }}>
         {error && (
           <div style={{
@@ -1397,18 +1417,6 @@ function App() {
 
         {activeTab === "rooms" && (
           <>
-            {/* Pinned lights come FIRST — above the add-room field and every room
-                card — because reaching them without scrolling is the entire
-                point. No empty hint here: the star lives on a LightCard, which
-                on this tab is inside a collapsed room drawer. */}
-            <FavoriteLightsBar
-              favoriteKeys={favoriteLights}
-              hueLights={hueLights} goveeDevices={goveeDevices}
-              nicknames={nicknames} deviceRoomMap={deviceRoomMap}
-              onControlHue={controlHueLight} onControlGovee={controlGoveeDevice}
-              onToggleFavorite={toggleFavoriteLight}
-              renderCard={renderLightCard}
-            />
             {/* Add-room control — top of the Rooms tab so a new room can be
                 created without detouring through Assign Rooms. */}
             <div style={{
@@ -1511,21 +1519,10 @@ function App() {
         )}
 
         {activeTab === "all lights" && (
-          <>
-            <FavoriteLightsBar
-              favoriteKeys={favoriteLights}
-              hueLights={hueLights} goveeDevices={goveeDevices}
-              nicknames={nicknames} deviceRoomMap={deviceRoomMap}
-              onControlHue={controlHueLight} onControlGovee={controlGoveeDevice}
-              onToggleFavorite={toggleFavoriteLight}
-              renderCard={renderLightCard}
-              showEmptyHint={true}
-            />
-            <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fill, minmax(260px, 1fr))", gap: 12 }}>
-              {hueLights.map(renderLightCard)}
-              {goveeDevices.map(renderLightCard)}
-            </div>
-          </>
+          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fill, minmax(260px, 1fr))", gap: 12 }}>
+            {hueLights.map(renderLightCard)}
+            {goveeDevices.map(renderLightCard)}
+          </div>
         )}
 
         {activeTab === "schedules" && (

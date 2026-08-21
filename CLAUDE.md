@@ -144,9 +144,10 @@ backend/
       audio.js            # Thunder synth (WebAudio), fart sounds (preloaded MP3s)
       components-shared.js # ColorPicker, ColorWheel, Slider, ColorTempSlider, StatusBadge, RgbSliderInput
       light-card.js       # LightCard — per-device control (toggle, brightness, color, nickname)
-      favorite-lights.js  # FavoriteLightsBar — the starred-lights strip pinned to the top
-                          # of Rooms and All Lights, so three lights out of 26 are reachable
-                          # without scrolling. Compact rows + set-level All on/off; a row
+      favorite-lights.js  # FavoriteLightsBar — the starred-lights section, APP CHROME above
+                          # <main> so it's on every tab (v3.35.0), making three lights out
+                          # of 26 reachable without scrolling from anywhere. Compact rows +
+                          # set-level All on/off + live scene progress per row; a row
                           # expands into app.js's renderLightCard (the SAME card All Lights
                           # shows — don't build a second prop list)
       lightning-panel.js  # LightningPanel — storm scene UI with presets and SSE sync

@@ -144,36 +144,13 @@ function LightScenePanel({ light, segCount, segmentColors, segmentInfo, nickname
   const [direction, setDirection] = useState("forward");
   const [beaconSeg, setBeaconSeg] = useState(0);
   const [brightness, setBrightness] = useState(100);
-  const [phase, setPhase] = useState(null);   // null | "applying" | "done"
-  const [done, setDone] = useState(0);
-  const [total, setTotal] = useState(0);
-  const [endAt, setEndAt] = useState(0);
-  const [now, setNow] = useState(0);
-
-  const applying = phase === "applying" || phase === "resetting";
-
-  useEffect(() => {
-    if (!applying) return;
-    setNow(Date.now());
-    const id = setInterval(() => setNow(Date.now()), 250);
-    return () => clearInterval(id);
-  }, [applying]);
+  const [justDone, setJustDone] = useState(false);
 
   // Progress rides the same SSE stream a room scene uses, filtered by SCOPE so
-  // this panel hears its own device and nothing else.
-  useEffect(() => {
-    const onProgress = (e) => {
-      const d = e.detail;
-      if (!d || d.scope !== deviceKey) return;
-      if (d.active === false) { setPhase(d.phase === "canceled" ? null : "done"); return; }
-      if (d.phase) setPhase(d.phase);
-      if (typeof d.total === "number") setTotal(d.total);
-      if (typeof d.done === "number") setDone(d.done);
-      if (typeof d.end_at === "number") setEndAt(d.end_at);
-    };
-    window.addEventListener("lightemup-scene-apply", onProgress);
-    return () => window.removeEventListener("lightemup-scene-apply", onProgress);
-  }, [deviceKey]);
+  // this panel hears its own device and nothing else. Shared with the light
+  // card's header strip via the hook — see useSceneProgress in utils.js.
+  const [progress, beginProgress, clearProgress] = useSceneProgress(deviceKey);
+  const applying = progress.active;
 
   // ─── Compute the look ────────────────────────────────────────────────────
   const colors = (() => {
@@ -277,18 +254,18 @@ function LightScenePanel({ light, segCount, segmentColors, segmentInfo, nickname
       }],
       label: describeLook(),
     };
-    setPhase("applying");
-    setDone(0);
-    setTotal(groups.length);
-    setEndAt(Date.now() + etaSec * 1000);
-    setNow(Date.now());
+    // Show progress immediately. The backend spends ~2.6s on the base seed and
+    // the settle hold before the first segment event lands, and a panel that
+    // sits silent for that long looks like the button didn't work.
+    setJustDone(false);
+    beginProgress(groups.length, Date.now() + etaSec * 1000);
     api("/scenes/room-apply", {
       method: "POST",
       body: JSON.stringify(plan),
       headers: { "Content-Type": "application/json" },
     }).catch(e => {
       console.warn("[LightScene] apply failed:", e);
-      setPhase(null);
+      clearProgress();
     });
     // Segment state is written server-side per call; re-read once the apply has
     // had time to land so the card's own strip stops showing the old colors.
@@ -301,10 +278,15 @@ function LightScenePanel({ light, segCount, segmentColors, segmentInfo, nickname
       body: JSON.stringify({ room: roomName || "Unassigned", scope: deviceKey }),
       headers: { "Content-Type": "application/json" },
     }).catch(() => {});
-    setPhase(null);
+    clearProgress();
   };
 
-  const secondsLeft = applying ? Math.max(0, Math.ceil((endAt - now) / 1000)) : 0;
+  // "Applied" confirmation, latched off the transition out of the active state
+  // (the hook reports `phase: "done"` once and then stays idle).
+  useEffect(() => {
+    if (!progress.active && progress.phase === "done") setJustDone(true);
+  }, [progress.active, progress.phase]);
+
   const needsBase = mode === "gradient" || mode === "beacon" || mode === "solid";
   const modeBtn = (active) => ({
     padding: isMobile ? "5px 9px" : "5px 11px", borderRadius: 6,
@@ -477,14 +459,20 @@ function LightScenePanel({ light, segCount, segmentColors, segmentInfo, nickname
       }}>
         {applying ? (
           <>
+            {/* A segmented apply runs 13+ seconds, so this has to say what is
+                happening RIGHT NOW, not just that something is. The bar carries
+                the backend's own per-call label ("Hex Lights · 2 panels") — the
+                first version dropped it and showed a bare count, which is why
+                the status read as missing next to the room's. */}
+            <div style={{ flex: "1 1 200px", minWidth: 0 }}>
+              <SceneProgressBar progress={progress} />
+            </div>
             <button onClick={cancel} style={{
               padding: isMobile ? "8px 14px" : "9px 18px", borderRadius: 8,
               border: "1px solid #7f1d1d", background: "rgba(127,29,29,0.3)",
               color: "#fca5a5", fontSize: 12, fontWeight: 700, cursor: "pointer",
+              flexShrink: 0,
             }}>Stop</button>
-            <span style={{ fontSize: 11, color: "#94a3b8" }}>
-              Applying {done}/{total}{secondsLeft ? ` · about ${secondsLeft}s left` : ""}
-            </span>
           </>
         ) : (
           <>
@@ -508,7 +496,7 @@ function LightScenePanel({ light, segCount, segmentColors, segmentInfo, nickname
                 {groups.length} colors · about {etaSec}s (Govee limits segment changes to one every ~1.8s)
               </span>
             )}
-            {phase === "done" && (
+            {justDone && (
               <span style={{ fontSize: 11, color: "#4ade80", fontWeight: 600 }}>Applied</span>
             )}
           </>
