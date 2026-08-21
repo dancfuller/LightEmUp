@@ -8,7 +8,7 @@ fine while palettes were a browser-only idea. v3.17.0 made them a *scheduler*
 concept ("at sunset, pick a random Summer palette"), and the scheduler fires on
 the Pi with no browser attached — so Python needs the same table.
 
-Two copies of 808 colours would drift the first time someone adds a palette, so
+Two copies of 808 colors would drift the first time someone adds a palette, so
 the JSON is the single source of truth and the JS is generated from it. Add or
 edit palettes in `backend/palette_library.json`, then re-run this script and
 commit both files together.
@@ -28,7 +28,7 @@ SRC = ROOT / "backend" / "palette_library.json"
 DEST = ROOT / "backend" / "static" / "js" / "palette-library.js"
 
 # The re-cut in v3.13.0 fixed the length of no palette but did bound it: fewer
-# than 4 real colours isn't a palette, more than 8 outruns most rooms.
+# than 4 real colors isn't a palette, more than 8 outruns most rooms.
 MIN_COLORS, MAX_COLORS = 4, 8
 
 
@@ -70,12 +70,12 @@ def verify(palettes: list):
             problems.append(f"{name}: colors must be a list")
             continue
         if not MIN_COLORS <= len(colors) <= MAX_COLORS:
-            problems.append(f"{name}: {len(colors)} colours "
+            problems.append(f"{name}: {len(colors)} colors "
                             f"(expected {MIN_COLORS}-{MAX_COLORS})")
         for c in colors:
             if (not isinstance(c, list) or len(c) != 3
                     or any(not isinstance(v, int) or not 0 <= v <= 255 for v in c)):
-                problems.append(f"{name}: bad colour {c!r} — want [r, g, b] 0-255")
+                problems.append(f"{name}: bad color {c!r} — want [r, g, b] 0-255")
     if problems:
         for pr in problems[:20]:
             print(f"  - {pr}", file=sys.stderr)
@@ -85,7 +85,7 @@ def verify(palettes: list):
     for p in palettes:
         cats.setdefault(p["category"], []).append(p["name"])
     print(f"OK  {len(palettes)} palettes in {len(cats)} categories, "
-          f"{sum(len(p['colors']) for p in palettes)} colours total")
+          f"{sum(len(p['colors']) for p in palettes)} colors total")
     for cat, members in cats.items():
         print(f"    {cat:<12} {len(members):>3}")
     featured = [p["name"] for p in palettes if p.get("featured")]
@@ -99,7 +99,7 @@ def verify(palettes: list):
         if not got:
             fail(f"spot-check: {name!r} is missing")
         if len(got["colors"]) != want_len:
-            fail(f"spot-check: {name!r} has {len(got['colors'])} colours, "
+            fail(f"spot-check: {name!r} has {len(got['colors'])} colors, "
                  f"expected {want_len}")
     print("    spot-checks passed")
     return cats
@@ -122,13 +122,13 @@ def emit(palettes: list, cats: dict) -> str:
 // Regenerate with:  python tools/build-palette-library.py
 // Source of truth:  backend/palette_library.json
 //
-// The curated palette library, shared by the browser (the room colour tool's
+// The curated palette library, shared by the browser (the room color tool's
 // palette picker) and the Pi (the scheduler's "random palette" action, which
 // fires with no browser attached). It lived inline in color-mode.js until
-// v3.17.0; two copies of {sum(len(p['colors']) for p in palettes)} colours would
+// v3.17.0; two copies of {sum(len(p['colors']) for p in palettes)} colors would
 // drift the first time someone added a palette, so both sides now read one file.
 //
-// Colours are VARIABLE length (4-8) and deliberately so — see the notes in
+// Colors are VARIABLE length (4-8) and deliberately so — see the notes in
 // color-mode.js: padding every palette to a fixed 8 was what produced "one light
 // is just a paler version of that other one".
 const PALETTE_LIBRARY = [
@@ -136,7 +136,7 @@ const PALETTE_LIBRARY = [
 ];
 
 // Category order as authored — the scheduler's "random from a category" picker
-// and the colour tool's filter chips both render in this order.
+// and the color tool's filter chips both render in this order.
 const PALETTE_CATEGORIES = [{cat_list}];
 """
 

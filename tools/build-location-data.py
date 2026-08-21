@@ -26,9 +26,9 @@ GAZ_URL = ("https://www2.census.gov/geo/docs/maps-data/data/gazetteer/"
 OUT = Path(__file__).resolve().parent.parent / "backend" / "static" / "js" / "location-data.js"
 
 # Representative world cities for the "nearest city" picker. Curated for coverage
-# (every inhabited continent + the major population centres) rather than
+# (every inhabited continent + the major population centers) rather than
 # completeness — someone whose city is missing can use the Google Maps route.
-# Coordinates are city-centre, rounded to 2dp (~1 km, far tighter than needed).
+# Coordinates are city-center, rounded to 2dp (~1 km, far tighter than needed).
 WORLD_CITIES = [
     # ── North America ──
     ("United States", "New York, NY", 40.71, -74.01),

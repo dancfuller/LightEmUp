@@ -4,7 +4,7 @@
 // (a captured color scene, a random palette, a white temperature, or a single
 // color) for one room or zone.
 //
-// SNAPSHOT vs RECIPE — the two kinds of colour action, and why both exist:
+// SNAPSHOT vs RECIPE — the two kinds of color action, and why both exist:
 //
 //   scene   — a SNAPSHOT. All the scene math (gradient, beacon, teams…) lives in
 //             color-mode.js in the browser, so the schedule stores the fully
@@ -35,7 +35,7 @@ const WHITE_PRESETS = [
 // ─── Palette preview pieces ─────────────────────────────────────────────────
 // A palette action is only trustworthy if you can SEE what it might do, so every
 // place one appears — the editor, the picker grid, the saved-schedule row —
-// renders the actual colours rather than just a name.
+// renders the actual colors rather than just a name.
 
 const PALETTE_BY_NAME = (() => {
   const m = {};
@@ -43,7 +43,7 @@ const PALETTE_BY_NAME = (() => {
   return m;
 })();
 
-// Category chips, with the same two virtual entries the colour tool offers.
+// Category chips, with the same two virtual entries the color tool offers.
 // The backend understands both (palettes.in_category), so a schedule authored
 // from "Featured" resolves to the same 22 palettes on the Pi.
 const PALETTE_FILTERS = ["Featured", "All",
@@ -77,7 +77,7 @@ function expandLegacyPalettes(action) {
   return { ...rest, palettes: palettesFor(category || "All").map(p => p.name) };
 }
 
-// The colour bar. Equal-width stops, no gaps — it reads as one object at 40px
+// The color bar. Equal-width stops, no gaps — it reads as one object at 40px
 // wide in a list row and at 160px wide in the picker.
 function PaletteStrip({ colors, height = 10, radius = 3 }) {
   return (
@@ -91,7 +91,7 @@ function PaletteStrip({ colors, height = 10, radius = 3 }) {
 
 // A saved row's preview: the first few palettes this schedule could choose from.
 // A name alone ("random from Summer") doesn't tell you whether that's the mood
-// you wanted at 9pm; four colour bars do.
+// you wanted at 9pm; four color bars do.
 function PaletteCandidatePeek({ action, max = 4 }) {
   const cands = paletteCandidates(action);
   if (!cands.length) return null;
@@ -136,7 +136,7 @@ function PaletteCard({ palette, selected, onClick, isMobile }) {
 // The fields each action type owns. Switching type rebuilds the action from
 // these plus the target, so a stored action never carries fields belonging to a
 // type it isn't (a "power" action with a leftover kelvin, say) — that's noise in
-// config.json and in a backup, and it reads as if power sets a colour.
+// config.json and in a backup, and it reads as if power sets a color.
 const ACTION_DEFAULTS = {
   white: { kelvin: 2700, brightness: 100 },
   color: { rgb: { r: 255, g: 180, b: 100 }, brightness: 100 },
@@ -201,7 +201,7 @@ function actionSummary(action) {
   }
   if (action.type === "colors") {
     const n = (action.colors || []).length;
-    return `My Colors · ${n} colour${n === 1 ? "" : "s"}`;
+    return `My Colors · ${n} color${n === 1 ? "" : "s"}`;
   }
   if (action.type === "white") return `White ${action.kelvin}K · ${action.brightness}%`;
   if (action.type === "color") {
@@ -298,10 +298,10 @@ function todayISO() {
 // the only way to know what a schedule you'll never watch fire will do.
 
 // ─── "My Colors" action editor (v3.28.0) ────────────────────────────────────
-// Colours you name yourself, for a look with no palette behind it — alternating
-// red and green at Christmas being the case that prompted it. The colours live
+// Colors you name yourself, for a look with no palette behind it — alternating
+// red and green at Christmas being the case that prompted it. The colors live
 // IN the schedule, so nothing is chosen at fire time; the backend wraps them as
-// a one-off palette and runs the SAME builder, which is what makes two colours
+// a one-off palette and runs the SAME builder, which is what makes two colors
 // come out ABABAB down a hexa strip instead of needing their own arrangement.
 function ColorsActionEditor({ action, patchAction, isMobile, label, seg, onTry,
                               favorites, onFavoritesChange }) {
@@ -333,7 +333,7 @@ function ColorsActionEditor({ action, patchAction, isMobile, label, seg, onTry,
 
   return (
     <div style={{ marginBottom: 12 }}>
-      <div style={label}>Colours — {colors.length || "none yet"}</div>
+      <div style={label}>Colors — {colors.length || "none yet"}</div>
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
         {colors.map((c, i) => (
           <div key={i} style={{ display: "flex", alignItems: "center", gap: 3 }}>
@@ -345,7 +345,7 @@ function ColorsActionEditor({ action, patchAction, isMobile, label, seg, onTry,
                 border: i === active ? "2px solid #fff" : "1px solid #334155",
                 boxShadow: i === active ? "0 0 0 2px #6366f1" : "none",
               }} />
-            <button onClick={() => removeColor(i)} title="Remove this colour"
+            <button onClick={() => removeColor(i)} title="Remove this color"
               style={{
                 border: "none", background: "transparent", color: "#64748b",
                 fontSize: 14, fontWeight: 700, cursor: "pointer", padding: "0 2px",
@@ -357,13 +357,13 @@ function ColorsActionEditor({ action, patchAction, isMobile, label, seg, onTry,
             padding: "8px 12px", borderRadius: 8, border: "1px dashed #475569",
             background: "transparent", color: "#94a3b8",
             fontSize: 12, fontWeight: 700, cursor: "pointer",
-          }}>+ Add colour</button>
+          }}>+ Add color</button>
         )}
       </div>
 
       {colors.length === 0 && (
         <div style={{ fontSize: 11, color: "#f59e0b", marginBottom: 10 }}>
-          Add at least one colour.
+          Add at least one color.
         </div>
       )}
 
@@ -397,7 +397,7 @@ function ColorsActionEditor({ action, patchAction, isMobile, label, seg, onTry,
         )}
       </div>
       <div style={{ fontSize: 10, color: "#64748b", marginTop: 6 }}>
-        Spread across the room's lights, alternating so neighbours differ — two colours
+        Spread across the room's lights, alternating so neighbours differ — two colors
         give a strict A-B-A-B down a segmented strip.
       </div>
     </div>
@@ -653,7 +653,7 @@ function ScheduleEditor({ initial, rooms, zoneNames, favorites, onFavoritesChang
     body: JSON.stringify({
       room: action.zone ? null : action.room,
       zone: action.zone || null,
-      // A "My Colors" action carries its colours inline; a palette action names
+      // A "My Colors" action carries its colors inline; a palette action names
       // library palettes. One endpoint, because both end up as the same builder.
       colors: action.type === "colors" ? (action.colors || []) : [],
       palettes: action.palettes || [],
@@ -668,7 +668,7 @@ function ScheduleEditor({ initial, rooms, zoneNames, favorites, onFavoritesChang
       setError("Pick at least one palette."); return;
     }
     if (action.type === "colors" && (action.colors || []).length === 0) {
-      setError("Add at least one colour."); return;
+      setError("Add at least one color."); return;
     }
     if (trigger.type !== "sun" && !/^\d{2}:\d{2}$/.test(trigger.time || "")) { setError("Pick a time."); return; }
     if (trigger.type === "oneoff" && !trigger.date) { setError("Pick a date."); return; }
@@ -771,7 +771,7 @@ function ScheduleEditor({ initial, rooms, zoneNames, favorites, onFavoritesChang
 
       {/* ─── Action ─────────────────────────────────────────────────── */}
       {/* "Turn on" was never a peer of White/Color/Palette: those already send
-          on=true with the colour, so nobody schedules "on" and then separately
+          on=true with the color, so nobody schedules "on" and then separately
           schedules a look. Only OFF is a distinct outcome. So the choices are
           grouped by what the room ends up like — a look (which implies on), or
           one of the two power outcomes — instead of pretending power is a
@@ -797,7 +797,7 @@ function ScheduleEditor({ initial, rooms, zoneNames, favorites, onFavoritesChang
                 onClick={() => setActionType("palette")}>Palette</button>
               <button style={seg(action.type === "colors")}
                 onClick={() => setActionType("colors")}
-                title="Colours you pick yourself — e.g. alternating red and green">
+                title="Colors you pick yourself — e.g. alternating red and green">
                 My Colors
               </button>
             </div>
@@ -811,7 +811,7 @@ function ScheduleEditor({ initial, rooms, zoneNames, favorites, onFavoritesChang
                   there's nothing to specify and nothing to compare later. */}
               <button style={seg(action.type === "power" && action.on !== false)}
                 onClick={() => setActionType("power", { on: true })}
-                title="Each light returns to the colour and brightness it last had">
+                title="Each light returns to the color and brightness it last had">
                 Turn on, last used look
               </button>
             </div>
@@ -833,7 +833,7 @@ function ScheduleEditor({ initial, rooms, zoneNames, favorites, onFavoritesChang
             buttons above, so choosing one is a single click instead of two. */}
         {action.type === "power" && action.on !== false && (
           <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 12 }}>
-            Each light returns to the colour and brightness it last had — nothing to set here.
+            Each light returns to the color and brightness it last had — nothing to set here.
           </div>
         )}
 
@@ -921,7 +921,7 @@ function ScheduleEditor({ initial, rooms, zoneNames, favorites, onFavoritesChang
                 </div>
                 {/* draft holds the RAW text while typing, so the field can be
                     emptied (committing nothing) instead of snapping back to 0,
-                    and "010" normalises to "10" on blur. Same idiom as
+                    and "010" normalizes to "10" on blur. Same idiom as
                     RgbSliderInput in components-shared.js. */}
                 <input type="number" min={0} step={5} inputMode="numeric"
                   value={offsetDraft ?? String(offsetMag)}

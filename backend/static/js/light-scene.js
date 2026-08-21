@@ -1,6 +1,6 @@
 // ─── Per-light scene panel (v3.34.0) ────────────────────────────────────────
 // Scenes were a ROOM tool. A segmented light could only be painted one segment
-// at a time — tap a panel, open the picker, choose a colour, repeat — so making
+// at a time — tap a panel, open the picker, choose a color, repeat — so making
 // a 7-panel hexa a rainbow was minutes of work, and the palette/teams/flags
 // libraries sitting right there in the room tool were unreachable for it.
 //
@@ -37,14 +37,14 @@ const ROYGBIV = [
 const LIGHT_SCENE_MODES = [
   { key: "rainbow",  label: "Rainbow" },
   { key: "palette",  label: "Palette" },
-  { key: "mine",     label: "My colours" },
+  { key: "mine",     label: "My colors" },
   { key: "gradient", label: "Shades" },
   { key: "beacon",   label: "Beacon" },
-  { key: "solid",    label: "One colour" },
+  { key: "solid",    label: "One color" },
   { key: "teams",    label: "Teams" },
   { key: "ncaa",     label: "College" },
   { key: "flags",    label: "Flags" },
-  { key: "restore",  label: "Last colours" },
+  { key: "restore",  label: "Last colors" },
 ];
 
 // Direction along the RUN. A strip has a real axis — the segment numbering — so
@@ -72,20 +72,20 @@ function stripRanks(n, direction) {
   return rank;
 }
 
-// Lay a colour list down the run as a repeating cycle (ABCABCA). Colours are
+// Lay a color list down the run as a repeating cycle (ABCABCA). Colors are
 // pre-ordered so consecutive positions are perceptually distinct — the same
 // reason color-mode.js does it for a linear room layout.
 // `preserveOrder` keeps the caller's sequence instead of re-ordering it for
 // perceptual contrast. Rainbow needs it: the SEQUENCE is the look, and
 // orderPaletteForCycle — which is right for a palette, where only
 // adjacent-distinctness matters — reshuffles ROYGBIV into R,G,V,Y,B,O,I. That's
-// a set of seven nice colours, not a rainbow.
+// a set of seven nice colors, not a rainbow.
 function cycleDownStrip(colors, n, offset = 0, preserveOrder = false) {
   const list = (colors || []).filter(Boolean);
   if (!list.length || n <= 0) return null;
-  // orderPaletteForCycle returns an array of INDICES into `list`, not colours —
+  // orderPaletteForCycle returns an array of INDICES into `list`, not colors —
   // map them back. (Getting this wrong renders every segment transparent, which
-  // is how it was caught: a rainbow preview with no colours in it.)
+  // is how it was caught: a rainbow preview with no colors in it.)
   const ordered = preserveOrder ? list : orderPaletteForCycle(list).map(i => list[i]);
   const K = ordered.length;
   return Array.from({ length: n }, (_, i) => ordered[(((i + offset) % K) + K) % K]);
@@ -221,18 +221,18 @@ function LightScenePanel({ light, segCount, segmentColors, segmentInfo, nickname
   const describeLook = () => {
     if (mode === "rainbow") return "Rainbow";
     if (mode === "palette") return paletteName ? `Palette · ${paletteName}` : "Palette";
-    if (mode === "mine") return "My colours";
-    if (mode === "teams") return selectedTeam || "Team colours";
-    if (mode === "ncaa") return selectedNcaa || "College colours";
-    if (mode === "flags") return selectedFlag || "Flag colours";
+    if (mode === "mine") return "My colors";
+    if (mode === "teams") return selectedTeam || "Team colors";
+    if (mode === "ncaa") return selectedNcaa || "College colors";
+    if (mode === "flags") return selectedFlag || "Flag colors";
     if (mode === "gradient") return "Shades";
     if (mode === "beacon") return "Beacon";
-    if (mode === "solid") return "One colour";
-    return "Last colours";
+    if (mode === "solid") return "One color";
+    return "Last colors";
   };
 
   // ─── Build the plan (same shape buildScenePlan produces, one device wide) ──
-  // Batching by colour is what keeps this bearable: each distinct colour is ONE
+  // Batching by color is what keeps this bearable: each distinct color is ONE
   // cloud_v2 call, and the backend spaces calls 1.8s apart for the V2 rate limit.
   const groups = (() => {
     if (!colors) return [];
@@ -250,12 +250,12 @@ function LightScenePanel({ light, segCount, segmentColors, segmentInfo, nickname
 
   const proto = segmentInfo?.sku_table?.[light.sku]?.protocol;
   const unsupported = proto && proto !== "cloud_v2";
-  // Rough wall clock: base seed + settle hold + one call per distinct colour.
+  // Rough wall clock: base seed + settle hold + one call per distinct color.
   const etaSec = groups.length ? Math.round(2.6 + Math.max(0, groups.length - 1) * 1.8) : 0;
 
   const apply = () => {
     if (!colors || !groups.length || applying || unsupported) return;
-    // Seed the whole device with a colour from ITS OWN look first, so the strip
+    // Seed the whole device with a color from ITS OWN look first, so the strip
     // reads as the scene immediately instead of flashing white while segments
     // fill in one rate-limited call at a time.
     const mid = colors[Math.floor(colors.length / 2)] || colors.find(Boolean);
@@ -291,7 +291,7 @@ function LightScenePanel({ light, segCount, segmentColors, segmentInfo, nickname
       setPhase(null);
     });
     // Segment state is written server-side per call; re-read once the apply has
-    // had time to land so the card's own strip stops showing the old colours.
+    // had time to land so the card's own strip stops showing the old colors.
     if (onApplied) setTimeout(onApplied, (etaSec + 1) * 1000);
   };
 
@@ -422,7 +422,7 @@ function LightScenePanel({ light, segCount, segmentColors, segmentInfo, nickname
 
       {mode === "mine" && (favorites || []).length === 0 && (
         <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10 }}>
-          No saved colours yet — star a few from any colour picker and they'll appear here.
+          No saved colors yet — star a few from any color picker and they'll appear here.
         </div>
       )}
 
@@ -436,7 +436,7 @@ function LightScenePanel({ light, segCount, segmentColors, segmentInfo, nickname
 
       {needsBase && (
         <div style={{ marginBottom: 10 }}>
-          <div style={{ fontSize: 10, color: "#64748b", marginBottom: 4 }}>Colour:</div>
+          <div style={{ fontSize: 10, color: "#64748b", marginBottom: 4 }}>Color:</div>
           <ColorPicker
             size={120} compact={true} currentColor={baseColor}
             onColorSelect={(r, g, b) => setBaseColor({ r, g, b })}
@@ -500,12 +500,12 @@ function LightScenePanel({ light, segCount, segmentColors, segmentInfo, nickname
               }}
             >Apply to this light</button>
             {/* Say the cost up front. Govee's cloud API allows roughly one
-                colour change every 1.8s, so a 7-colour rainbow genuinely takes
+                color change every 1.8s, so a 7-color rainbow genuinely takes
                 ~13 seconds — that's the API, not this panel, and a user who
                 isn't told assumes it hung. */}
             {groups.length > 1 && (
               <span style={{ fontSize: 10, color: "#64748b" }}>
-                {groups.length} colours · about {etaSec}s (Govee limits segment changes to one every ~1.8s)
+                {groups.length} colors · about {etaSec}s (Govee limits segment changes to one every ~1.8s)
               </span>
             )}
             {phase === "done" && (

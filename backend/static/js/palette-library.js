@@ -2,13 +2,13 @@
 // Regenerate with:  python tools/build-palette-library.py
 // Source of truth:  backend/palette_library.json
 //
-// The curated palette library, shared by the browser (the room colour tool's
+// The curated palette library, shared by the browser (the room color tool's
 // palette picker) and the Pi (the scheduler's "random palette" action, which
 // fires with no browser attached). It lived inline in color-mode.js until
-// v3.17.0; two copies of 808 colours would
+// v3.17.0; two copies of 808 colors would
 // drift the first time someone added a palette, so both sides now read one file.
 //
-// Colours are VARIABLE length (4-8) and deliberately so — see the notes in
+// Colors are VARIABLE length (4-8) and deliberately so — see the notes in
 // color-mode.js: padding every palette to a fixed 8 was what produced "one light
 // is just a paler version of that other one".
 const PALETTE_LIBRARY = [
@@ -191,5 +191,5 @@ const PALETTE_LIBRARY = [
 ];
 
 // Category order as authored — the scheduler's "random from a category" picker
-// and the colour tool's filter chips both render in this order.
+// and the color tool's filter chips both render in this order.
 const PALETTE_CATEGORIES = ["Spring", "Summer", "Autumn", "Winter", "Holidays", "Warm", "Cool", "Pastel", "Vibrant", "Neon", "Retro", "Nature", "Cosmic", "Earth", "Mood", "Cinematic"];

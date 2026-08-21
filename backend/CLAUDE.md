@@ -106,7 +106,7 @@ fixes nothing.** The two vendors need opposite treatments:
 - **Hue = read it back.** `_hue_verify_repair(expectations)` (main.py) does **one**
   `get_hue_lights()` (a single request no matter how many lights) and re-sends only to
   lights that didn't take. **Only `on` and `bri` are
-  compared** — colour (xy/ct) is NOT, because the bridge gamut-clamps and rounds it, so
+  compared** — color (xy/ct) is NOT, because the bridge gamut-clamps and rounds it, so
   exact comparison would false-repair forever. Unreachable lights are skipped (a re-send
   wouldn't land either). **`bri` is only compared while the light is ON** — verified live
   that most bulbs simply refuse a level change while off (a brightness-only command to a
@@ -114,7 +114,7 @@ fixes nothing.** The two vendors need opposite treatments:
   device behavior, not packet loss), so checking `bri` on an off light would re-send
   forever for no gain. `control_hue_light` echoes back the `state` it sent so bulk
   callers collect faithful expectations, and the repair re-sends that **full** dict — so a
-  repaired light keeps its colour, not just on/brightness.
+  repaired light keeps its color, not just on/brightness.
 
 ### Govee verify-and-repair — POWER ONLY (v3.31.0)
 The Govee half of v3.10.0 was a **blind** double-send, and blind is exactly the problem:
@@ -134,8 +134,8 @@ looking for one next time.
   `_govee_verify_drain` after `GOVEE_VERIFY_SETTLE_S`. A zone off spanning several rooms
   costs one pass. Registered from `control_room` whenever `on` is present — which covers
   the room toggle, `_apply_room_power`, zone control, schedule ends and reapply.
-- **ON/OFF ONLY. Never colour.** devStatus reports `onOff` reliably; colour it does not,
-  and a Govee-app animation isn't a static state at all. Verifying colour would
+- **ON/OFF ONLY. Never color.** devStatus reports `onOff` reliably; color it does not,
+  and a Govee-app animation isn't a static state at all. Verifying color would
   manufacture the false confidence the whole area exists to avoid.
 - **Three outcomes, and the last two are different things.** Took it ⇒ silent. Wrong state
   ⇒ the command was lost, so re-send **once** and re-read to confirm (never a loop). **No
@@ -173,11 +173,11 @@ overwrites the earlier one (more recent intent wins).
 
 **`control_hue_light` now self-verifies, but only when `on` is present in the request.**
 That's an exact proxy for "discrete, settled action" in this UI: the card's toggle sends
-`{on}` and a colour/CT pick sends `{on:true, …}`, whereas the brightness and colour-wheel
+`{on}` and a color/CT pick sends `{on:true, …}`, whereas the brightness and color-wheel
 **drags** send `{brightness}` / `{r,g,b}` with no `on`. Drags commit every 180ms
 (`useThrottledControl`), so verifying them would mean a GET per tick against a bridge with a
-~10 cmd/sec ceiling. Two consequences worth knowing: a colour-only change is **unverifiable**
-by design (xy/ct aren't compared), so a colour pick only confirms the light turned *on*; and
+~10 cmd/sec ceiling. Two consequences worth knowing: a color-only change is **unverifiable**
+by design (xy/ct aren't compared), so a color pick only confirms the light turned *on*; and
 the repair re-sends via `set_hue_light_state` directly, never `control_hue_light`, so it
 cannot recursively re-register — exactly one repair attempt per pass.
 
@@ -205,13 +205,13 @@ trust it can't keep.
 - `record_room_applied(..., expect=…)` stores the per-light state **as sent** — the same
   dict `_hue_verify_repair` already builds, previously discarded. That's what makes a
   later comparison possible at all.
-- `_hue_state_matches(sent, cur)` returns True/False/**None**. Colour comparison was
+- `_hue_state_matches(sent, cur)` returns True/False/**None**. Color comparison was
   rejected for *repair* (a false positive re-sends forever) — but for *display* a false
   positive only mislabels a strip, so a **tolerant** comparison is worth it, and it has to
-  be: mode alone (xy vs ct) can't tell your palette from someone else's colour scene.
+  be: mode alone (xy vs ct) can't tell your palette from someone else's color scene.
   `HUE_XY_TOLERANCE` 0.06 (gamut clamping shifts xy slightly; a different scene shifts it
   a lot), `HUE_CT_TOLERANCE` 25 mireds. Unreachable / `hs` mode / no xy reported ⇒ None.
-- **Govee COLOUR is deliberately not judged.** LAN devStatus reports colour unreliably and
+- **Govee COLOR is deliberately not judged.** LAN devStatus reports color unreliably and
   a running Govee-app animation isn't a static state at all, so "verifying" it would
   manufacture exactly the false confidence this exists to avoid.
 - **Govee POWER is judged, from evidence already gathered (v3.31.0).** `_room_status`
@@ -273,7 +273,7 @@ keeps driving a light that doesn't exist. Writes a `config.json.pre-phantom-purg
 
 ## Expectations are pinned to what the BRIDGE settled on (v3.22.0)
 `_reconcile_expectations(actual)` runs inside `_hue_verify_repair` (free — those lights
-were just read) and rewrites a **just-written** `expect_hue` with the colour the bridge
+were just read) and rewrites a **just-written** `expect_hue` with the color the bridge
 actually reports.
 
 - **Why:** the bridge gamut-clamps. An outdoor bulb asked for xy `[0.184, 0.284]` settled
@@ -281,12 +281,12 @@ actually reports.
   later against what we *asked for* declared the room "Changed since" minutes after
   LightEmUp's own schedule set it: exactly the false alarm the feature exists not to
   raise. Loosening the tolerance enough to swallow a hard clamp (~0.12) would let a
-  genuinely different colour hide inside it, so the comparison target moves instead.
+  genuinely different color hide inside it, so the comparison target moves instead.
 - **Bounded to `EXPECT_RECONCILE_WINDOW_S` (45s) after the record was written.**
   Reconciling an older record would rewrite the evidence that something *else* changed
   the room — erasing divergence rather than reporting it, which is worse than the bug it
   fixes. Same reason a light whose brightness didn't take is skipped: a repair is in
-  flight and baking in the wrong state would hide the miss. A colour-MODE mismatch
+  flight and baking in the wrong state would hide the miss. A color-MODE mismatch
   (asked xy, reports ct) is never reconciled either — that's the Google Home case.
 - **A scene re-verifies after recording.** `_run_scene_apply` fires its Hue verify inside
   `do_hue`, long before the record exists (a segmented room takes ~30s), so it has nothing
@@ -307,18 +307,18 @@ Scenes panel.
   different questions.
 - `record_room_applied(...)` is the single writer and is **best-effort** — it swallows its
   own exceptions so a display record can never break a light command. Call sites:
-  `_run_scene_apply` (**only on completion** — a cancelled apply left the room half-set, so
+  `_run_scene_apply` (**only on completion** — a canceled apply left the room half-set, so
   claiming it's showing that look would be a lie), `control_room`, the scheduler's
   `_apply_room_white`/`_apply_room_color`/`_apply_room_power`, and `start_lightning`.
 - **`control_room` deliberately ignores a brightness-ONLY call.** That's the room slider,
   which fires repeatedly while dragging; recording it would churn the record and overwrite
   the scene's name with "brightness".
 - **Swatches are derived server-side by `_scene_swatches`** from the already-resolved apply
-  payload — the backend can't compute scene colours (that math is browser-only) but the
+  payload — the backend can't compute scene colors (that math is browser-only) but the
   payload it receives is fully resolved, so nothing extra has to be sent. Duplicates
   collapse, order is preserved (a palette reads as a sequence), capped at
   `ROOM_SWATCH_LIMIT`. White stores `kelvin` and **no** swatch: the frontend renders that
-  chip via `kelvinToRGB`, so the backend needs no colour math for a temperature.
+  chip via `kelvinToRGB`, so the backend needs no color math for a temperature.
 - **The `label` comes from the browser** (`describeLook()` in color-mode.js) on
   `SceneApplyRequest.label`, because only the browser knows which mode produced the colors.
   `source`/`source_detail` mark a schedule fire so the header can credit it instead of
@@ -348,7 +348,7 @@ point; don't "improve" this into writing a backup file on the Pi.
   `_SETTING_INTERNAL` hides derived state (`device_state`, `segment_state`,
   `hue_missing_since`, `room_last_applied`, `schema_version`). It replaced eleven
   hand-written `BackupDiffRow`s that had silently fallen behind: white calibration, the
-  location sun schedules need, favourites, per-device segment counts and scene addressing
+  location sun schedules need, favorites, per-device segment counts and scene addressing
   were all being replaced with **nothing shown in the diff**. A key the build doesn't know
   is rendered with an asterisk rather than dropped — a backup from a newer build still
   previews honestly.
@@ -361,10 +361,10 @@ point; don't "improve" this into writing a backup file on the Pi.
   stays `schema_version > SUPPORTED_SCHEMA`, which is about keys we'd actively mangle.
 - **It's an envelope, not raw config.json**: `{lightemup_export, app_version,
   schema_version, exported_at, hostname, includes_credentials, config}`. The wrapper is what
-  lets import recognise a real backup, **refuse one written by a newer build**
+  lets import recognize a real backup, **refuse one written by a newer build**
   (`schema_version > SUPPORTED_SCHEMA`) whose keys we'd silently mangle, and state up front
   whether credentials are inside. `_unwrap_import` still accepts a **bare config.json**
-  (people pull that straight off the card), requiring a recognisable key so an unrelated
+  (people pull that straight off the card), requiring a recognizable key so an unrelated
   JSON file can't be imported as settings.
 - **Credentials are included by default** (`?include_credentials=false` strips
   `hue_username` + `govee_api_key`). `hue_username` is a bridge token: without it a restore
@@ -426,7 +426,7 @@ not in the browser (v2.14.0):
 - Favorite colors live in config (`GET /api/config` → `favorites`, default
   `DEFAULT_FAVORITES`; `POST /api/favorites` to save) instead of browser
   localStorage, so they sync across sessions/devices.
-- **Favourite LIGHTS are a separate key (v3.33.0):** `favorite_lights` is an ORDERED
+- **Favorite LIGHTS are a separate key (v3.33.0):** `favorite_lights` is an ORDERED
   list of device keys pinned to the strip at the top of Rooms and All Lights.
   `GET/POST /api/favorite-lights` replaces the whole list (the client owns the order —
   **never sort it here**, the array order is the render order) and de-dupes. It's
@@ -466,7 +466,7 @@ The endpoint was never really room-scoped: the payload is fully resolved per dev
 `room` is only a label plus a task key. `SceneApplyRequest.scope` makes that explicit so
 the light card's scene panel can paint a single Govee strip. **`scope` is the channel;
 `room` rides along for context.** Absent ⇒ `scope = room`, which is every pre-v3.34.0
-caller and the scheduler, so their behaviour is bit-identical.
+caller and the scheduler, so their behavior is bit-identical.
 - **It keys `_scene_tasks`.** One task per *room* would mean painting a hexa cancels its
   room's in-flight scene and vice versa — two applies fighting over devices that don't
   even overlap. Same-scope re-apply still supersedes, which is what you want.
@@ -477,7 +477,7 @@ caller and the scheduler, so their behaviour is bit-identical.
   re-verify. "Now showing" is a whole-room claim and one hexa going rainbow doesn't make
   the room rainbow; stamping it would replace an accurate record with a wrong one and
   leave "Set here" replaying a plan that only ever touched one light. This matches every
-  other single-device path (picking a colour on a light card doesn't touch the record
+  other single-device path (picking a color on a light card doesn't touch the record
   either). Consequence to accept: the room's strip is now slightly stale — as it already
   was in that case.
 - Covered by the scratch test `test_scene_scope.py` (17 assertions): the record-skip,
@@ -557,7 +557,7 @@ which at 3am lights the whole house. On a **genuine fresh boot** the lifespan sc
   power returns, and the hub can't intervene until it has booted and reconnected — so the
   true sequence is *lights snap on by themselves → Pi boots → recovery applies*. Nothing
   server-side can close that gap; the only real fix is in the vendors' own apps (set each
-  light's power-on behaviour to come back **off**, so LightEmUp drives the whole resume).
+  light's power-on behavior to come back **off**, so LightEmUp drives the whole resume).
   `PowerRecoveryCard` carries that as an amber caveat block. **Don't quietly drop it** —
   without it the feature reads as "the hub restores my lights" and the gap gets rediscovered
   as a bug.
@@ -624,7 +624,7 @@ for one room (or, for everything except `scene`, a zone).
 
 ## Scene addressing: segments vs whole, per device (v3.18.0)
 **`config["govee_scene_address"]`** (`{ goveeSlug: "segments" | "whole" }`, additive) is
-**the** answer to "does a room scene paint this device per segment or as one colour?",
+**the** answer to "does a room scene paint this device per segment or as one color?",
 and both sides read it: the browser's scene apply and the scheduler's palette action.
 Absent = `"segments"` for any device with >1 segment (the pre-v3.18.0 default).
 
@@ -636,9 +636,9 @@ Absent = `"segments"` for any device with >1 segment (the pre-v3.18.0 default).
   addresses a different number of segments than the same look applied by hand.
 - **Why it exists.** The choice used to be one toggle per ROOM
   (`room_color_state[room].address_segments`) that only the browser could read, so a rope
-  light you wanted as one colour forced the hexa panels to match. Worse, the scheduler had
+  light you wanted as one color forced the hexa panels to match. Worse, the scheduler had
   no access to it and read `govee_segment_mode` instead — which **only the lightning panel
-  writes** — so the same device could be painted per-segment by hand and as one colour on a
+  writes** — so the same device could be painted per-segment by hand and as one color on a
   schedule. `migrate_scene_address` converts the old room-level setting once at startup
   (only rooms set to `"unit"` need a record); it's guarded by the KEY'S PRESENCE, not its
   contents, so a legitimately empty result can't re-migrate forever.
@@ -657,12 +657,12 @@ Absent = `"segments"` for any device with >1 segment (the pre-v3.18.0 default).
 stores a **source, not a snapshot** — the look is resolved when it fires, which is the
 whole point: the same schedule has to look different tonight than it did last night.
 
-**Two colour actions, one engine (v3.28.0).** `type: "palette"` draws a random pick from a
-curated set of LIBRARY palettes; `type: "colors"` carries its colours inline
+**Two color actions, one engine (v3.28.0).** `type: "palette"` draws a random pick from a
+curated set of LIBRARY palettes; `type: "colors"` carries its colors inline
 (`{type:"colors", colors:[[r,g,b],…], brightness}`) for a look with no palette behind it —
-alternating red/green at Christmas being the case that prompted it. The colours action is
+alternating red/green at Christmas being the case that prompted it. The colors action is
 wrapped as a one-off palette and handed to the SAME `_build_palette_scene`, which is what
-makes two colours come out A-B-A-B down a hexa strip (`_ColorDealer` never repeats
+makes two colors come out A-B-A-B down a hexa strip (`_ColorDealer` never repeats
 consecutively) without its own arrangement logic. `/api/palettes/apply` takes `colors` too,
 so "Try it now" exercises the identical path.
 
@@ -706,9 +706,9 @@ so "Try it now" exercises the identical path.
   deliberately simpler than the browser's adjacency solver: deal a shuffled pool
   round-robin (`_ColorDealer`, which never repeats consecutively even across cycle
   boundaries) over devices sorted by layout position (`_palette_device_order`). That buys
-  the two properties that matter — no two neighbours share a colour, and the arrangement
+  the two properties that matter — no two neighbours share a color, and the arrangement
   re-rolls every fire. It emits a normal `SceneApplyRequest`, so **all the existing
-  timing, staggering, cloud_v2 colour batching, progress SSE and "Now showing" recording
+  timing, staggering, cloud_v2 color batching, progress SSE and "Now showing" recording
   come for free** (incl. `expect_hue`, so divergence detection works on palette fires).
 - **Why not snapshot ten payloads in the browser and pick one?** A category is ten
   devices-worth of resolved JSON, which would bloat `config.json` (rewritten on every
@@ -737,7 +737,7 @@ One entry that turns lights on and later off: "sunset−10 until sunrise+10", or
 - **A due end fires LATE** if the Pi was down through the moment — deliberately unlike a
   missed start, which is skipped (waking to a 7am scene at 9am is worse than nothing).
   Turning lights off late is harmless and still wanted. **If the end action ever becomes
-  configurable beyond "off", revisit this** — catching up on a colour change hours later is
+  configurable beyond "off", revisit this** — catching up on a color change hours later is
   exactly what the no-catch-up rule exists to prevent.
 - **Saving clears `end_due`** when the trigger, action or end changes, or when the schedule
   is disabled — a disabled schedule turning lights off an hour later is unexplainable. A

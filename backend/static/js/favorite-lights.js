@@ -1,4 +1,4 @@
-// ─── Favourite Lights strip (v3.33.0) ───────────────────────────────────────
+// ─── Favorite Lights strip (v3.33.0) ───────────────────────────────────────
 // The problem this solves is pure distance. With 26 devices, All Lights renders
 // 13 Hue cards and then 13 Govee ones — single-column on a phone — so reaching
 // the three accent lights someone actually uses every evening means scrolling
@@ -7,7 +7,7 @@
 //
 // So: star a light, and it's pinned to the top of both tabs, on screen before
 // any scrolling happens at all. Rows are COMPACT by design (name + room +
-// toggle, nothing draggable) so half a dozen favourites still fit above the
+// toggle, nothing draggable) so half a dozen favorites still fit above the
 // fold; tapping the name expands the full LightCard in place, which is rendered
 // by app.js's `renderLightCard` so it is the identical card All Lights shows.
 //
@@ -146,7 +146,7 @@ function FavoriteLightsBar({ favoriteKeys, hueLights, goveeDevices, nicknames, d
           textTransform: "uppercase", letterSpacing: 0.7,
         }}>
           <span style={{ fontSize: 12 }}>&#9733;</span>
-          Favourites
+          Favorites
         </span>
         <span style={{ fontSize: 10, color: "#475569" }}>
           {found.length} light{found.length === 1 ? "" : "s"}
@@ -192,7 +192,7 @@ function FavoriteLightsBar({ favoriteKeys, hueLights, goveeDevices, nicknames, d
           </div>
         ))}
         {/* A pinned light we can't resolve. Say so and offer the fix rather than
-            dropping it silently — a favourite vanishing with no explanation is
+            dropping it silently — a favorite vanishing with no explanation is
             how you end up re-pinning it and wondering why it didn't stick. */}
         {orphans.map(({ key }) => (
           <div key={key} style={{

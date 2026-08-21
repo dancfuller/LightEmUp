@@ -131,7 +131,7 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
               onKeyDown={(e) => { if (e.key === "Enter") saveEdit(); if (e.key === "Escape") setEditing(false); }}
               onBlur={saveEdit}
               // Select the whole name on open so typing REPLACES it — the
-              // rename-a-file behaviour people expect. Without this the caret
+              // rename-a-file behavior people expect. Without this the caret
               // lands at the end and typing appends to the old name.
               onFocus={(e) => e.target.select()}
               placeholder={friendlyName}
@@ -169,15 +169,15 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
             <span style={{ flexShrink: 0, fontSize: 11, color: "#475569", lineHeight: 1 }}>&#x270E;</span>
           </button>
         )}
-        {/* Star = pin this light to the Favourites strip at the top of Rooms and
+        {/* Star = pin this light to the Favorites strip at the top of Rooms and
             All Lights (v3.33.0). It sits ON the card because that's where you
             are when you notice you keep hunting for this light — the same
             idiom as click-the-name-to-rename. Optional, so call sites that
-            don't manage favourites render no star at all. */}
+            don't manage favorites render no star at all. */}
         {onToggleFavorite && (
           <button
             onClick={(e) => { e.stopPropagation(); onToggleFavorite(); }}
-            title={isFavorite ? "Remove from Favourites" : "Pin to Favourites (top of the page)"}
+            title={isFavorite ? "Remove from Favorites" : "Pin to Favorites (top of the page)"}
             aria-pressed={!!isFavorite}
             style={{
               flexShrink: 0, background: "none", border: "none", padding: "0 2px",

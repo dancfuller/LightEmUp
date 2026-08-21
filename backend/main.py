@@ -76,7 +76,7 @@ DEFAULT_CONFIG = {
                                # known_devices.govee[mac].last_seen.
     "govee_scene_address": {},  # govee slug → "segments" | "whole" (v3.18.0)
                                 # Does a room scene paint this device per segment or
-                                # as one colour? Set per device in the Scenes panel
+                                # as one color? Set per device in the Scenes panel
                                 # and read by BOTH the browser's scene apply and the
                                 # scheduler's palette action, so a scheduled look
                                 # matches a hand-applied one. Absent = "segments"
@@ -147,11 +147,11 @@ DEFAULT_CONFIG = {
     # this dict is invisible to the restore preview and absent after importing an
     # older backup that predates it, so THIS DICT IS THE REGISTRY OF WHAT SETTINGS
     # EXIST. Add a key here in the same commit that starts writing it.
-    "favorites": [],      # saved colours [[r,g,b],…]. Empty is falsy on purpose:
+    "favorites": [],      # saved colors [[r,g,b],…]. Empty is falsy on purpose:
                           # /api/config falls back to DEFAULT_FAVORITES (defined much
                           # further down, so it can't be referenced from here).
     "favorite_lights": [],  # device keys ("hue:12" / "govee:<slug>") pinned to the
-                            # Favourites strip at the top of Rooms and All Lights
+                            # Favorites strip at the top of Rooms and All Lights
                             # (v3.33.0). ORDER IS THE USER'S — it's the order the
                             # strip renders in, so append on star and never sort.
                             # Deliberately NOT a room-level or zone-level thing:
@@ -1031,7 +1031,7 @@ async def _apply_room_white(room_name: str, kelvin: int, brightness_pct: int,
                 ip=ip, mac=slug, on=True, brightness=brightness_pct,
                 color_temp_kelvin=kelvin))
     # No swatch: the frontend renders the chip from `kelvin` via kelvinToRGB, so
-    # the backend doesn't need discovery's colour math just for a label.
+    # the backend doesn't need discovery's color math just for a label.
     record_room_applied(room_name, "white", _white_label(kelvin), kelvin=kelvin,
                         source=source, source_detail=source_detail, expect=sent)
 
@@ -1068,7 +1068,7 @@ async def _apply_room_color(room_name: str, r: int, g: int, b: int, brightness_p
 # A palette schedule stores a SOURCE, not a snapshot: "a random palette from
 # Summer" or "a random one of these four". The look is resolved at fire time,
 # which is the whole point — the same schedule has to produce a different scene
-# each evening. That means the Pi does the colour-to-device assignment itself,
+# each evening. That means the Pi does the color-to-device assignment itself,
 # where the browser normally would.
 #
 # Why not snapshot ten payloads in the browser and pick one? Because a category
@@ -1081,13 +1081,13 @@ async def _apply_room_color(room_name: str, r: int, g: int, b: int, brightness_p
 # The assignment here is deliberately simpler than the browser's adjacency
 # solver: deal a shuffled pool round-robin over devices sorted by their position
 # in the room layout. That gives the two properties that actually matter — no
-# two neighbours share a colour, and the arrangement differs each fire.
+# two neighbours share a color, and the arrangement differs each fire.
 
 class _ColorDealer:
-    """Hands out palette colours so that consecutive calls never repeat.
+    """Hands out palette colors so that consecutive calls never repeat.
 
     Reshuffles at each cycle boundary (and re-rolls if the new cycle would open
-    with the colour the last one closed on), so a long strip doesn't show the
+    with the color the last one closed on), so a long strip doesn't show the
     same repeating ABCABC pattern down its whole length."""
 
     def __init__(self, colors: list, rng=None):
@@ -1115,7 +1115,7 @@ class _ColorDealer:
 def _palette_device_order(room_name: str, keys: list[str]) -> list[str]:
     """Device keys in room-layout order (left to right, then top to bottom).
 
-    Dealing colours in this order is what makes "no two neighbours match" mean
+    Dealing colors in this order is what makes "no two neighbours match" mean
     anything spatially. Devices with no placement sort last, in config order —
     a room that was never laid out still gets a valid, if arbitrary, spread."""
     positions = ((config.get("room_layouts", {}) or {}).get(room_name) or {}).get("devices") or {}
@@ -1154,7 +1154,7 @@ def gv_scene_address(slug: str, sku: Optional[str]) -> str:
     the scheduler's palette action. Before this existed the browser used a
     room-level toggle it kept to itself and the scheduler read `govee_segment_mode`
     (which only the LIGHTNING panel ever writes), so the same device could be
-    painted per-segment by hand and as one colour on a schedule.
+    painted per-segment by hand and as one color on a schedule.
 
     A device with one segment is always "whole" regardless of what's stored —
     there is nothing to spread a palette across."""
@@ -1172,7 +1172,7 @@ def _build_palette_scene(room_name: str, palette: dict, brightness: int = 100,
                          rng=None):
     """Resolve a palette into a SceneApplyRequest for one room.
 
-    Whether each Govee device is painted per-segment or as one colour comes from
+    Whether each Govee device is painted per-segment or as one color comes from
     `gv_scene_address` — the SAME setting the Scenes panel writes — so a schedule
     fires the look the room is configured for rather than a second opinion.
 
@@ -1221,8 +1221,8 @@ def _build_palette_scene(room_name: str, palette: dict, brightness: int = 100,
                                         colors=[list(c) for c in seg_colors],
                                         brightness=brightness, label=label))
             else:
-                # cloud_v2 is rate-limited, so segments are batched BY COLOUR —
-                # one V2 call per distinct colour instead of one per segment.
+                # cloud_v2 is rate-limited, so segments are batched BY COLOR —
+                # one V2 call per distinct color instead of one per segment.
                 by_color: dict = {}
                 for idx, c in enumerate(seg_colors):
                     by_color.setdefault(c, []).append(idx)
@@ -1231,7 +1231,7 @@ def _build_palette_scene(room_name: str, palette: dict, brightness: int = 100,
                     unit="panel" if sku == "H6061" else "segment", label=label,
                     groups=[SceneCloudGroup(segments=idxs, r=c[0], g=c[1], b=c[2])
                             for c, idxs in by_color.items()]))
-                # Seed the whole strip with its own middle colour first, so it
+                # Seed the whole strip with its own middle color first, so it
                 # reads as the scene immediately instead of flashing white while
                 # the rate-limited segment calls trickle in.
                 seed = seg_colors[len(seg_colors) // 2]
@@ -1365,7 +1365,7 @@ async def _fire_schedule(sched: dict):
                 req.label = "Scheduled scene"
             await _start_scene_apply(req)
         elif atype == "colors":
-            # "My Colors": the colours are IN the schedule, so there's nothing to
+            # "My Colors": the colors are IN the schedule, so there's nothing to
             # choose between. Wrapped as a one-off palette so it goes through the
             # exact same builder — which is what makes alternating red/green come
             # out ABABAB down a hexa strip (see _ColorDealer) rather than needing
@@ -1374,7 +1374,7 @@ async def _fire_schedule(sched: dict):
                       for c in (action.get("colors") or [])
                       if isinstance(c, (list, tuple)) and len(c) == 3]
             if not colors:
-                log.warning("Scheduler: %r — colours action has no colours, skipped", name)
+                log.warning("Scheduler: %r — colors action has no colors, skipped", name)
                 return
             chosen = {"name": action.get("label") or "My Colors",
                       "category": "custom", "featured": False, "colors": colors}
@@ -1435,8 +1435,8 @@ async def _fire_schedule(sched: dict):
 # A due end DOES fire late (unlike a missed start, which is skipped — waking to a
 # 7am scene at 9am is worse than nothing). Turning lights off late is both
 # harmless and what you wanted. **If the end action ever becomes configurable
-# beyond "off", revisit that**: catching up on a colour change hours later is the
-# behaviour the no-catch-up rule exists to prevent.
+# beyond "off", revisit that**: catching up on a color change hours later is the
+# behavior the no-catch-up rule exists to prevent.
 
 def _resolve_end_due(sched: dict, started: "datetime", location: dict,
                      sun_resolver=None) -> Optional[str]:
@@ -1479,7 +1479,7 @@ def _resolve_end_due(sched: dict, started: "datetime", location: dict,
             hm = resolver(end.get("event", "sunrise"), d,
                           int(end.get("offset_min", 0) or 0))
             # Don't trust the tuple blindly: an out-of-range minute would raise
-            # out of the scheduler tick. _sun_hhmm normalises via timedelta, so
+            # out of the scheduler tick. _sun_hhmm normalizes via timedelta, so
             # this only bites on a bad resolver — skip rather than throw.
             if not hm or not (0 <= hm[0] <= 23 and 0 <= hm[1] <= 59):
                 continue
@@ -2270,8 +2270,8 @@ async def control_hue_light(req: HueLightStateRequest):
     if success:
         record_hue_state(req.light_id, state)  # last-known, for power recovery
         # Verify discrete actions only. Presence of `on` is an exact proxy for
-        # "settled click" in this UI: the card's toggle sends {on}, a colour/CT
-        # pick sends {on:true, …}, while the brightness and colour-wheel DRAGS
+        # "settled click" in this UI: the card's toggle sends {on}, a color/CT
+        # pick sends {on:true, …}, while the brightness and color-wheel DRAGS
         # send {brightness} / {r,g,b} with no `on`. Drags commit every 180ms
         # (useThrottledControl), so verifying those would mean a GET per tick.
         # Bulk callers opt out — they register one batch for the whole run.
@@ -2338,17 +2338,17 @@ EXPECT_RECONCILE_WINDOW_S = 45
 
 
 def _reconcile_expectations(actual: dict) -> bool:
-    """Replace "the colour we asked for" with "the colour the bridge settled on"
+    """Replace "the color we asked for" with "the color the bridge settled on"
     in any JUST-WRITTEN room record. Returns True if anything changed.
 
     The bridge gamut-clamps. Ask an outdoor bulb for a saturated cyan and it
-    reports back the nearest colour it can physically make, and for a hard clamp
+    reports back the nearest color it can physically make, and for a hard clamp
     that lands well outside HUE_XY_TOLERANCE — one of Dan's Front Door lights was
     asked for xy [0.184, 0.284] and settled at [0.157, 0.379], a dy of 0.095.
     Comparing later against what we ASKED for then declares the room changed
     forever, minutes after LightEmUp itself set it. That's the precise false
     alarm this whole feature exists in order not to raise, and loosening the
-    tolerance enough to swallow it (~0.12) would let a genuinely different colour
+    tolerance enough to swallow it (~0.12) would let a genuinely different color
     hide inside it. Comparing against what the bridge SETTLED ON fixes it exactly
     and costs nothing: these lights were just read for the verify.
 
@@ -2415,7 +2415,7 @@ async def _hue_verify_repair(expectations: dict):
         actual = {l["id"]: l.get("state", {}) for l in lights}
 
         # Free ride on the read we just did: pin any just-written expectation to
-        # the colour the bridge actually settled on, so gamut clamping can't read
+        # the color the bridge actually settled on, so gamut clamping can't read
         # as divergence five minutes later.
         if _reconcile_expectations(actual):
             save_config(config)
@@ -2461,8 +2461,8 @@ async def _hue_verify_repair(expectations: dict):
 # command instantly that evening, so they were simply unreachable at 06:10.
 #
 # So read it back, exactly as Hue does — but ONLY on/off. devStatus reports
-# `onOff` reliably; colour it does not, and a Govee-app animation isn't a static
-# state at all (see `rooms_status`). Verifying colour would manufacture the false
+# `onOff` reliably; color it does not, and a Govee-app animation isn't a static
+# state at all (see `rooms_status`). Verifying color would manufacture the false
 # confidence this is meant to remove. Power is the one claim we can prove.
 GOVEE_VERIFY_SETTLE_S = 1.5    # let both copies of the double-send land first
 
@@ -3043,7 +3043,7 @@ def _purge_hue_light(light_id: str) -> list[str]:
     if (config.get("hue_missing_since") or {}).pop(lid, None) is not None:
         touched.append("hue_missing_since")
 
-    # A pinned favourite outlives the light itself otherwise, leaving a dead row
+    # A pinned favorite outlives the light itself otherwise, leaving a dead row
     # at the very top of the app — the most visible place a stale entry can sit.
     favs = config.get("favorite_lights") or []
     kept_favs = [k for k in favs if k != key]
@@ -3258,7 +3258,7 @@ class SceneAddressRequest(BaseModel):
 @app.post("/api/govee/scene-address")
 async def set_scene_address(req: SceneAddressRequest):
     """Set whether room scenes paint each Govee device per segment or as one
-    colour. Read by the browser AND the scheduler — see gv_scene_address."""
+    color. Read by the browser AND the scheduler — see gv_scene_address."""
     store = config.setdefault("govee_scene_address", {})
     bad = [k for k, v in req.modes.items() if v not in ("segments", "whole")]
     if bad:
@@ -3273,7 +3273,7 @@ async def set_scene_address(req: SceneAddressRequest):
 async def set_govee_segment_mode(req: GoveeSegmentModeRequest):
     """Toggle per-segment mode for a Govee device in a room.
 
-    NOTE: this is the LIGHTNING scene's per-device switch, not the colour tool's.
+    NOTE: this is the LIGHTNING scene's per-device switch, not the color tool's.
     Room scenes and the scheduler use `govee_scene_address` (v3.18.0)."""
     slug = gv_slug_for_ip(req.ip, req.mac)
     if "govee_segment_mode" not in config:
@@ -3744,14 +3744,14 @@ async def _run_scene_apply(req: SceneApplyRequest):
         # rainbow — stamping the room with this look would overwrite an accurate
         # record with a wrong one, and "Set here" would then replay a plan that
         # only ever touched one light. This matches every other single-device
-        # path (picking a colour on a light card doesn't touch the room record
+        # path (picking a color on a light card doesn't touch the room record
         # either); the cost is that the room's strip is now slightly stale,
         # which it already was in that case.
         if req.scope:
             _scene_emit(scope, room, phase="done", total=apply_total,
                         done=apply_total, label="", active=False)
             return
-        # Record only on COMPLETION — a cancelled apply left the room half-set, so
+        # Record only on COMPLETION — a canceled apply left the room half-set, so
         # claiming it's "now showing" that look would be a lie.
         record_room_applied(
             room, "scene", req.label or "Scene",
@@ -3765,7 +3765,7 @@ async def _run_scene_apply(req: SceneApplyRequest):
         )
         # A scene's Hue verify fired inside do_hue, long before this record
         # existed — so it had nothing to reconcile against. Run one more pass now
-        # that the expectation is stored, which pins each colour to whatever the
+        # that the expectation is stored, which pins each color to whatever the
         # bridge settled on (and re-checks the lights while it's there).
         schedule_hue_verify(hue_expect)
         _scene_emit(scope, room, phase="done", total=apply_total, done=apply_total, label="", active=False)
@@ -4031,11 +4031,11 @@ def record_room_applied(room: str, kind: str, label: str,
 # only ever downgrades a claim — it never certifies one. Three verdicts, and
 # "unknown" is never dressed up as either of the others.
 #
-# Comparing colour was previously rejected outright (see `_hue_verify_repair`),
+# Comparing color was previously rejected outright (see `_hue_verify_repair`),
 # but that was for REPAIR, where a false positive re-sends forever. Here a false
 # positive only mislabels a strip, so a TOLERANT comparison is worth it — and it
 # has to be, because mode alone (xy vs ct) can't tell your palette from someone
-# else's colour scene.
+# else's color scene.
 HUE_XY_TOLERANCE = 0.06    # gamut clamping shifts xy slightly; a different scene shifts it a lot
 HUE_CT_TOLERANCE = 25      # mireds
 
@@ -4056,12 +4056,12 @@ def _hue_state_matches(sent: dict, cur: dict) -> Optional[bool]:
     mode = cur.get("color_mode")
     if "xy" in sent:
         if mode == "ct":
-            return False                  # our colour scene replaced by a white — the common case
+            return False                  # our color scene replaced by a white — the common case
         cxy = cur.get("xy")
         if mode == "xy" and isinstance(cxy, (list, tuple)) and len(cxy) == 2:
             dx, dy = abs(cxy[0] - sent["xy"][0]), abs(cxy[1] - sent["xy"][1])
             if max(dx, dy) > HUE_XY_TOLERANCE:
-                return False              # still colour, but a DIFFERENT colour
+                return False              # still color, but a DIFFERENT color
             return True
         return None                       # hs mode or no xy reported — can't judge
     if "ct" in sent:
@@ -4083,7 +4083,7 @@ async def _room_status(room_name: str, lights_by_id: dict) -> dict:
     # Govee devices the power verify PROVED didn't take the command (v3.31.0).
     # No network cost here: the verify already read them back and left its
     # findings on the record. This is the only claim we make about Govee, and we
-    # can stand behind it — unlike colour, on/off is reported reliably.
+    # can stand behind it — unlike color, on/off is reported reliably.
     gov_failed = entry.get("govee_failed") or []
     if not expect and not gov_failed:
         # Nothing recorded to compare against (a pre-v3.16.0 record, or a look we
@@ -4134,7 +4134,7 @@ async def rooms_status():
     — devStatus is a blocking sequential read, so polling every device here would
     cost tens of seconds per page load.
 
-    Govee colour is still never judged: LAN devStatus reports it unreliably, and
+    Govee color is still never judged: LAN devStatus reports it unreliably, and
     a running Govee-app animation isn't a static state at all, so verifying it
     would manufacture exactly the false confidence this endpoint exists to avoid.
     Govee POWER is different — `onOff` is reported reliably — but it's judged from
@@ -4163,7 +4163,7 @@ class RoomReapplyRequest(BaseModel):
 async def reapply_room(req: RoomReapplyRequest):
     """Put back the look LightEmUp last set — the "Set here" button that appears
     once the room has provably drifted (usually a Google Home routine forcing a
-    plain colour temperature)."""
+    plain color temperature)."""
     entry = (config.get("room_last_applied", {}) or {}).get(req.room_name)
     if not entry:
         raise HTTPException(404, f"Nothing recorded for '{req.room_name}'")
@@ -4280,7 +4280,7 @@ async def set_favorites(req: FavoritesRequest):
 
 class FavoriteLightsRequest(BaseModel):
     """Whole-list replace, like /api/favorites. The list is ORDERED — it's the
-    render order of the Favourites strip — so the client sends the order it
+    render order of the Favorites strip — so the client sends the order it
     wants rather than a star/unstar delta the server would have to re-sort."""
     favorite_lights: list[str]
 
@@ -4357,7 +4357,7 @@ def _deep_copy(obj):
 def _export_envelope(include_credentials: bool = True) -> dict:
     """Wrap the live config in a self-describing envelope.
 
-    The envelope — rather than a raw config.json — is what lets import recognise a
+    The envelope — rather than a raw config.json — is what lets import recognize a
     genuine LightEmUp backup, refuse one written by a NEWER build whose schema we'd
     silently mangle, and state up front whether credentials are inside."""
     import socket
@@ -4383,7 +4383,7 @@ def _export_envelope(include_credentials: bool = True) -> dict:
 # config, so a new key ships automatically. The PREVIEW was the gap: it was a
 # hand-written list of 14 fields, and every feature since v3.11.0 widened the
 # hole. Restoring an older backup silently discarded white calibration, your
-# location (which sun schedules need), favourites, per-device segment counts and
+# location (which sun schedules need), favorites, per-device segment counts and
 # scene addressing — and the diff said nothing, so "replace all settings" was a
 # bigger promise than it looked.
 #
@@ -4412,8 +4412,8 @@ _SETTING_LABELS = {
     "schedules": "Schedules",
     "zones": "Zones",
     "fixtures": "Fixtures",
-    "favorites": "Favourite colours",
-    "favorite_lights": "Favourite lights",
+    "favorites": "Favorite colors",
+    "favorite_lights": "Favorite lights",
     "location": "Location (for sunrise/sunset)",
     "power_recovery": "Power-outage recovery",
     "lightning_scenes": "Saved lightning scenes",
@@ -4540,7 +4540,7 @@ def _unwrap_import(payload: dict) -> tuple[dict, dict]:
             "lightemup_export", "app_version", "schema_version",
             "exported_at", "hostname", "includes_credentials")}
     else:
-        # Bare config.json fallback. Require a recognisable key so an unrelated
+        # Bare config.json fallback. Require a recognizable key so an unrelated
         # JSON file can't be imported as settings.
         if not any(k in payload for k in ("rooms", "nicknames", "hue_bridge_ip")):
             raise HTTPException(400, "This doesn't look like a LightEmUp backup or config file.")
@@ -4886,7 +4886,7 @@ def _validate_schedule_action(action: dict):
                 if isinstance(c, (list, tuple)) and len(c) == 3
                 and all(isinstance(v, int) and 0 <= v <= 255 for v in c)]
         if not good:
-            raise HTTPException(400, "pick at least one colour")
+            raise HTTPException(400, "pick at least one color")
 
 
 class PaletteApplyRequest(BaseModel):
@@ -4898,7 +4898,7 @@ class PaletteApplyRequest(BaseModel):
     source: str = "list"               # "list" | "category" (legacy)
     category: Optional[str] = None
     palettes: list[str] = []
-    # A "My Colors" try: inline colours instead of library palettes. Wrapped as a
+    # A "My Colors" try: inline colors instead of library palettes. Wrapped as a
     # one-off palette so the same builder runs.
     colors: list[list[int]] = []
     brightness: int = 100

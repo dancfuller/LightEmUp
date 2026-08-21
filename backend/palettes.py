@@ -1,7 +1,7 @@
 """The curated palette library, on the server side.
 
-Palettes started as a browser-only idea: you opened a room's colour tool, picked
-"Tropical", and the browser worked out which light got which colour. v3.17.0 made
+Palettes started as a browser-only idea: you opened a room's color tool, picked
+"Tropical", and the browser worked out which light got which color. v3.17.0 made
 them a SCHEDULER idea too — "10 minutes before sunset, put the living room on a
 random Summer palette" — and the scheduler fires on the Pi at sunset with nobody
 watching and no browser attached. So the Pi needs the table.
@@ -12,7 +12,7 @@ watching and no browser attached. So the Pi needs the table.
 palette to only one of them.
 
 This module is deliberately pure data + selection: it knows nothing about rooms,
-devices or config. Turning a palette into per-device colours is `main.py`'s
+devices or config. Turning a palette into per-device colors is `main.py`'s
 `_build_palette_scene`, because that needs the device layer.
 """
 
@@ -76,7 +76,7 @@ def by_name(name: str) -> Optional[dict]:
 
 def in_category(category: str) -> list[dict]:
     """Palettes in a category. 'Featured' and 'All' are the two virtual
-    categories the colour tool's filter chips offer, so accept them here too —
+    categories the color tool's filter chips offer, so accept them here too —
     otherwise a schedule authored from those chips would resolve to nothing."""
     if not category or category == "All":
         return list(PALETTES)

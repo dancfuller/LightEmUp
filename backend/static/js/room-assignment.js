@@ -66,7 +66,7 @@ function DeviceRow({ device, roomName, allRoomNames, onMove, onRemove, nicknames
 
 // DevicePickerModal moved to components-shared.js (v3.26.0) — the Rooms tab
 // now opens the same picker, so an empty room can be filled without a detour
-// through Assign Rooms. Shared component, one behaviour.
+// through Assign Rooms. Shared component, one behavior.
 
 
 function RoomCard({ roomName, devices, allRoomNames, unassigned, onMoveDevice, onRemoveDevice, onAddDevices, onDeleteRoom, onRenameRoom, isDefault, nicknames,

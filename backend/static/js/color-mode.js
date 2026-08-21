@@ -69,7 +69,7 @@ function extendPalette(baseColors, targetLen) {
 // ─── Cyclic palette ordering ──────────────────────────────────────────────
 // ─── Strip cycling (v3.21.0) ────────────────────────────────────────────────
 // A segmented device is ONE physical run and the eye reads it in segment order,
-// so with N distinct colours it should cycle cleanly — ABABABA for two, ABCABCA
+// so with N distinct colors it should cycle cleanly — ABABABA for two, ABCABCA
 // for three — no matter what else happens to sit near it in the room.
 //
 // It didn't. Segments were just more entries in the room's positional walk, so
@@ -81,7 +81,7 @@ function extendPalette(baseColors, targetLen) {
 // segIndex makes the pattern a property of the LIGHT rather than of its
 // neighbours.
 //
-// DISCRETE-COLOUR MODES ONLY (palette / custom / teams / ncaa / flags). Gradient,
+// DISCRETE-COLOR MODES ONLY (palette / custom / teams / ncaa / flags). Gradient,
 // Tonal and Beacon are spatial by design — a gradient sweeping across a laid-out
 // hexa row must follow position, and forcing a cycle would destroy it.
 //
@@ -104,7 +104,7 @@ function splitStrips(placed) {
 // Lay a clean cycle down each strip. `pick(cyclePos, phase)` returns the entry
 // for that position; `phase` is unwrapped so callers that advance a shade on
 // each wrap (Custom/preset "Create shades") can keep doing so.
-// The per-device seeded offset means Shuffle still re-rolls which colour a strip
+// The per-device seeded offset means Shuffle still re-rolls which color a strip
 // opens on, and two strips in one room don't lock-step.
 function assignStrips(strips, N, seedKey, pick) {
   const out = {};
@@ -156,8 +156,8 @@ function orderPaletteForCycle(cols) {
 // header's "Now showing" strip (see describeLook in buildScenePlan). The mode keys
 // themselves are internal ("beacon"), so don't render those to the user directly.
 // "Custom" said nothing — every mode here is a custom look. The distinction that
-// matters is WHERE the colours come from: Palette draws from the curated library,
-// this one uses colours you picked yourself. Hence "My Colors" (v3.22.0). The
+// matters is WHERE the colors come from: Palette draws from the curated library,
+// this one uses colors you picked yourself. Hence "My Colors" (v3.22.0). The
 // mode KEY stays "custom" so stored room_color_state keeps working.
 const MODE_LOOK_NAMES = {
   palette: "Palette",
@@ -576,11 +576,11 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
   // Scene addressing is PER DEVICE (v3.18.0), persisted in config as
   // `govee_scene_address` and read by the scheduler too — so a scheduled palette
   // paints the room the same way pressing Apply does. It used to be one toggle
-  // for the whole room, which meant a rope light you wanted as one colour forced
-  // the hexa panels to be one colour as well.
+  // for the whole room, which meant a rope light you wanted as one color forced
+  // the hexa panels to be one color as well.
   //
   // "segments" (default for any device with >1 segment) treats the device as N
-  // entries, one per segment, each able to take its own colour; "whole" treats it
+  // entries, one per segment, each able to take its own color; "whole" treats it
   // as a single entry and sends one whole-device command. The map's per-device
   // expand badge still supplies real layout positions when present; otherwise
   // "segments" auto-clusters them around the device so gradient/beacon still
@@ -949,13 +949,13 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     // beats graph-coloring here — in a compacted line every entry sits ~1 unit
     // from its neighbours, so the spatial adjacency graph (threshold 8) makes
     // each node adjacent to ~7 others each side; with a small palette (e.g. 3
-    // colours) that graph is uncolourable and the relax fallbacks emit adjacent
+    // colors) that graph is uncolorable and the relax fallbacks emit adjacent
     // repeats. The cycle instead guarantees distinct neighbours whenever N ≥ 2
-    // (matching Custom/Teams/Flags). Palette colours are first ordered so
+    // (matching Custom/Teams/Flags). Palette colors are first ordered so
     // consecutive cycle positions are perceptually distinct — this is the
-    // "respect adjacency when deciding which colour is A/B/C" step, and matters
+    // "respect adjacency when deciding which color is A/B/C" step, and matters
     // at N ≥ 4 (for N ≤ 3 every cyclic order is equivalent). Shuffle rotates the
-    // starting phase, so short strips still re-roll which colours appear.
+    // starting phase, so short strips still re-roll which colors appear.
     const cycleOrder = orderPaletteForCycle(colors);
     const seedKey = `${roomName}|palette|${shuffleSeed}`;
     // Each segmented device cycles on its own segIndex — see splitStrips. In BOTH
@@ -978,9 +978,9 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     // real:
     //   - un-laid-out segments carry synthetic positions with no spatial meaning,
     //     so two strips dropped at the same corner produce ~30 mutually-adjacent
-    //     nodes a small palette can't colour, and the relax fallback then emits
+    //     nodes a small palette can't color, and the relax fallback then emits
     //     an arbitrary-looking assignment;
-    //   - laid-out segments DO have meaning, but the graph colourer only promises
+    //   - laid-out segments DO have meaning, but the graph colorer only promises
     //     "neighbours differ", not "the run alternates cleanly", so a nearby lamp
     //     could still break the pattern the strip is supposed to show.
     // Either way the strip is one object and gets one cycle.
@@ -1246,7 +1246,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     });
 
     // Overlay every strip's own cycle (computed up front, shared with the
-    // isLinear branch). Colours are pre-ordered so consecutive cycle positions
+    // isLinear branch). Colors are pre-ordered so consecutive cycle positions
     // are perceptually distinct, which matters at N ≥ 4.
     return { ...result, ...stripColors };
   }, [placedColorLights, paletteColors, buildAdjacency, fixtures, roomName, shuffleSeed, isLinear]);
@@ -1765,7 +1765,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     }
     const base = MODE_LOOK_NAMES[mode] || mode;
     if (mode === "palette") return `${base} · ${paletteColors.length} colors`;
-    // No colour count for this mode: the strip renders every swatch beside the
+    // No color count for this mode: the strip renders every swatch beside the
     // label anyway (there are at most 4 seeds), and in "Create shades" the seed
     // count would actively mislead — 2 seeds can apply as 8 tonal variants.
     if (mode === "custom") return base;
@@ -1877,19 +1877,19 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
   // via the GENERATED backend/static/js/palette-library.js. They moved out of
   // this file in v3.17.0 because the SCHEDULER needs them too ("at sunset, pick
   // a random Summer palette") and it fires on the Pi with no browser attached —
-  // two copies of 808 colours would drift the first time someone added one.
+  // two copies of 808 colors would drift the first time someone added one.
   // To add a palette: edit the JSON, run `python tools/build-palette-library.py`,
   // and commit both files. Set `featured: true` to surface it in the default view.
   //
-  // **List only genuinely distinct colours — never pad to a fixed count (v3.13.0).**
+  // **List only genuinely distinct colors — never pad to a fixed count (v3.13.0).**
   // Every palette used to be exactly 8, so any theme with fewer real ideas was
-  // filled out with tints of colours already present: "Watermelon" was 2 hues in
+  // filled out with tints of colors already present: "Watermelon" was 2 hues in
   // 8 slots (four reds, four greens), and an audit found near-duplicates in 152
   // of 160 palettes — "Fourth of July" even listed #f0f0f0 twice. Because the
   // palette is a POOL that the room draws from, those tints then showed up as
   // "one light is just a paler version of that other one".
   // A palette that is monochromatic BY DESIGN (Cranberry, Noir, Snowfall) is
-  // fine — it's simply shorter now. Two colours of the same hue (within ~15°)
+  // fine — it's simply shorter now. Two colors of the same hue (within ~15°)
   // earn separate slots only with a real tonal gap (~0.15 lightness).
   const paletteLibrary = PALETTE_LIBRARY;
 
@@ -1951,7 +1951,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
             Tonal
           </button>
           <button onClick={() => setMode("custom")} style={btnStyle(mode === "custom")}
-            title="Pick your own 1–4 colours, instead of choosing from the palette library">
+            title="Pick your own 1–4 colors, instead of choosing from the palette library">
             My Colors
           </button>
           <button onClick={() => setMode("beacon")} style={btnStyle(mode === "beacon")}>
@@ -2027,8 +2027,8 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
 
       {/* Per-device scene addressing (v3.18.0). One row per segmented device in
           this room, because the right answer genuinely differs per device: hexa
-          panels look good multicoloured, while a rope light whose physical run
-          isn't drawn on the map often looks better as one colour. Shown only when
+          panels look good multicolored, while a rope light whose physical run
+          isn't drawn on the map often looks better as one color. Shown only when
           the room HAS a segmented device — otherwise it's noise. */}
       {segmentedDevicesInRoom.length > 0 && (
         <div style={{
@@ -2305,10 +2305,10 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
                         <button key={`${scheme.category}:${scheme.name}`}
                           onClick={() => {
                             // Adopt the palette's OWN length. Each curated palette now
-                            // lists exactly its distinct colours, so padding it back up
+                            // lists exactly its distinct colors, so padding it back up
                             // to whatever count happened to be showing would call
                             // extendPalette — whose first move is a lighter tint of an
-                            // existing colour, re-creating precisely what the re-cut
+                            // existing color, re-creating precisely what the re-cut
                             // removed. The +/− stepper still grows it deliberately.
                             setPaletteSource([...scheme.colors]);
                             setPaletteColors([...scheme.colors]);

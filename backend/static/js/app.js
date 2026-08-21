@@ -288,7 +288,7 @@ function App() {
   const [hueGroups, setHueGroups] = useState([]);
   const [goveeDevices, setGoveeDevices] = useState([]);
   // missingGovee: devices we've seen before that are not in the latest scan.
-  // Surfaced in Settings → Govee Devices as greyed-out rows with an X
+  // Surfaced in Settings → Govee Devices as grayed-out rows with an X
   // (forget) button. Re-scan is the section's main Re-scan button.
   const [missingGovee, setMissingGovee] = useState([]);
   const [rescanning, setRescanning] = useState(false);
@@ -316,7 +316,7 @@ function App() {
   const [versionInfo, setVersionInfo] = useState(null);
   // Favorites live in backend config (loaded in loadAll); [] until then.
   const [favoriteColors, setFavoriteColors] = useState([]);
-  // Favourite LIGHTS — device keys pinned to the strip at the top of Rooms and
+  // Favorite LIGHTS — device keys pinned to the strip at the top of Rooms and
   // All Lights. Ordered: the array order is the render order, so starring
   // appends rather than sorting. Distinct from favoriteColors above; the two
   // are unrelated despite the shared word.
@@ -354,7 +354,7 @@ function App() {
   // "shades" (tonal shades of one color). Persisted per device_key.
   const [segmentFillModes, setSegmentFillModes] = useState({});
   // sceneAddress: per Govee device, does a room scene paint it per SEGMENT or as
-  // ONE colour ("segments" | "whole", absent = segments). Keyed by bare govee
+  // ONE color ("segments" | "whole", absent = segments). Keyed by bare govee
   // slug. Set in the Scenes panel and read by the SCHEDULER too, which is the
   // whole point — before v3.18.0 the browser kept this choice to itself and a
   // scheduled palette addressed the same device differently.
@@ -406,7 +406,7 @@ function App() {
         ? prev.filter(k => k !== deviceKey)
         : [...prev, deviceKey];
       api("/favorite-lights", { method: "POST", body: JSON.stringify({ favorite_lights: next }) })
-        .catch(e => console.warn("Failed to save favourite lights:", e));
+        .catch(e => console.warn("Failed to save favorite lights:", e));
       return next;   // optimistic; backend is the source of truth
     });
   };
@@ -895,7 +895,7 @@ function App() {
   }, []);
 
   // "Set here" — put back the look LightEmUp recorded, after something else
-  // (usually a Google Home routine forcing a plain colour temperature) has
+  // (usually a Google Home routine forcing a plain color temperature) has
   // changed the room. A scene replays asynchronously server-side, so wait a
   // moment before resyncing or the status would still read as diverged.
   const reapplyRoom = useCallback(async (roomName) => {
@@ -1145,7 +1145,7 @@ function App() {
   });
 
   // ONE place that assembles a LightCard's props (v3.33.0). All Lights and the
-  // Favourites strip both render through it, so an expanded favourite behaves
+  // Favorites strip both render through it, so an expanded favorite behaves
   // identically to the same light in the grid — there's no second prop list to
   // fall behind (the Govee segment context below is exactly the sort of thing a
   // copy would miss).
@@ -1549,7 +1549,7 @@ function App() {
         {activeTab === "assign rooms" && (
           <>
           {/* Zones group ROOMS the way rooms group devices, so membership is
-              edited on the same organisational tab rather than under Schedules. */}
+              edited on the same organizational tab rather than under Schedules. */}
           <ZoneManager
             zones={zones} rooms={Object.keys(rooms)}
             onSaveZone={saveZone} onDeleteZone={deleteZone}
@@ -1689,7 +1689,7 @@ function App() {
                       />
                     );
                   })}
-                  {/* Missing devices — greyed out, red status dot, with
+                  {/* Missing devices — grayed out, red status dot, with
                       "X" (forget) and a re-scan affordance. */}
                   {missingGovee.map(device => {
                     const dk = `govee:${goveeSlug(device)}`;
@@ -1758,7 +1758,7 @@ function App() {
                 </div>
               </div>
               <div style={{ fontSize: 11, color: "#64748b", marginTop: 8 }}>
-                Hue Bar is compact and skips low-saturation greys. Color Wheel covers the full HSL space if you need pastel/desaturated colors.
+                Hue Bar is compact and skips low-saturation grays. Color Wheel covers the full HSL space if you need pastel/desaturated colors.
               </div>
 
               {/* Minimum saturation floor for generated colors */}

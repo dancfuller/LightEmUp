@@ -57,7 +57,7 @@ function InlineBrightness({ value, onChange, isMobile }) {
 function RoomLastApplied({ entry, status, onReapply, isMobile, applying }) {
   const [busy, setBusy] = useState(false);
 
-  // A scene is recorded only when it FINISHES (a cancelled apply left the room
+  // A scene is recorded only when it FINISHES (a canceled apply left the room
   // half-set, so claiming it early would be a lie) — but a room with segmented
   // Govee devices takes ~30s, because the cloud_v2 segment calls are rate
   // limited. For that whole window the strip used to keep advertising the
@@ -99,7 +99,7 @@ function RoomLastApplied({ entry, status, onReapply, isMobile, applying }) {
   const notApplied = diverged && status.reason === "not_applied";
 
   // White is stored as a Kelvin value rather than swatches, so the backend never
-  // needs colour math just to label a temperature — render the chip here.
+  // needs color math just to label a temperature — render the chip here.
   let swatches = entry.swatches || [];
   if (!swatches.length && entry.kelvin) {
     const c = kelvinToRGB(entry.kelvin);
@@ -169,7 +169,7 @@ function RoomLastApplied({ entry, status, onReapply, isMobile, applying }) {
       }}>{entry.label}</span>
 
       {/* The call to action. Divergence is nearly always a routine elsewhere
-          forcing a plain colour temperature, and what you want is your look
+          forcing a plain color temperature, and what you want is your look
           back — so make that one tap instead of "go find the scene again". */}
       {diverged && onReapply && status.can_reapply !== false && (
         <button
@@ -298,7 +298,7 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
   const [colorModeApplied, setColorModeApplied] = useState(null);
 
   // Is a backend scene apply running for THIS room? app.js re-broadcasts the
-  // scene_apply SSE stream as a window event; the colour panel uses it for its
+  // scene_apply SSE stream as a window event; the color panel uses it for its
   // progress bar, and the header strip needs it so it doesn't keep advertising
   // the previous look for the ~30s a segmented room takes to fill in. Tracked
   // here rather than in RoomLastApplied so it survives the panel being closed.
@@ -330,7 +330,7 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
 
   // What the room is ACTUALLY at, averaged over the lights that are ON — an off
   // light's remembered brightness isn't what you're looking at. Hue reports
-  // 1–254, Govee 0–100, so they're normalised before averaging. Used until you
+  // 1–254, Govee 0–100, so they're normalized before averaging. Used until you
   // drag, after which your own value stands (it's what was sent, so it matches).
   const litPcts = allLights
     .filter(l => l.state?.on)
@@ -661,7 +661,7 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
         </div>
 
         {/* The "Set room to" block that used to live here moved INTO the name row
-            above (v3.25.0) — same buttons, same behaviour, one less place to look. */}
+            above (v3.25.0) — same buttons, same behavior, one less place to look. */}
 
         {/* A brand-new room is empty, and every control above it is inert. Say so,
             and offer the one thing that makes it useful — rather than leaving the

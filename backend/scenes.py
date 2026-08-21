@@ -138,11 +138,11 @@ def generate_pattern(settings: LightningSettings, seed: int = 0) -> list[Event]:
     return events
 
 
-# ─── Colour helpers ────────────────────────────────────────────────────────
+# ─── Color helpers ────────────────────────────────────────────────────────
 
 
 def _kelvin_to_mirek(kelvin: int) -> int:
-    """Convert colour temperature in Kelvin to mirek, clamped to Hue range."""
+    """Convert color temperature in Kelvin to mirek, clamped to Hue range."""
     mirek = 1_000_000 // max(kelvin, 1)
     return max(153, min(500, mirek))
 
@@ -674,14 +674,14 @@ class SceneManager:
         """Run merged per-segment lightning on an H6061 via Razer protocol.
 
         Each segment has its own pattern.  We merge all events onto a single
-        timeline and call ``govee_razer_set_segments`` with the full colour
+        timeline and call ``govee_razer_set_segments`` with the full color
         array whenever any segment changes state.
         """
         num_segments = len(segment_patterns)
 
-        # Determine flash / dim colours.
+        # Determine flash / dim colors.
         if settings.use_color_temp:
-            # Approximate white at colour-temp as RGB for Razer.
+            # Approximate white at color-temp as RGB for Razer.
             flash_color = (255, 255, 255)
             dim_color = (60, 40, 20)  # warm amber approximation at low brightness
         else:
@@ -748,7 +748,7 @@ class SceneManager:
 
                 seg_states[tev.segment] = tev.action
 
-                # Build colour array.
+                # Build color array.
                 colors = []
                 for s in range(num_segments):
                     if seg_states[s] == "flash":

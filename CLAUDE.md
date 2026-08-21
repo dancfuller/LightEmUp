@@ -296,9 +296,9 @@ All endpoints are under `/api/`. Key groups:
 - `/api/identify` — flash a device to locate it (Hue native `alert`; Govee on/off blink then restore)
 - `/api/favorites` — favorite colors (stored in config, synced across sessions)
 - `/api/favorite-lights` — GET/POST the ordered list of device keys pinned to the
-  Favourites strip (config key `favorite_lights`). Whole-list replace; the array order
+  Favorites strip (config key `favorite_lights`). Whole-list replace; the array order
   IS the render order, so never sort it server-side. Unrelated to `/api/favorites`
-  despite the name — one is colours, the other is lights
+  despite the name — one is colors, the other is lights
 - `/api/power-recovery` — how a fresh boot after a power outage treats the lights
   (resume last state / stay off overnight); applied on the Pi's next boot only
 - `/api/schedules` — time-based schedules CRUD (GET list, POST upsert-by-id,
@@ -329,9 +329,9 @@ All endpoints are under `/api/`. Key groups:
   room UI reports itself as applying, and nothing is written to "Now showing" (one
   light isn't the room). Absent = a whole-room apply, which is every other caller
 - `/api/govee/segment-*` — per-segment mode and count config (the `segment-mode` one is
-  the **lightning** scene's switch, not the colour tool's)
+  the **lightning** scene's switch, not the color tool's)
 - `/api/govee/scene-address` — per-device "do room scenes paint this as segments or as
-  one colour?" (config key `govee_scene_address`). Read by BOTH the browser's scene apply
+  one color?" (config key `govee_scene_address`). Read by BOTH the browser's scene apply
   and the scheduler's palette action, so a schedule matches a hand-applied look. Replaced
   the room-level toggle in v3.18.0. See `backend/CLAUDE.md` "Scene addressing"
 

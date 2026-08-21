@@ -233,7 +233,7 @@ function BackupRestoreCard({ onImported, isMobile }) {
             ))}
             {(preview.rows || []).some((r) => r.unknown) && (
               <div style={{ fontSize: 10, color: "#64748b", marginTop: 6 }}>
-                * a setting this version doesn't recognise — it's carried over untouched.
+                * a setting this version doesn't recognize — it's carried over untouched.
               </div>
             )}
 
@@ -274,7 +274,7 @@ function BackupRestoreCard({ onImported, isMobile }) {
                   This backup was made by LightEmUp <strong>v{meta.app_version}</strong>, but this
                   hub is running <strong>v{preview.server_version}</strong>. Restoring across
                   versions normally works — settings added since are kept at their defaults, and
-                  anything this build doesn't recognise is carried over untouched. Check the list
+                  anything this build doesn't recognize is carried over untouched. Check the list
                   above before continuing.
                 </div>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>

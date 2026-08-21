@@ -5,7 +5,7 @@
 // Zones shipped in v3.9.0 as a scheduling target only, and their management UI
 // lived inside the Schedules tab. That was the wrong shape twice over: the
 // everyday use of a zone is a panic button — "all downstairs off" on the way to
-// bed — and grouping rooms is an organisational act that belongs next to
+// bed — and grouping rooms is an organizational act that belongs next to
 // assigning devices to rooms, not buried under automation. So:
 //   * ZoneBar   — live on/off controls in the global bar, on every tab.
 //   * ZoneManager — create/edit/delete, in Assign Rooms next to the rooms it groups.
@@ -75,7 +75,7 @@ function ZoneBar({ zones, onControl, isMobile }) {
 }
 
 // Create / edit / delete. Lives in Assign Rooms — a zone groups rooms the same
-// way a room groups devices, so both live on the same organisational tab.
+// way a room groups devices, so both live on the same organizational tab.
 function ZoneManager({ zones, rooms, onSaveZone, onDeleteZone, onRenameZone, isMobile }) {
   const [editing, setEditing] = useState(null);   // null | {name, rooms} draft
   const [confirmDelete, setConfirmDelete] = useState(null);

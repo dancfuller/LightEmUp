@@ -22,7 +22,7 @@ Line references are against the working tree at the time of writing
 | 4 | `lightning-panel.js:455-463` (`saveSettings` @ 83) | **Save Settings** | POSTs the whole lightning-settings form → `/api/scenes/lightning/settings` | Batch of discrete toggles/sliders held in local state until Save. Button sits at the **bottom of the panel, near the controls** (not pinned top), so it's the *least* bad case, but still a save-or-lose form. Candidate for auto-persist — see §4 open question. |
 | 5 | `ct-calibration.js:216` (`saveAll` @ 120) | **Save & finish** | Persists tuned white-calibration points → `POST /api/calibration/ct-rgb` | Genuine commit of a guided tuning session. Button lives in-panel near the tuning UI. Keep. |
 | 6 | `room-map.js:1558-1562` / `+ Save Scene` @ 1570 (`savePreset`) | Save / + Save Scene | Names & stores a **layout scene preset** | Genuine "create a named thing" action, commits on Enter, affordance is right at the preset list. Keep. |
-| 7 | `components-shared.js:196-201` (`addCurrentAsFavorite`) | ★ Save | Adds the current colour to favourites → `POST /api/favorites` | Genuine **action** (not form persistence). Keep. |
+| 7 | `components-shared.js:196-201` (`addCurrentAsFavorite`) | ★ Save | Adds the current color to favorites → `POST /api/favorites` | Genuine **action** (not form persistence). Keep. |
 
 ### B. Instant-persist mutation points (POST on change — the good pattern)
 
@@ -35,7 +35,7 @@ state first. This is the target model and is already correct.
 | `addRoom` | `app.js:154-167` | `POST /rooms` | create room (Rooms tab) |
 | `handleRoomsChange` | `app.js:175-191` | `POST /rooms` (per room) | **assign/move/remove device** |
 | `deleteRoom` | `room-assignment.js:400-408` | `DELETE /rooms/{name}` | delete a room |
-| `updateFavorites` | `app.js:133-137` | `POST /favorites` | add/remove favourite |
+| `updateFavorites` | `app.js:133-137` | `POST /favorites` | add/remove favorite |
 | `updatePickerStyle` | `app.js:293-303` | `POST /ui-prefs` | picker-style toggle |
 | `updateMinSat` | `app.js:305-316` | `POST /ui-prefs` | min-saturation toggle/slider |
 | `updateSegmentFillMode` | `app.js:318-328` | `POST /segment-fill-modes` | fill-mode dropdown |
@@ -56,9 +56,9 @@ state first. This is the target model and is already correct.
 
 | Handler | File:line | Endpoint | Notes |
 |---------|-----------|----------|-------|
-| room colour-tool selection | `room-section.js:228-235` (`onApply`) | `POST /room-color-state` | The whole scene selection (mode, palette, shuffle seed, custom colours…) is persisted **only when Apply is pressed**. Choosing a palette/mode without applying does not survive a refresh. See §4 open question. |
+| room color-tool selection | `room-section.js:228-235` (`onApply`) | `POST /room-color-state` | The whole scene selection (mode, palette, shuffle seed, custom colors…) is persisted **only when Apply is pressed**. Choosing a palette/mode without applying does not survive a refresh. See §4 open question. |
 
-### E. Free-text inputs — keystroke behaviour (checked for "saves on every keydown")
+### E. Free-text inputs — keystroke behavior (checked for "saves on every keydown")
 
 All free-text fields already avoid per-keystroke persistence — they commit on Enter
 (and/or blur) or via an adjacent button, holding a local `useState` in between:
@@ -68,7 +68,7 @@ All free-text fields already avoid per-keystroke persistence — they commit on 
 - Nickname (card) — `light-card.js:357-372`. Enter/Escape/Save. Good.
 - Preset name — `room-map.js:1548-1562`. Enter/Escape/Save. Good.
 - Landmark rename — `room-map.js:2140-2142`. Enter + blur. Good.
-- Favourite add — `components-shared.js:297` Enter. Good.
+- Favorite add — `components-shared.js:297` Enter. Good.
 
 No text field persists on every keystroke. No change needed here.
 
@@ -106,7 +106,7 @@ One rule set, applied everywhere:
    and/or Enter** into a local buffer, then persist. Escape cancels. Never persist on
    every keystroke. Already correct everywhere (§1.E).
 
-3. **Genuine actions** (Apply a scene to the lights, ★ Save a favourite colour, + Save
+3. **Genuine actions** (Apply a scene to the lights, ★ Save a favorite color, + Save
    Scene preset, Flash/identify, Start/Stop storm): keep an explicit button. These are
    **not** persistence-of-form-state and should not be conflated with "Save". Their
    affordance must sit **next to the action**, never pinned far away.
@@ -138,14 +138,14 @@ affordance is docked to the control group.
   toggle/slider to instant-persist (a debounced `POST /scenes/lightning/settings`, like
   `room-layouts`) would match the model and remove the save-or-lose trap. **Open
   question:** the settings feed a scene that may be *running*; auto-persisting mid-storm
-  changes behaviour on the next flash. Confirm that live-apply is desired (it likely is),
-  then convert. Low complexity, but it's a behavioural change, so left for review.
+  changes behavior on the next flash. Confirm that live-apply is desired (it likely is),
+  then convert. Low complexity, but it's a behavioral change, so left for review.
 
-- **Room colour-tool selection persists only on Apply** (`room-section.js:228-235`).
-  A chosen palette/mode/custom-colours set is lost on refresh unless Apply was pressed.
+- **Room color-tool selection persists only on Apply** (`room-section.js:228-235`).
+  A chosen palette/mode/custom-colors set is lost on refresh unless Apply was pressed.
   **Open question:** is that intentional (selection == "what was applied") or should the
   selection debounce-persist to `room_color_state` on change so a half-configured scene
-  survives a refresh? If the latter, note the CLAUDE.md contract that any new colour-tool
+  survives a refresh? If the latter, note the CLAUDE.md contract that any new color-tool
   field must be added to `applyColors`, `RoomColorStateRequest`, and the `seededRoom`
   hydration effect — a debounced saver must serialise the same snapshot. Design decision.
 
@@ -164,7 +164,7 @@ affordance is docked to the control group.
 - **1 clear win implemented:** removed the redundant, top-pinned "Save Rooms" button.
 - **The instant-persist model is already the norm** (§1.B) — most of the app is correct.
 - **Two real inconsistencies remain, both needing a design call** (lightning settings
-  save-or-lose; colour-tool selection only-persists-on-Apply). Documented as open
+  save-or-lose; color-tool selection only-persists-on-Apply). Documented as open
   questions rather than changed.
 - **No free-text field saves per keystroke** — nothing to fix there.
 </content>

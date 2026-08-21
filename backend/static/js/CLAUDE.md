@@ -76,7 +76,7 @@ A new file must be added to index.html in the correct slot (after its dependenci
   This came from a real report: scrolling the All Lights list to reach the hexa panels
   sent a command to the patio bulb sitting directly above them.
   **This is not stage-then-apply, and shouldn't become it** — a dimmer you have to confirm
-  stops being a dimmer. The `ColorPicker`'s staging exists because picking a colour has a
+  stops being a dimmer. The `ColorPicker`'s staging exists because picking a color has a
   discrete "I chose this" moment; brightness has none.
 
 ## components-shared.js — manual color entry (v3.7.0)
@@ -123,7 +123,7 @@ which is the point — a panic button has to be reachable from wherever you are.
 A zone is a named group of ROOMS. It shipped in v3.9.0 as a **scheduling target only**,
 with its editor collapsed inside the Schedules tab. That was the wrong shape twice: the
 everyday use of a zone is a **panic button** ("all downstairs off" on the way to bed), and
-grouping rooms is an organisational act that belongs beside assigning devices to rooms,
+grouping rooms is an organizational act that belongs beside assigning devices to rooms,
 not buried under automation. So the file owns two components:
 - **`ZoneBar`** — On/Off per zone, rendered in the **global bar next to "All Off"**, which
   means every tab. That placement is the feature: a panic button has to be reachable from
@@ -132,7 +132,7 @@ not buried under automation. So the file owns two components:
   press fans out over several rooms and isn't instant).
 - **`ZoneManager`** — create/edit/**rename**/delete, rendered at the top of **Assign
   Rooms**. Zones group rooms the same way rooms group devices, so both live on the
-  organisational tab. It's a plain always-open card here, not the old collapsed disclosure.
+  organizational tab. It's a plain always-open card here, not the old collapsed disclosure.
   The name field is editable for existing zones (it used to be disabled because renaming
   wasn't supported); `saveDraft` compares against `_original` and, when they differ,
   **renames FIRST and only then saves membership** — the other order would upsert a second
@@ -147,7 +147,7 @@ several rooms at once, so resync rather than trying to predict the result optimi
 membership has exactly one place it can change.
 
 **A pointer to another tab must BE a link (v3.28.1).** Naming a destination in prose and
-then making the reader walk there is the layout apologising for itself. Both places that
+then making the reader walk there is the layout apologizing for itself. Both places that
 did it — the Schedules zones note and the empty-room text in `room-section.js` — now
 render "Assign Rooms" as an underlined indigo button wired to `onNavigate(tab)`, which
 `app.js` supplies as `setActiveTab`. **Any new copy that names a tab gets the same
@@ -186,7 +186,7 @@ asking again, and nothing said so, which read as "you must reload the page".
 The card **title itself is the rename control** — click it (a faint ✎ sits beside it) and
 it becomes an inline input; Enter or blur saves, Escape abandons, and an `×` clears the
 nickname back to the device's real name. `onFocus` **selects the whole name** so typing
-replaces it (the rename-a-file behaviour); without that the caret lands at the end and
+replaces it (the rename-a-file behavior); without that the caret lands at the end and
 you silently append to the old name. `saveEdit` skips the POST when the value is
 unchanged, because blur fires on every dismissal.
 - **Why it moved:** renaming used to live *only* inside the collapsed
@@ -197,7 +197,7 @@ unchanged, because blur fires on every dismissal.
 - This matches room rename in `room-assignment.js`, so the app has one rule: **click the
   name (or its pencil) to rename it.**
 
-## favorite-lights.js — the pinned Favourites strip (v3.33.0)
+## favorite-lights.js — the pinned Favorites strip (v3.33.0)
 Star a light and it's pinned to the top of **both** Rooms and All Lights, on screen
 before any scrolling happens. Config key `favorite_lights` (an ORDERED list of device
 keys — array order is render order, so starring appends and nothing sorts it).
@@ -205,7 +205,7 @@ keys — array order is render order, so starring appends and nothing sorts it).
   13 Hue cards then 13 Govee ones — single-column on a phone — so the three accent
   lights someone uses nightly sit past twenty they don't. The Rooms tab buries the same
   three inside a twelve-light room. Neither is fixable by tuning; the lights have to move.
-- **Rows are compact and carry NO slider** — name + room + power toggle. Six favourites
+- **Rows are compact and carry NO slider** — name + room + power toggle. Six favorites
   still fit above the fold, and there's no drag surface to brush past (see the
   `useThrottledControl` note above for why that matters on this exact list). Tapping the
   name expands the full card underneath.
@@ -221,7 +221,7 @@ keys — array order is render order, so starring appends and nothing sorts it).
   groups stay a clean superset if several sets are ever wanted. Note `fixtures` was
   considered and rejected for this: fixture membership feeds scene adjacency (mates are
   forced distinct and borrow each other's spatial edges), so overloading it would
-  silently change how every room scene colours those lights.
+  silently change how every room scene colors those lights.
 - The empty-state hint renders **only on All Lights** (`showEmptyHint`), because that's
   the one tab where the star it names is actually visible — on Rooms it's inside a
   collapsed room drawer. An unresolvable key renders a muted row with an **Unpin**
@@ -240,32 +240,32 @@ Assigns colors/temperatures across a room's devices and applies them.
   `sceneAddress` prop (config `govee_scene_address`, backed by
   `POST /api/govee/scene-address`), and the **scheduler reads the same map**, so a
   scheduled palette paints the room the way Apply does. It was one toggle per room until
-  now, which meant a rope light you wanted as one colour forced the hexa panels to match.
+  now, which meant a rope light you wanted as one color forced the hexa panels to match.
   Devices with >1 segment get a row each in the panel, plus a "set all" shortcut.
   - `segCountFor(light)` must mirror the backend's `gv_segment_count` (configured count
     beats the SKU maximum). Diverge and a schedule addresses a different segment count.
   - This is NOT the light card's `device_modes` (which controls are shown) and NOT
     lightning's `govee_segment_mode`. Applying a scene used to bulk-write `device_modes`
     from the room toggle; that side effect is gone.
-  - Setting a device to "whole" is the deliberate way to give a strip a single colour,
+  - Setting a device to "whole" is the deliberate way to give a strip a single color,
     instead of relying on the arithmetic that used to produce it by accident.
-- **A segmented device is coloured AS A STRIP — `splitStrips` + `assignStrips` (v3.21.0).**
+- **A segmented device is colored AS A STRIP — `splitStrips` + `assignStrips` (v3.21.0).**
   Every segment of one device is held OUT of the room's positional walk / adjacency graph
-  and cycles on its own `segIndex`: ABABABA for two colours, ABCABCA for three, whatever
-  else is near it in the room. Applies to the **discrete-colour modes only** — palette,
+  and cycles on its own `segIndex`: ABABABA for two colors, ABCABCA for three, whatever
+  else is near it in the room. Applies to the **discrete-color modes only** — palette,
   custom, teams/ncaa/flags. **Gradient, Tonal and Beacon are deliberately untouched**:
   they're spatial by design, and a gradient sweeping across a laid-out hexa row must
   follow position.
   - **Why:** segments were just more entries in the shared walk, so any other light in the
     same row band stole a column index and flipped the parity mid-run. A Triple Lamp at
     y=7 sitting between hexa panels at y=8 turned ABABABA into **ABBABAB** — two adjacent
-    panels the same colour, halfway along a 7-panel run. The linear branch had the same
+    panels the same color, halfway along a 7-panel run. The linear branch had the same
     flaw via x-interleaving. This also subsumes the older "synthetic strips" carve-out:
     laid-out and un-laid-out segments are now treated identically.
   - **The trade:** a strip's cycle wins over harmony with its neighbours, so a panel can
     match the lamp beside it. For a run that reads as one object that's right, but it is a
     change of priority — don't "fix" it by folding strips back into the graph.
-  - Per-device seeded phase, so Shuffle still re-rolls which colour a strip opens on and
+  - Per-device seeded phase, so Shuffle still re-rolls which color a strip opens on and
     two strips in a room don't lock-step.
 - **Teams / NCAA / Flags modes** are preset-color modes backed by `palette-data.js`
   (`PRESET_TEAMS` NFL/NBA/MLB/NHL, `PRESET_NCAA` Power 5, `PRESET_FLAGS` ~195
@@ -295,18 +295,18 @@ Assigns colors/temperatures across a room's devices and applies them.
   slot can be Color (hue) or White (a `kelvin` temperature); `applyMinSat` must not
   saturation-clamp `kelvin` entries.
 - **Curated palettes are VARIABLE length (4–8) — never pad to a fixed count (v3.13.0).**
-  Every library palette used to be exactly 8 colours, so any theme with fewer real ideas
-  was filled out with tints of colours already in it: "Watermelon" was 2 hues across 8
+  Every library palette used to be exactly 8 colors, so any theme with fewer real ideas
+  was filled out with tints of colors already in it: "Watermelon" was 2 hues across 8
   slots (four reds, four greens), and an audit found near-duplicates in **152 of 160**
   palettes ("Fourth of July" listed `#f0f0f0` twice). Since the palette is a *pool* the
   room draws from, those tints surfaced as "one light is just a paler version of that
   other one". The library was re-cut with a **hue-family** test — not overall perceptual
   distance, which can't see the problem (a red and a lighter red have zero hue difference,
-  so any hue-weighted metric scores them "far apart" on lightness alone). Two colours
+  so any hue-weighted metric scores them "far apart" on lightness alone). Two colors
   within ~15° of hue earn separate slots only with a real tonal gap (~0.15 lightness);
   near-neutrals are judged on lightness alone; floor of 4. Deliberately monochromatic
   themes (Cranberry, Noir, Snowfall) are legitimate — they're just shorter now.
-  **When adding a palette, list only genuinely distinct colours.**
+  **When adding a palette, list only genuinely distinct colors.**
 - **The library itself moved OUT of this file in v3.17.0.** `paletteLibrary` is now just
   `PALETTE_LIBRARY` from the generated `palette-library.js`, because the scheduler's
   random-palette action needs the same table on the Pi. Add palettes in
@@ -314,14 +314,14 @@ Assigns colors/temperatures across a room's devices and applies them.
   editing the generated JS is silently undone by the next regeneration.
 - **Picking a library palette adopts ITS length**, replacing both `paletteColors` and
   `paletteSource`. It used to keep whatever count was showing and pad the difference via
-  `extendPalette` — whose first extension round is a *lighter tint* of an existing colour,
+  `extendPalette` — whose first extension round is a *lighter tint* of an existing color,
   which would re-create exactly what the re-cut removed. The +/− stepper still grows a
-  palette deliberately (and still generates tints when it runs out of real colours —
+  palette deliberately (and still generates tints when it runs out of real colors —
   that's the user asking for more slots, not the library deciding for them).
 - **Palette is a shuffle pool, not a per-light list (v2.17.0):** do NOT trim the palette
   down to the light/segment count. `computePalette` already picks a distinct, room-sized
   subset from the full `paletteColors` and Shuffle (`shuffleSeed`) re-rolls which colors
-  are used — so a 2-light room with an 8-colour palette cycles through all 8 across
+  are used — so a 2-light room with an 8-color palette cycles through all 8 across
   shuffles. Trimming to slot count strands the rest of the palette and makes Shuffle
   repeat the same two colors — don't reintroduce it. The room only ever *shows* as many
   colors as it has lights; the extras stay in the pool. (Stepper/seeds keep their plain
@@ -330,27 +330,27 @@ Assigns colors/temperatures across a room's devices and applies them.
   `computePalette` branches on `isLinear`. Floor plans keep the graph-coloring + swap +
   repair path. But a compacted line seats entries ~1 unit apart, so the spatial adjacency
   graph (threshold 8) makes each node adjacent to ~7 others per side; with a small palette
-  (e.g. the user drops to 3 colours via the stepper) that graph is uncolourable and the
+  (e.g. the user drops to 3 colors via the stepper) that graph is uncolorable and the
   relax fallbacks emit *adjacent repeats* (the reported bug). The linear branch instead
-  lays colours down as a repeating cycle `ABCABC…` along the left-to-right order (same
+  lays colors down as a repeating cycle `ABCABC…` along the left-to-right order (same
   proven approach as Custom/`cycleAssign`), which guarantees distinct neighbours whenever
   N≥2 → clean `ABAB` / `ABCABC` / `ABCDABCD`. `orderPaletteForCycle()` (module scope)
   first orders the palette so consecutive cycle positions are perceptually distinct — the
-  "which colour is A/B/C" decision — which matters at N≥4 (a no-op for N≤3). Shuffle still
-  rotates the starting phase so short strips re-roll which colours appear. Don't route
-  linear palette back through the graph-colourer.
+  "which color is A/B/C" decision — which matters at N≥4 (a no-op for N≤3). Shuffle still
+  rotates the starting phase so short strips re-roll which colors appear. Don't route
+  linear palette back through the graph-colorer.
 - **Un-laid-out segments cycle too, even on a FLOOR PLAN (v3.8.1):** a segmented device
   whose individual segments were never dragged onto the map gets SYNTHETIC positions (a
   short horizontal spread at the device's spot in `placedColorLights`, flagged
   `synthetic: true`) purely so gradient/beacon vary. Those positions carry no real spatial
-  info, so `computePalette` now holds them OUT of the graph-colourer (`buildAdjacency`/the
+  info, so `computePalette` now holds them OUT of the graph-colorer (`buildAdjacency`/the
   forward pass run over `anchored` = non-synthetic only) and instead lays a per-device
   positional cycle (`ABCD…`, via `orderPaletteForCycle` + a phase seeded on
   `…|${parentKey}`) over each strip afterward. Before this, two un-laid-out strips dropped
   at the same corner (e.g. a globe at (14,1) + a rope at (14,2)) produced ~30 mutually-
-  adjacent nodes a small palette couldn't colour, so the relax fallback emitted an
+  adjacent nodes a small palette couldn't color, so the relax fallback emitted an
   arbitrary assignment (the reported "odd adjacency" bug). Laid-out segments (real
-  positions) stay anchored and graph-coloured normally — their cross-device borders still
+  positions) stay anchored and graph-colored normally — their cross-device borders still
   matter. **Preview swatch order (v3.8.2):** each swatch sorts by its entry's OWN placed
   position (via `placedByKey`) so the list mirrors the physical run of lights — on a
   LINEAR strip that means laid-out segments interleave with whole devices exactly as they
@@ -381,8 +381,8 @@ Assigns colors/temperatures across a room's devices and applies them.
 
 ## light-scene.js — scenes for ONE segmented light (v3.34.0)
 `LightScenePanel` renders inside a LightCard's Segments section (any Govee device with
->1 segment) and offers Rainbow / Palette / My colours / Shades / Beacon / One colour /
-Teams / College / Flags / Last colours across that device's segments.
+>1 segment) and offers Rainbow / Palette / My colors / Shades / Beacon / One color /
+Teams / College / Flags / Last colors across that device's segments.
 - **Why it's not ColorMode with a filter.** A room is a 2D arrangement needing an
   adjacency graph, fixtures, a vendor filter and a spatial walk; one strip is a **1D run
   where segment index IS position**. That makes Shades and Beacon meaningful here (the
@@ -396,12 +396,12 @@ Teams / College / Flags / Last colours across that device's segments.
   make the room rainbow.
 - **Reuses the pure helpers from color-mode.js** (`orderPaletteForCycle`,
   `presetColors`, `PresetPicker`) rather than copying them, which is why it must load
-  after it. **`orderPaletteForCycle` returns INDICES, not colours** — treating the
-  return as colours renders every segment transparent, and that shipped-looking bug was
+  after it. **`orderPaletteForCycle` returns INDICES, not colors** — treating the
+  return as colors renders every segment transparent, and that shipped-looking bug was
   caught only by screenshotting the preview.
 - **Rainbow deliberately skips that re-ordering** (`preserveOrder`). The function
   maximises contrast between adjacent positions, which is right for a palette and wrong
-  here: it turns ROYGBIV into R,G,V,Y,B,O,I — seven nice colours that aren't a rainbow.
+  here: it turns ROYGBIV into R,G,V,Y,B,O,I — seven nice colors that aren't a rainbow.
   For Rainbow the *sequence* is the look.
 - **`ROYGBIV` is LED-tuned, not textbook.** Pigment indigo (#4B0082) and violet
   (#9400D3) are ~7° apart in hue and both dark, so on a panel they read as two dim
@@ -409,12 +409,12 @@ Teams / College / Flags / Last colours across that device's segments.
   spreads them across the hue circle at full saturation.
 - **The cost is stated in the UI, on purpose.** Segments go over Govee's **cloud** V2
   API (every segmented SKU in `GOVEE_SEGMENT_INFO` is `cloud_v2`), rate-limited to about
-  one colour change every 1.8s. Colours are batched — each distinct colour is one call —
-  but a 7-colour rainbow on 7 panels is the worst case for batching and genuinely takes
+  one color change every 1.8s. Colors are batched — each distinct color is one call —
+  but a 7-color rainbow on 7 panels is the worst case for batching and genuinely takes
   ~13s. **Don't remove the estimate**; a user who isn't told assumes it hung. The LAN
   razer protocol would be instant and is deliberately not used (it reverts after 60s
   without keepalives).
-- "Last colours" re-sends the stored `segment_state`, which survives restarts — the
+- "Last colors" re-sends the stored `segment_state`, which survives restarts — the
   useful case being a device that was power-cycled, clearing its segments while the hub
   still remembers them.
 
@@ -444,10 +444,10 @@ add/edit form; `LocationCard` renders in Settings.
   the opposite of a scene action, and both belong: a scene is exact and frozen, a palette
   is varied and survives room edits.
   - **The preview is the feature, not decoration.** You will never watch this schedule
-    fire, so every surface shows the actual colours: the editor grids the whole candidate
+    fire, so every surface shows the actual colors: the editor grids the whole candidate
     set as `PaletteCard`s, chosen palettes appear as removable chips **that stay visible
     while you browse other categories** (picks span categories; the grid shows one), and
-    each saved row gets a `PaletteCandidatePeek` — up to four colour bars plus "+N".
+    each saved row gets a `PaletteCandidatePeek` — up to four color bars plus "+N".
   - **No segments checkbox here (removed v3.18.0).** Whether a Govee device is painted per
     segment is a property of the device, set in that room's Scenes panel and shared with
     the backend — a switch on the schedule could only disagree with the room.
@@ -461,20 +461,20 @@ add/edit form; `LocationCard` renders in Settings.
     the button says so.
 - **`palette-library.js` is GENERATED — never hand-edit it.** Source of truth is
   `backend/palette_library.json`; regenerate with `python tools/build-palette-library.py`
-  and commit both. It defines `PALETTE_LIBRARY` (160 palettes, variable 4–8 colours) and
+  and commit both. It defines `PALETTE_LIBRARY` (160 palettes, variable 4–8 colors) and
   `PALETTE_CATEGORIES`, and must load **before** `color-mode.js` and `schedules.js`.
 - **Switching action type REBUILDS the action, it doesn't merge (v3.19.1).**
   `setActionType(type, override)` keeps the target and takes that type's own fields from
   `ACTION_DEFAULTS`, so a saved `power` action can't carry a stray `kelvin` (noise in
-  config.json and in a backup, and it reads as though power sets a colour). What you'd
+  config.json and in a backup, and it reads as though power sets a color). What you'd
   entered for the type you're leaving is remembered in `typeMemory` — **component state,
   not the action** — so White(6500K) → Color → White still restores 6500K without 6500K
-  ever being stored inside a colour or power action. **Use `setActionType` for type
+  ever being stored inside a color or power action. **Use `setActionType` for type
   changes and `patchAction` only for fields within the current type.**
 - **The action picker is grouped by OUTCOME, not by action type (v3.19.0):**
   "Turn on and set" → White / Color / Palette, then "Or just" → Turn off / Turn on, last
   used look. "On/Off" was never a peer of the look actions — `_apply_room_white` and
-  `_apply_room_color` already send `on=true` with the colour, so nobody schedules "on"
+  `_apply_room_color` already send `on=true` with the color, so nobody schedules "on"
   and then separately schedules a look. Only OFF is a distinct outcome, and it now takes
   one click instead of two (pick On/Off, then pick Turn off). `{type:"power", on:true}`
   survives as "Turn on, last used look" because it IS distinct: it sends only `{on:true}`,
@@ -489,7 +489,7 @@ add/edit form; `LocationCard` renders in Settings.
   the sign, so choosing "Before" at 0 minutes doesn't snap back (`-0 < 0` is false).
 - **Any controlled number input needs a `draft` string.** Bind `value={draft ?? String(n)}`,
   set `draft` from the raw text on every change, commit only when it parses, and clear
-  `draft` on blur (which also normalises `010` → `10`). Binding a number straight to
+  `draft` on blur (which also normalizes `010` → `10`). Binding a number straight to
   `value` makes the field unclearable. `RgbSliderInput` in `components-shared.js` is the
   reference implementation.
 - **Day numbering is 0=Monday** (Python's `weekday()`), NOT JS `getDay()`'s 0=Sunday.
@@ -542,7 +542,7 @@ the strip's record can be stale. `RoomLastApplied` takes a `status` from
   "can't tell" was considered and dropped — every Govee-only room would wear it and it'd
   become noise.
 - The CTA exists because divergence is nearly always a routine elsewhere forcing a plain
-  colour temperature, and what you want is your look back — one tap beats hunting for the
+  color temperature, and what you want is your look back — one tap beats hunting for the
   scene. `reapplyRoom` in app.js waits ~3s for an async scene replay before `loadAll()`,
   or the status would still read diverged.
 - **"Didn't take" is a SECOND failure wearing the same amber panel (v3.31.0), and
@@ -581,7 +581,7 @@ and a header row can't afford a label per group.
   still reads "On" is two controls disagreeing about one fact.
 - **The percentage is derived, not invented.** `roomBrightness` starts `null` and the
   displayed value is the average of the lights that are **on** (Hue 1–254 and Govee 0–100
-  normalised first); it only becomes your own value once you drag. An all-off room falls
+  normalized first); it only becomes your own value once you drag. An all-off room falls
   back to 75. Don't reintroduce a hardcoded default as the *displayed* value — it made the
   slider claim 75% over a dim room.
 - **At <640px the row can't hold everything**, so it wraps deliberately: the **power toggle
@@ -590,13 +590,13 @@ and a header row can't afford a label per group.
 
 ## room-section.js — "Now showing" strip (v3.12.0)
 - **While a scene is applying, the strip says "Applying…" (v3.22.0).** A scene is recorded
-  only when it FINISHES — deliberately, since a cancelled apply left the room half-set —
+  only when it FINISHES — deliberately, since a canceled apply left the room half-set —
   but a room with segmented Govee devices takes ~30s because the cloud_v2 segment calls
   are rate limited. For that whole window the strip used to keep advertising the PREVIOUS
   look, so applying a palette and glancing up showed "Soft White · 2700K" and read as a
   plain bug. `RoomSection` listens to the `lightemup-scene-apply` window event (app.js
   re-broadcasts the SSE stream) and tracks it per room — in RoomSection, not
-  RoomLastApplied, so it survives the colour panel being closed.
+  RoomLastApplied, so it survives the color panel being closed.
 `RoomLastApplied` renders what the room was last set to — swatch dots + the look's name +
 a relative time — directly under the room name. It sits **OUTSIDE the `collapsed` gate**
 on purpose: rooms start collapsed, so a strip that only appeared when expanded would miss
@@ -609,7 +609,7 @@ set to?").
 - A **schedule**-sourced entry gets a `⏰ <schedule name>` badge; an in-app change gets no
   badge, because "you did this" is the boring default and doesn't need saying.
 - White entries carry `kelvin` instead of swatches and the chip is rendered here via
-  `kelvinToRGB`. Swatch dots use a fairly strong white rim — a navy/near-black team colour
+  `kelvinToRGB`. Swatch dots use a fairly strong white rim — a navy/near-black team color
   is otherwise indistinguishable from the panel behind it.
 - `describeLook()` in **color-mode.js** names the look and is returned as `label` from
   `buildScenePlan()` (so Apply and "Schedule this look" can't disagree). Mode display names
@@ -637,10 +637,10 @@ set to?").
   `api()`'s error path. Drag-and-drop hits the same `loadFile` as the picker.
 - **The diff rows come from the SERVER now (v3.30.0) — don't hand-list them again.** This
   file used to hard-code eleven `BackupDiffRow`s, and every setting added after v3.11.0 was
-  missing from the preview (white calibration, location, favourites, segment counts, scene
+  missing from the preview (white calibration, location, favorites, segment counts, scene
   addressing). `preview.rows` is derived from the config keys themselves in `main.py`, so a
   new setting appears automatically; a row that reads badly is fixed by adding a label to
-  `_SETTING_LABELS` there, **not** by adding JSX here. A key this build doesn't recognise
+  `_SETTING_LABELS` there, **not** by adding JSX here. A key this build doesn't recognize
   renders with a `*` and a footnote rather than being dropped.
 - **A version difference warns and gates, it doesn't block.** `versionMismatch` compares
   the envelope's `meta.app_version` with `preview.server_version`; when they differ an amber
@@ -729,7 +729,7 @@ The map was unusable crammed into the ~416px controls drawer (`ControlSurface`).
   (`DISTINCT_COLORS`), used for BOTH the dot and its legend swatch so they glance-match.
   Don't revert dots to `getDeviceColor` here. **Exception (v3.1.2):** the COLLAPSED
   "Room Map" panel legend (the `!expanded` device roster, before opening the editor) uses
-  a **neutral grey badge**, not `e.color` — there are no dots to match there, so a colored
+  a **neutral gray badge**, not `e.color` — there are no dots to match there, so a colored
   badge just read as "this light is set to red/green." Colors stay in the full editor only.
 - **Numbering/coloring is FROZEN at open (v3.0.3)** — number and color derive from the
   index into `numberOrder`, a snapshot of the legend-key order captured when the editor
@@ -791,7 +791,7 @@ card used to imply the hub restores your lights, full stop. A real outage showed
 the lights come back on their own hardware default *immediately*, and the hub can't say
 anything until it has booted and reconnected a minute or two later. The block states that
 sequence plainly and tells the user the only actual fix — set each light's power-on
-behaviour to **off** in the Hue/Govee apps, which is a setting LightEmUp cannot reach.
+behavior to **off** in the Hue/Govee apps, which is a setting LightEmUp cannot reach.
 **Don't trim it for tidiness**; an unstated limitation gets rediscovered as a bug report.
 
 ## app.js — orchestration
@@ -840,7 +840,7 @@ debounced `loadAll`. `ctCalibrated = {...ctCorrection, ...ctRgb}` drives the bad
   drives `unassignedHue`/`unassignedGovee` directly (was a no-op `() => {}`, so its on/off
   toggle did nothing — v3.1.0 fix). Don't route Unassigned through `/api/rooms/control`.
 - **Room on/off is a toggle switch, not a "Turn Off" button** (room-section.js, v3.1.0):
-  the old button was styled muted/grey exactly when lights were ON, reading as disabled.
+  the old button was styled muted/gray exactly when lights were ON, reading as disabled.
   The switch shows state (indigo+knob-right = on). **It's really Resume ⇄ Off (v3.4.3):**
   turning "on" sends `{on:true}`, so lights return to their last state (bulbs/strips
   remember) — not a fixed look. The label shows current state honestly; the tooltip spells

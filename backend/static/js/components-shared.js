@@ -621,8 +621,8 @@ function SceneAddressToggle({ value, count, onChange, isMobile, small }) {
         return (
           <button key={k} onClick={() => onChange(k)}
             title={k === "segments"
-              ? `Spread a scene's colours across its ${count || ""} segments`.replace("  ", " ")
-              : "Give the whole device one colour"}
+              ? `Spread a scene's colors across its ${count || ""} segments`.replace("  ", " ")
+              : "Give the whole device one color"}
             style={{
               padding: pad, borderRadius: 5, border: "none",
               background: active ? "#6366f1" : "transparent",
