@@ -455,7 +455,15 @@ not in the browser (v2.14.0):
   (`SCENE_GOVEE_STAGGER_S`) + razer (bulk) + cloud groups (`SCENE_SEG_STAGGER_S`,
   flattened across devices since the V2 rate limit is per-account).
 - Progress + cancellation ride the SSE bus as `scene_apply` events
-  (`phase`/`done`/`total`/`label`/`active`/`end_at`). During a run the task sets the
+  (`phase`/`done`/`total`/`label`/`device`/`active`/`end_at`). **`device` names which
+  device the step touched** (`govee:<slug>`, v3.35.1) so the per-light surfaces — the
+  light card header, the Favorites row — can report a ROOM scene that happens to be
+  painting one of their devices. Without it a segmented globe or rope looked idle
+  through the 1.8s-per-color it was actually being painted, because a room apply is
+  scoped to the room. Hue ticks deliberately carry no `device` (no per-card scene
+  surface, and Hue applies instantly). `end_at` rides on every tick, not just the
+  phase-open event, because a device-matching listener never sees that opener.
+  **If you add a Govee step to the apply, give its `tick` a `device`.** During a run the task sets the
   `_suppress_publish` ContextVar so the per-call device events are NOT broadcast
   (no refetch storm); `scene_apply` events are exempt by type, and one `config`
   refresh is emitted at the end. One task per room (`_scene_tasks`); a new apply

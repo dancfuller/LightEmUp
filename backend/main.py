@@ -3642,11 +3642,22 @@ async def _run_scene_apply(req: SceneApplyRequest):
     done = 0
     prog_lock = asyncio.Lock()
 
-    async def tick(phase: str, total: int, label=None):
+    async def tick(phase: str, total: int, label=None, device=None):
+        """`device` names WHICH device this step touched, as a `govee:<slug>` key
+        (v3.35.1). A room scene is scoped to the room, so without it the per-light
+        surfaces — the light card's header, the Favorites row — can't tell that
+        one of THEIR devices is mid-change. That matters most for exactly the
+        devices it's slowest for: a segmented globe or rope in a room apply spends
+        1.8s per color and looked completely idle the whole time."""
         nonlocal done
         async with prog_lock:
             done += 1
-            _scene_emit(scope, room, phase=phase, total=total, done=done, label=label, active=True)
+            # end_at rides on every tick, not just the phase-open event: a
+            # listener that only matches via `device` never sees that opener, so
+            # without this a room apply gives the light's own row a bar with no
+            # countdown.
+            _scene_emit(scope, room, phase=phase, total=total, done=done,
+                        label=label, device=device, active=True, end_at=end_at_ms)
 
     try:
         # ── Phase 1: fast whole-device base color (parallel LAN) ──
@@ -3662,7 +3673,8 @@ async def _run_scene_apply(req: SceneApplyRequest):
                         color_temp_kelvin=s.color_temp_kelvin, brightness=s.brightness))
                 except Exception as e:
                     log.warning("scene base seed failed %s: %s", s.ip, e)
-                await tick("resetting", len(req.base_seeds), "Setting base color…")
+                await tick("resetting", len(req.base_seeds), "Setting base color…",
+                           device=gv_key_for_ip(s.ip, s.mac))
 
             await asyncio.gather(*(seed(s) for s in req.base_seeds))
             if has_cloud:
@@ -3705,7 +3717,8 @@ async def _run_scene_apply(req: SceneApplyRequest):
                         color_temp_kelvin=t.color_temp_kelvin, brightness=t.brightness))
                 except Exception as e:
                     log.warning("scene govee whole failed %s: %s", t.ip, e)
-                await tick("applying", apply_total, t.label)
+                await tick("applying", apply_total, t.label,
+                           device=gv_key_for_ip(t.ip, t.mac))
 
         async def do_razer():
             for t in req.razer:
@@ -3714,7 +3727,8 @@ async def _run_scene_apply(req: SceneApplyRequest):
                         ip=t.ip, sku=t.sku, colors=t.colors, brightness=t.brightness))
                 except Exception as e:
                     log.warning("scene razer failed %s: %s", t.ip, e)
-                await tick("applying", apply_total, t.label)
+                await tick("applying", apply_total, t.label,
+                           device=gv_key_for_ip(t.ip, t.mac))
 
         async def do_cloud():
             # Flatten groups across devices: the V2 rate limit is per-account, so
@@ -3735,7 +3749,8 @@ async def _run_scene_apply(req: SceneApplyRequest):
                             color_temp_kelvin=g.color_temp_kelvin))
                     except Exception as e:
                         log.warning("scene cloud failed %s: %s", d.ip, e)
-                    await tick("applying", apply_total, label)
+                    await tick("applying", apply_total, label,
+                              device=gv_key_for_ip(d.ip, d.device_mac))
 
         await asyncio.gather(do_hue(), do_govee_whole(), do_razer(), do_cloud())
 

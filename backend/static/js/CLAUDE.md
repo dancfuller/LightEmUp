@@ -61,6 +61,17 @@ A new file must be added to index.html in the correct slot (after its dependenci
   - **It's a hook because three surfaces need the same answer** — the scene panel, the
     light card's header, and the favorites row. A segmented apply runs 13+ seconds, so
     "is this still working?" has to be answerable from wherever the user is looking.
+  - **An event is ours two ways (v3.35.1).** Either `scope` matches — the run is ABOUT
+    us — or `device` matches, meaning a **room** scene's current step is touching us. A
+    room apply is scoped to the room, so before the device match a segmented globe or
+    rope sat visibly idle through the 1.8s-per-color it was actually being painted.
+    Backend side: `tick(..., device=gv_key_for_ip(...))` on every Govee step (Hue is
+    left unnamed on purpose — it has no per-card scene surface and applies instantly).
+  - **A room run's terminal event names NO device**, so a listener that only ever
+    matched via `device` would never see the end and would stay "applying" forever. The
+    hook remembers which room adopted it (`adoptedRoom`) and accepts that room's close.
+    **Keep that if you touch the matching logic** — it's the difference between a status
+    that clears and one that sticks until reload.
   - **Always pass the backend's `label` through.** It names what is being set *right
     now* ("Hex Lights · 2 panels"). The first per-light implementation hand-rolled its
     own listener and dropped it, leaving a bare count buried at the bottom of an open

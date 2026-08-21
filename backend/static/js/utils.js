@@ -104,24 +104,42 @@ const TAP_SLOP_PX = 6;
 // missing entirely).
 function useSceneProgress(scope) {
   const [state, setState] = useState({ active: false, phase: null, done: 0, total: 0, label: "", endAt: 0 });
+  // Set when we're following a ROOM's run because one of its steps named us —
+  // see the device match below.
+  const adoptedRoom = useRef(null);
   useEffect(() => {
     if (!scope) return;
     const onProgress = (e) => {
       const d = e.detail;
-      if (!d || d.scope !== scope) return;
-      setState(prev => {
-        if (d.active === false) {
-          return { ...prev, active: false, phase: d.phase || "done", label: "" };
-        }
-        return {
-          active: true,
-          phase: d.phase || prev.phase,
-          done: typeof d.done === "number" ? d.done : prev.done,
-          total: typeof d.total === "number" ? d.total : prev.total,
-          label: d.label !== undefined ? d.label : prev.label,
-          endAt: typeof d.end_at === "number" ? d.end_at : prev.endAt,
-        };
-      });
+      if (!d) return;
+      // Two ways an event is ours:
+      //   • scope match — this run is ABOUT us (a one-light scene, or a room
+      //     component asking about its own room).
+      //   • device match — a ROOM scene whose current step is touching us
+      //     (v3.35.1). A room apply is scoped to the room, so without this a
+      //     segmented globe or rope sat visibly idle for the 1.8s-per-color it
+      //     was actually being painted.
+      const direct = d.scope === scope;
+      const viaDevice = !!d.device && d.device === scope;
+      // A room run's terminal event names no device, so a listener that only
+      // ever matched via `device` would never see the end and would stay
+      // "applying" forever. Remember whose run adopted us and accept its close.
+      const ourRoomEnding = d.active === false && adoptedRoom.current && d.scope === adoptedRoom.current;
+      if (!direct && !viaDevice && !ourRoomEnding) return;
+      if (d.active === false) {
+        adoptedRoom.current = null;
+        setState(prev => ({ ...prev, active: false, phase: d.phase || "done", label: "" }));
+        return;
+      }
+      if (viaDevice && !direct) adoptedRoom.current = d.scope;
+      setState(prev => ({
+        active: true,
+        phase: d.phase || prev.phase,
+        done: typeof d.done === "number" ? d.done : prev.done,
+        total: typeof d.total === "number" ? d.total : prev.total,
+        label: d.label !== undefined ? d.label : prev.label,
+        endAt: typeof d.end_at === "number" ? d.end_at : prev.endAt,
+      }));
     };
     window.addEventListener("lightemup-scene-apply", onProgress);
     return () => window.removeEventListener("lightemup-scene-apply", onProgress);
