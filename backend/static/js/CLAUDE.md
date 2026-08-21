@@ -453,6 +453,23 @@ Teams / College / Flags / Last colors across that device's segments.
 - "Last colors" re-sends the stored `segment_state`, which survives restarts — the
   useful case being a device that was power-cycled, clearing its segments while the hub
   still remembers them.
+- **Brightness dims LIVE; it is not a scene parameter (v3.35.2).** It used to only take
+  effect on the next Apply, so nudging the level re-ran the whole 13-second
+  segment-by-segment scene — the Pi's log from the first real rainbow test shows exactly
+  that, a second `room-apply` and another seven cloud calls. It now posts
+  `/govee/segments-brightness`, which is ONE whole-device LAN command that leaves the
+  per-segment colors alone. The value still rides along on the next Apply. Beacon is the
+  one mode where it also shapes the falloff, and that's still baked in at apply time —
+  the live dim is a master level on top, so both remain true. The slider seeds from
+  `segmentBrightness`, because a control that dims live must not misreport the level.
+- **The segment-state re-read is keyed to the DONE event, never a timer.** It was
+  `setTimeout(onApplied, (etaSec + 1) * 1000)` and it lost the race by about a second:
+  the log shows the seven segment calls at `:29 :31 :33 :35 :37 :39 :41` and the re-read
+  at `:40`, so the card's strip captured six of seven and drew the last segment as "not
+  set" while the light itself was correct. The backend emits `done` only after every
+  call has completed and persisted. **Don't replace this with the run's `config` event
+  either** — that one carries the applying client's id, and a client ignores its own
+  echoes, so the session that pressed Apply would never refresh.
 - **Status is reported in THREE places, deliberately (v3.35.0):** the panel footer (bar +
   the backend's live label + countdown, replacing the Apply button), the **light card's
   own header** ("Applying scene" + a compact bar), and the **favorites row**. The room

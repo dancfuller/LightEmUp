@@ -448,6 +448,7 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
                 <LightScenePanel
                   light={light} segCount={segCount}
                   segmentColors={segmentColors} segmentInfo={segmentInfo}
+                  segmentBrightness={segmentBrightness}
                   nicknames={nicknames} roomName={roomName} favorites={favorites}
                   onClose={() => setShowScene(false)}
                   onApplied={onSegmentStateRefresh}

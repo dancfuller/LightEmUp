@@ -127,7 +127,7 @@ function SegmentPreview({ colors, segCount, beaconSeg, onPickSeg, isMobile }) {
 }
 
 function LightScenePanel({ light, segCount, segmentColors, segmentInfo, nicknames,
-                           roomName, favorites, onClose, onApplied }) {
+                           roomName, favorites, onClose, onApplied, segmentBrightness }) {
   const isMobile = useIsMobile();
   const deviceKey = `govee:${goveeSlug(light)}`;
   const displayName = nicknames?.[deviceKey]
@@ -143,7 +143,11 @@ function LightScenePanel({ light, segCount, segmentColors, segmentInfo, nickname
   const [baseColor, setBaseColor] = useState({ r: 40, g: 180, b: 80 });
   const [direction, setDirection] = useState("forward");
   const [beaconSeg, setBeaconSeg] = useState(0);
-  const [brightness, setBrightness] = useState(100);
+  // Seed from what the device is actually showing. The slider dims live now, so
+  // opening the panel on a light sitting at 25% and reading "100%" would be a
+  // control lying about its own state — and the first nudge would jump it.
+  const [brightness, setBrightness] = useState(
+    segmentBrightness != null ? segmentBrightness : (light.state?.brightness ?? 100));
   const [justDone, setJustDone] = useState(false);
 
   // Progress rides the same SSE stream a room scene uses, filtered by SCOPE so
@@ -267,9 +271,26 @@ function LightScenePanel({ light, segCount, segmentColors, segmentInfo, nickname
       console.warn("[LightScene] apply failed:", e);
       clearProgress();
     });
-    // Segment state is written server-side per call; re-read once the apply has
-    // had time to land so the card's own strip stops showing the old colors.
-    if (onApplied) setTimeout(onApplied, (etaSec + 1) * 1000);
+    // The segment-state re-read is driven by the DONE event, not a timer — see
+    // the effect below.
+  };
+
+  // Master dimmer, applied LIVE. Brightness used to be a parameter of the next
+  // Apply, so nudging it re-ran the entire 13-second segment-by-segment scene
+  // just to change the level — the server log from the first real rainbow test
+  // shows exactly that: a second room-apply and another seven cloud calls. The
+  // device's own brightness is one whole-device LAN command that leaves the
+  // per-segment colors alone, which is what a dimmer should be. It still rides
+  // along on the next Apply so a fresh scene starts at the level you set.
+  const dimNow = (v) => {
+    if (!light.ip) return;
+    api("/govee/segments-brightness", {
+      method: "POST",
+      body: JSON.stringify({
+        ip: light.ip, sku: light.sku, brightness: v, device_mac: light.mac,
+      }),
+      headers: { "Content-Type": "application/json" },
+    }).catch(e => console.warn("[LightScene] brightness failed:", e));
   };
 
   const cancel = () => {
@@ -282,9 +303,22 @@ function LightScenePanel({ light, segCount, segmentColors, segmentInfo, nickname
   };
 
   // "Applied" confirmation, latched off the transition out of the active state
-  // (the hook reports `phase: "done"` once and then stays idle).
+  // (the hook reports `phase: "done"` once and then stays idle) — and the moment
+  // to re-read segment state.
+  //
+  // This used to be a `setTimeout(onApplied, (etaSec + 1) * 1000)`, which RACED
+  // the apply and lost by about a second: the Pi's log for a 7-color rainbow
+  // shows the segment calls landing at :29 :31 :33 :35 :37 :39 :41 and the
+  // re-read firing at :40 — so the card's strip captured six of seven segments
+  // and drew the last one as "not set" while the light itself was correct.
+  // The backend emits `done` only after every call has completed AND persisted,
+  // so keying off it is exact rather than estimated. It also can't be replaced
+  // by the run's `config` event: that one is published with the applying
+  // client's id, and a client ignores its own echoes.
   useEffect(() => {
-    if (!progress.active && progress.phase === "done") setJustDone(true);
+    if (progress.active || progress.phase !== "done") return;
+    setJustDone(true);
+    if (onApplied) onApplied();
   }, [progress.active, progress.phase]);
 
   const needsBase = mode === "gradient" || mode === "beacon" || mode === "solid";
@@ -451,8 +485,13 @@ function LightScenePanel({ light, segCount, segmentColors, segmentInfo, nickname
         />
       </div>
 
+      {/* Dims the light as you drag (Slider already throttles to ~180ms). In
+          Beacon the value ALSO shapes the falloff, so the preview re-computes
+          and the next Apply bakes it into the per-segment values — the live dim
+          is still correct in the meantime, it's a master level on top. */}
       <Slider label="Brightness" value={brightness} min={5} max={100}
-        onChange={setBrightness} color="#fbbf24" unit="%" />
+        onChange={(v) => { setBrightness(v); dimNow(v); }}
+        color="#fbbf24" unit="%" />
 
       <div style={{
         display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 10,

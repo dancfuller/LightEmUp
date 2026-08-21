@@ -51,6 +51,14 @@ deploy does — auto-busting the cache. CDN `<script src="https://…">` tags ar
   ~6 calls for a white palette instead of ~30 (v2.10.0). Stagger ~1.8s between calls.
 - The Razer per-segment protocol is the alternative but auto-reverts after 60s without
   keepalive packets — prefer cloud_v2 for set-and-leave scenes.
+- **Dimming a segmented device is ONE LAN command, not N cloud calls.**
+  `POST /api/govee/segments-brightness` sends `govee_lan_brightness` for cloud_v2: the
+  persistent `segmentedColorRgb` colors are device state and survive it, so there is no
+  reason to pay 1.8s per segment to change a level. Only **razer** needs stored segment
+  state (it rebuilds its whole packet from the colors); cloud_v2 no longer 400s without
+  it (v3.35.2), since refusing there just left the dimmer dead until a scene had been
+  applied once. Anything in the UI offering a brightness control for a segmented device
+  should call this — **never** re-run a scene to change brightness.
 
 ## Govee discovery reliability & device identity (v2.16.0)
 A single UDP scan burst is lossy — Govee devices routinely miss one — so discovery

@@ -3840,14 +3840,19 @@ async def control_govee_segments_brightness(req: GoveeSegmentsBrightnessRequest)
     bulk packet with scaled colors. Cloud_v2 devices receive per-segment
     brightness commands."""
     entry = segment_state.get(req.ip)
-    if not entry:
-        raise HTTPException(400, "No segment state for this device")
     seg_info = GOVEE_SEGMENT_INFO.get(req.sku)
     if not seg_info:
         raise HTTPException(400, f"Unknown SKU {req.sku}")
     brightness = max(0, min(100, req.brightness))
     proto = seg_info.get("protocol")
-    count = seg_info.get("count") or (max(entry["colors"].keys()) + 1 if entry["colors"] else 0)
+    # Razer rebuilds its whole packet from the stored colors, so it genuinely
+    # can't run without them. cloud_v2 just sends one whole-device LAN brightness
+    # and doesn't care — refusing there only means the panel's dimmer is dead
+    # until a scene has been applied at least once, for no gain.
+    if not entry and proto == "razer":
+        raise HTTPException(400, "No segment state for this device")
+    count = seg_info.get("count") or (
+        max(entry["colors"].keys()) + 1 if entry and entry["colors"] else 0)
 
     if proto == "razer":
         ordered = []
