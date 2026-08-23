@@ -142,7 +142,10 @@ backend/
                           # seeded PRNG, goveeSlug/goveeSegmentCount (mirror of the backend's
                           # gv_slug/gv_segment_count — keep them in step)
       audio.js            # Thunder synth (WebAudio), fart sounds (preloaded MP3s)
-      components-shared.js # ColorPicker, ColorWheel, Slider, ColorTempSlider, StatusBadge, RgbSliderInput
+      components-shared.js # ColorPicker, ColorWheel, Slider, ColorTempSlider, StatusBadge,
+                          # RgbSliderInput, SceneAddressToggle, SCENE_FILL_MODES — the
+                          # controls the light card and the Scenes panel BOTH render, so
+                          # the two can't drift into describing one setting differently
       light-card.js       # LightCard — per-device control (toggle, brightness, color, nickname)
       favorite-lights.js  # FavoriteLightsBar — the starred-lights section, APP CHROME above
                           # <main> so it's on every tab (v3.35.0), making three lights out

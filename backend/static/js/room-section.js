@@ -546,6 +546,7 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
         minSatEnabled={minSatEnabled}
         minSatPct={minSatPct}
         segmentFillModes={segmentFillModes}
+        onSegmentFillModeChange={onSegmentFillModeChange}
         sceneAddress={sceneAddress}
         onSceneAddressChange={onSceneAddressChange}
         savedColorState={savedColorState}

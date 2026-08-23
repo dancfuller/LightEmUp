@@ -767,6 +767,33 @@ missing devices). `extra` injects per-row buttons (the missing-device Re-scan/Fo
   hand-rolled copies drifting apart is precisely what made the scheduler and the scene
   tool disagree before v3.18.0.
 
+### Scene fill — and why it's mirrored into the Scenes panel (v3.36.0)
+`segment_fill_modes[deviceKey]` is `follow` | `solid` | `shades`, applied by
+`applySegmentFillModes` as the LAST step of the preview pipeline in `color-mode.js` —
+*after* the palette solver and the saturation clamp. `solid` overwrites every segment
+with segment 0's color, so the solver's per-segment assignment is computed in full and
+then thrown away. That's the design, but it produced a convincing bug report: a 15-globe
+strand on `solid` renders as fifteen identical swatches that Shuffle never varies, and
+the only control for it was on the device's own card in a different view.
+
+So the control is mirrored onto the **"Scenes paint these"** rows, as a second line under
+each device's Segments/Whole toggle:
+- **One device list, not two.** That block already enumerates the room's segmented
+  devices; a separate fill list beside it would be the same three names twice. It also
+  sits ABOVE the preview, so the option is visible before the confusion happens.
+- **Only rendered when that device is on `segments`** — fill is meaningless for a device
+  scenes paint as one color.
+- The row's caption states the *effect* on that device (`All 15 segments share one
+  color …`), built from `SCENE_FILL_MODES[].effect(count, unit)`. `unit` is `panel` for
+  the H6061 hexa and `segment` for everything else — same distinction `nameForKey` draws.
+- **`SCENE_FILL_MODES` lives in `components-shared.js`** and is used by both this and the
+  `LightCard` control, for the same anti-drift reason as `SceneAddressToggle` above.
+- In the preview grid, a segment whose parent is NOT on `follow` gets an **amber** dashed
+  outline instead of the white one, and a legend under the grid names the devices and
+  points back at the block. Derive the rows from the PREVIEW's own `:segN` keys
+  (`sceneFillRows`), not from config — that way a device set to "Whole light" correctly
+  doesn't appear, without re-deriving the addressing rules.
+
 ## Full-window room-layout editor + numbered dots/legend (room-map.js, v2.19.0)
 The map was unusable crammed into the ~416px controls drawer (`ControlSurface`). Now
 `RoomMap` has an `expanded` state (`fullScreen = expanded`, all devices — the old

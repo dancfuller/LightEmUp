@@ -1,5 +1,29 @@
 // ─── Shared Color Picker & Controls ────────────────────────────────────────
 
+// Scene fill: how a room scene paints a device that scenes address by segment.
+// Shared by the LightCard control and the scenes panel's mirror of it (v3.36.0)
+// so the two can never drift into describing the same setting differently.
+// `effect` says what the mode DOES to one specific device — its segment count
+// and the word for a single segment — because the label "Solid" on its own
+// doesn't explain a preview showing fifteen identical swatches.
+const SCENE_FILL_MODES = [
+  {
+    key: "follow", label: "Follow",
+    title: "Each segment follows the scene's per-segment color",
+    effect: (n, unit) => `Each ${unit} takes its own color from the scene`,
+  },
+  {
+    key: "solid", label: "Solid",
+    title: "All segments are the same color from the scene",
+    effect: (n, unit) => `All ${n} ${unit}s share one color — the scene's per-${unit} colors are overridden`,
+  },
+  {
+    key: "shades", label: "Shades",
+    title: "All segments are shades of one scene color",
+    effect: (n, unit) => `All ${n} ${unit}s are shades of one scene color`,
+  },
+];
+
 // HueBar: a single-row horizontal hue strip (ROYGBIV). Click or drag to
 // pick a hue at full saturation and 50% lightness. Compact alternative to
 // the full ColorPicker when you only need a primary hue and don't care

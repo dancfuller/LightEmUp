@@ -535,7 +535,7 @@ function PresetPicker({ items, value, onChange, placeholder, isMobile }) {
   );
 }
 
-function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlGovee, favorites, onFavoritesChange, nicknames, segmentInfo, roomLayouts, fixtures, onApply, onScheduleLook, minSatEnabled, minSatPct, segmentFillModes, sceneAddress, onSceneAddressChange, savedColorState }) {
+function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlGovee, favorites, onFavoritesChange, nicknames, segmentInfo, roomLayouts, fixtures, onApply, onScheduleLook, minSatEnabled, minSatPct, segmentFillModes, onSegmentFillModeChange, sceneAddress, onSceneAddressChange, savedColorState }) {
   const isMobile = useIsMobile();
   const [mode, setMode] = useState("palette"); // "palette" | "gradient" | "tonal" | "custom" | "beacon"
   // Color space: "color" (RGB, the default) or "white" (tunable color temperature).
@@ -1614,6 +1614,29 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     return `${base} · ${unit} ${parseInt(m[2]) + 1}`;
   };
 
+  // Hexa panels say "panel"; everything else is a strip of "segments" — the
+  // same distinction nameForKey draws for the apply-progress label.
+  const unitFor = (light) => (light?.sku === "H6061" ? "panel" : "segment");
+
+  // Which devices is THIS preview painting segment-by-segment, and how is each
+  // one's Scene fill set? Derived from the preview's OWN keys rather than from
+  // config, so it already respects per-device scene addressing — a device set to
+  // "Whole light" has no :segN keys and correctly doesn't show up here.
+  const sceneFillRows = (() => {
+    const counts = {};
+    Object.keys(preview || {}).forEach(k => {
+      const m = k.match(/^(.+):seg\d+$/);
+      if (m) counts[m[1]] = (counts[m[1]] || 0) + 1;
+    });
+    return Object.entries(counts).map(([key, count]) => ({
+      key, count,
+      unit: unitFor(lightMap[key]),
+      name: getDeviceLabel(lightMap[key], nicknames),
+      mode: segmentFillModes?.[key] || "follow",
+    })).sort((a, b) => a.name.localeCompare(b.name));
+  })();
+  const fillModeFor = (k) => SCENE_FILL_MODES.find(o => o.key === k) || SCENE_FILL_MODES[0];
+
   // Cancel a running server-side apply for this room.
   const cancelApply = () => {
     api("/scenes/room-apply/cancel", {
@@ -2072,6 +2095,50 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
                 value={addressModeFor(d.key)} count={d.count} isMobile={isMobile}
                 onChange={(mode) => onSceneAddressChange && onSceneAddressChange({ [d.slug]: mode })} />
 
+              {/* Scene fill, mirrored from the light's own card (v3.36.0). It
+                  belongs on this row because it's the second half of the same
+                  question — "Segments" decides whether the scene addresses the
+                  device per segment, this decides what it paints there — and
+                  because its EFFECT is only ever visible on this screen. A
+                  device left on Solid renders as a run of identical preview
+                  swatches, which read as the palette being broken rather than
+                  as a setting doing its job. Only meaningful under Segments. */}
+              {addressModeFor(d.key) === "segments" && (
+                <div style={{
+                  flex: "1 1 100%", display: "flex", flexWrap: "wrap",
+                  alignItems: "center", gap: 6, marginTop: 2,
+                }}>
+                  <span style={{ fontSize: 10, color: "#64748b" }}>Fill</span>
+                  <div style={{
+                    display: "flex", gap: 3, background: "#0f172a", borderRadius: 6,
+                    padding: 2, border: "1px solid #1e293b",
+                  }}>
+                    {SCENE_FILL_MODES.map(opt => {
+                      const active = (segmentFillModes?.[d.key] || "follow") === opt.key;
+                      return (
+                        <button key={opt.key}
+                          onClick={() => onSegmentFillModeChange && onSegmentFillModeChange(d.key, opt.key)}
+                          disabled={!onSegmentFillModeChange}
+                          title={opt.title}
+                          style={{
+                            padding: "3px 9px", borderRadius: 4, border: "none",
+                            background: active ? "#6366f1" : "transparent",
+                            color: active ? "#fff" : "#94a3b8",
+                            fontSize: 10, fontWeight: 600,
+                            cursor: onSegmentFillModeChange ? "pointer" : "default",
+                          }}
+                        >{opt.label}</button>
+                      );
+                    })}
+                  </div>
+                  <span style={{
+                    fontSize: 10, flex: "1 1 150px", minWidth: 0, lineHeight: 1.35,
+                    color: (segmentFillModes?.[d.key] || "follow") === "follow" ? "#64748b" : "#fbbf24",
+                  }}>
+                    {fillModeFor(segmentFillModes?.[d.key]).effect(d.count, unitFor(d.light))}
+                  </span>
+                </div>
+              )}
             </div>
           ))}
           <div style={{ fontSize: 10, color: "#64748b", marginTop: 6 }}>
@@ -2656,17 +2723,25 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
                   .map(([key, c]) => {
                     const sm = key.match(/^(.+):seg(\d+)$/);
                     const lk = sm ? sm[1] : key;
+                    // A segment whose device overrides Scene fill isn't showing
+                    // the color the palette picked for it — outline it in amber
+                    // so a run of identical swatches is visibly deliberate.
+                    const filled = !!sm && (segmentFillModes?.[lk] || "follow") !== "follow";
                     const bn = getDeviceLabel(lightMap[lk], nicknames);
                     const letter = sm ? String.fromCharCode(65 + parseInt(sm[2])) : null;
                     const label = sm ? `${bn.split(" ")[0]} ${letter}` : bn;
                     return (
-                      <div key={key} title={sm ? `${bn} — Segment ${letter}` : bn}
+                      <div key={key} title={sm
+                        ? `${bn} — Segment ${letter}${filled ? ` (Scene fill: ${fillModeFor(segmentFillModes[lk]).label})` : ""}`
+                        : bn}
                         style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3, cursor: "default" }}>
                         <div style={{ position: "relative", width: 40, height: 40 }}>
                           <div style={{
                             width: 40, height: 40, borderRadius: sm ? 6 : 8,
                             background: dimRgbCss(c),
-                            border: sm ? "2px dashed rgba(255,255,255,0.4)" : "1px solid rgba(255,255,255,0.2)",
+                            border: sm
+                              ? `2px dashed ${filled ? "rgba(251,191,36,0.75)" : "rgba(255,255,255,0.4)"}`
+                              : "1px solid rgba(255,255,255,0.2)",
                           }} />
                           {c.brightness !== undefined && (
                             <span style={{
@@ -2690,6 +2765,18 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
                     );
                   })}
               </div>
+              {/* The swatches can't speak for themselves: fifteen identical ones
+                  look like a broken palette until you know a per-device setting
+                  did that. Name the devices and point back at the control. */}
+              {sceneFillRows.some(r => r.mode !== "follow") && (
+                <div style={{ fontSize: 10, color: "#fbbf24", marginTop: 6, lineHeight: 1.4 }}>
+                  Amber outline — <strong>Scene fill</strong> is overriding the palette's
+                  per-segment colors on{" "}
+                  {sceneFillRows.filter(r => r.mode !== "follow")
+                    .map(r => `${r.name} (${fillModeFor(r.mode).label})`).join(", ")}.
+                  Change it under <strong>Scenes paint these</strong> above.
+                </div>
+              )}
             </div>
           )}
 

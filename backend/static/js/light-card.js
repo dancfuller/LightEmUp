@@ -289,11 +289,7 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
             display: "flex", gap: 3, background: "#0f172a", borderRadius: 8,
             padding: 3, border: "1px solid #1e293b",
           }}>
-            {[
-              { key: "follow", label: "Follow", title: "Each segment follows the scene's per-segment color" },
-              { key: "solid", label: "Solid", title: "All segments are the same color from the scene" },
-              { key: "shades", label: "Shades", title: "All segments are shades of one scene color" },
-            ].map(opt => {
+            {SCENE_FILL_MODES.map(opt => {
               const active = (segmentFillMode || "follow") === opt.key;
               return (
                 <button key={opt.key}
