@@ -326,8 +326,8 @@ Assigns colors/temperatures across a room's devices and applies them.
   strip next to a bulb) had *no* adjacency constraint and palette colors clumped. Now a
   segment constrains nearby segments of other devices and nearby whole lights; only
   same-parent segment pairs are still handled purely by the intra-device rule. A lone
-  hexa close to other lights may over-constrain a small palette, but the relax
-  fallbacks resolve it. Each custom seed
+  hexa close to other lights may over-constrain a small palette; the palette cost model
+  (below) degrades gracefully rather than failing. Each custom seed
   slot can be Color (hue) or White (a `kelvin` temperature); `applyMinSat` must not
   saturation-clamp `kelvin` entries.
 - **Curated palettes are VARIABLE length (4–8) — never pad to a fixed count (v3.13.0).**
@@ -362,6 +362,43 @@ Assigns colors/temperatures across a room's devices and applies them.
   repeat the same two colors — don't reintroduce it. The room only ever *shows* as many
   colors as it has lights; the extras stay in the pool. (Stepper/seeds keep their plain
   caps: palette ≤24, custom seeds ≤4.)
+- **ONE continuous cost model decides every palette assignment (v3.37.0). Read this
+  before touching adjacency.** `computePalette`'s floor-plan branch is a standard
+  constraint solve — greedy seed (most-constrained entry first) → local-search swap pass
+  → single-entry repair pass. The *search* was never the problem. The **cost model** was,
+  and it had been patched three times without being made coherent, which is why
+  "adjacency" kept coming back.
+  - What was wrong: the three phases judged "conflict" three incompatible ways — a hard
+    boolean gate with a relax-1/relax-2 ladder in the greedy pass, a binary 1-or-100 cost
+    in the swap pass, and a *recolor only if some color violates nothing* rule in the
+    repair. Worst of all, **an exact repeat and a merely-similar pair cost the same.** So
+    on a 3-bulb fixture the optimizer was genuinely indifferent between
+    `(crimson, crimson, yellow)` and `(orange, crimson, pink)`. A person is not.
+  - Compounding it, the old `colorDist` **clamped** any pair within 0.15 hue of each other
+    to `Math.min(0.13, …)` — below the 0.15 conflict gate — no matter how far apart their
+    lightness was. On the reported palette (orange / pale gold / crimson / pink) that left
+    only THREE legal adjacent pairs out of six, and those three contain no triangle: a
+    valid 3-coloring of a 3-bulb fixture **did not exist**. The room wasn't unlucky, it
+    was unsatisfiable, and the code had no way to say so.
+  - What replaced it: one `conflict(ci, cj)` used by all three phases.
+    `perceptualDist` is unclamped (`dh*2 + dl*0.9 + ds*0.35`, with a near-grey branch
+    where hue is meaningless); the penalty is `0` at/above `COMFORT_DIST` (0.28) and rises
+    smoothly to `DISTINCT_CAP` (0.8) as colors converge — while an **exact repeat always
+    costs 1**. That gap is the invariant: *a repeat is worse than any two distinct
+    colors.* It is what makes three colors across three bulbs win when the palette holds
+    no perfect answer, which is the normal case. `pairCost` multiplies by
+    `FIXTURE_VIOL_COST` (100) for fixture mates / segment siblings.
+  - Consequences worth knowing: usage balance is now a **tie-break, not the outer loop**
+    (balanced-but-ugly used to beat slightly-lopsided-but-clean); the greedy pass can
+    never run out of candidates, so relax-1/relax-2 are gone; and the repair takes the
+    least-bad color under a strict-improvement test, so it always makes progress and can
+    never make a room worse. Net −54 lines.
+  - **If you change any constant here, run `tools/preview/fixture-check.mjs`** — it
+    sweeps palettes against the real room and fails if a fixture ever gets fewer distinct
+    colors than it has bulbs. The reported palette scored 2-of-3 on 12/12 shuffles before
+    this change and 3-of-3 on 12/12 after; typical library palettes (Cotton Candy, Pop
+    Art, Frostbite, Autumn) passed both before and after, which is exactly why this class
+    of bug kept slipping through hand-testing.
 - **Palette on a LINEAR layout uses a positional cycle, NOT graph-coloring (v3.7.1):**
   `computePalette` branches on `isLinear`. Floor plans keep the graph-coloring + swap +
   repair path. But a compacted line seats entries ~1 unit apart, so the spatial adjacency

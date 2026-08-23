@@ -992,139 +992,58 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     // Precompute HSL for each palette color
     const hsl = colors.map(c => rgbToHsl(c.r, c.g, c.b));
 
-    // Two metrics are needed:
+    // ─── One cost model for the whole assignment (v3.37.0) ────────────
+    // The three phases below — greedy seed, swap pass, repair — used to judge
+    // "conflict" three different and mutually inconsistent ways: a hard boolean
+    // gate with two relax fallbacks, a 1-or-100 binary cost, and a
+    // zero-violations-only rule. The disagreement is what shipped bad rooms.
     //
-    // colorDist (clamped) — used to *gate* adjacency. Same-hue-family pairs
-    //   are capped below the similarity threshold so a darker/duller variant
-    //   of the same family is never considered "distinct enough" to sit next
-    //   to its sibling.
+    // The binary cost was the worst of it: "identical color" and "0.13 apart"
+    // priced the SAME, so on a 3-bulb fixture the optimizer was indifferent
+    // between (crimson, crimson, yellow) and (orange, crimson, pink) and kept
+    // whichever it happened to reach first. A person is not indifferent.
     //
-    // colorRankDist (unclamped) — used to *rank* candidates when the
-    //   gate passes nothing through (e.g. monochromatic Warm palette). Even
-    //   when every option is in the same family, we still want the most
-    //   tonally different shade picked for adjacent slots, not random.
-    const colorDist = (i, j) => {
-      const a = hsl[i], b = hsl[j];
-      let dh = Math.abs(a.h - b.h);
-      if (dh > 0.5) dh = 1 - dh;
-      const satWeight = Math.min(a.s, b.s);
-      const dl = Math.abs(a.l - b.l);
-      const ds = Math.abs(a.s - b.s);
-
-      if (satWeight < 0.2) return dl + ds * 0.3;
-      if (dh < 0.15) return Math.min(0.13, dh + (dl + ds * 0.3) * 0.2);
-      return dh * 2 + (dl + ds * 0.3) * 0.5;
-    };
-    const colorRankDist = (i, j) => {
+    // All three phases now minimize ONE continuous penalty with one invariant:
+    // **an exact repeat always costs more than any two distinct colors.** That
+    // is what makes "three colors across three bulbs" win even when the palette
+    // holds no perfect answer — which is the normal case, not the exception.
+    const perceptualDist = (i, j) => {
       const a = hsl[i], b = hsl[j];
       let dh = Math.abs(a.h - b.h);
       if (dh > 0.5) dh = 1 - dh;
       const dl = Math.abs(a.l - b.l);
       const ds = Math.abs(a.s - b.s);
-      return dh * 2 + dl + ds * 0.3;
+      // Hue is meaningless between near-greys — compare tone alone.
+      if (Math.min(a.s, b.s) < 0.2) return dl + ds * 0.3;
+      // Hue leads, but lightness genuinely separates two tones of one family.
+      // The old metric CLAMPED any same-family pair below the conflict
+      // threshold (Math.min(0.13, …) against a 0.15 gate), which declared a
+      // deep crimson and a pale pink indistinguishable. They aren't — and that
+      // clamp is why a four-color palette could collapse to two usable colors
+      // and then fail to fill a three-bulb fixture at all.
+      return dh * 2 + dl * 0.9 + ds * 0.35;
     };
 
-    // Two colors below this perceptual distance are visually too similar to
-    // sit next to each other (e.g. two saturated reds that differ only in
-    // brightness/saturation). Tuned so distinct hues pass and near-duplicates fail.
-    const SIMILARITY_THRESHOLD = 0.15;
+    // Distance at which two colors read as comfortably different. Below it the
+    // penalty rises smoothly to DISTINCT_CAP; there is no cliff to fall off.
+    const COMFORT_DIST = 0.28;
+    // Ceiling for a distinct-but-close pair. Strictly below the 1 charged for
+    // an exact repeat — that gap IS the invariant.
+    const DISTINCT_CAP = 0.8;
+    const conflict = (ci, cj) => {
+      if (ci === cj) return 1;
+      const d = perceptualDist(ci, cj);
+      if (d >= COMFORT_DIST) return 0;
+      const t = (COMFORT_DIST - d) / COMFORT_DIST;
+      return t * t * DISTINCT_CAP;
+    };
 
-    // Sort devices by number of neighbors (most constrained first)
-    const sorted = [...anchored].sort((a, b) =>
-      (adj[b.key]?.size || 0) - (adj[a.key]?.size || 0)
-    );
-
-    const usage = new Array(N).fill(0);
-    const assignment = {};
-
-    sorted.forEach(device => {
-      // Collect color indices already assigned to adjacent neighbors
-      const neighborIdxs = [];
-      adj[device.key]?.forEach(nk => {
-        if (assignment[nk] !== undefined) neighborIdxs.push(assignment[nk]);
-      });
-      const neighborSet = new Set(neighborIdxs);
-      const tooSimilarToNeighbor = (idx) => {
-        for (const nIdx of neighborIdxs) {
-          if (idx === nIdx) return true;
-          if (colorDist(idx, nIdx) < SIMILARITY_THRESHOLD) return true;
-        }
-        return false;
-      };
-
-      // Pick a tier of usage counts: lowest first. Within a tier, prefer
-      // colors that are perceptually distinct from every neighbor.
-      const tiers = [...new Set(usage)].sort((a, b) => a - b);
-      let candidates = [];
-      for (const tier of tiers) {
-        candidates = [];
-        for (let i = 0; i < N; i++) {
-          if (usage[i] === tier && !tooSimilarToNeighbor(i)) candidates.push(i);
-        }
-        if (candidates.length > 0) break;
-      }
-      // Relax 1: drop the similarity rule but still avoid identical indices
-      if (candidates.length === 0) {
-        for (const tier of tiers) {
-          candidates = [];
-          for (let i = 0; i < N; i++) {
-            if (usage[i] === tier && !neighborSet.has(i)) candidates.push(i);
-          }
-          if (candidates.length > 0) break;
-        }
-      }
-      // Relax 2: any color in the lowest-usage tier
-      if (candidates.length === 0) {
-        const minUse = Math.min(...usage);
-        for (let i = 0; i < N; i++) if (usage[i] === minUse) candidates.push(i);
-      }
-
-      // Among candidates, prefer max min-distance from neighbor colors.
-      // Lexicographic: colorDist (clamped) first so cross-family beats
-      // same-family even when relax-1 dropped the similarity gate; then
-      // colorRankDist (unclamped) so monochromatic palettes still
-      // discriminate by lightness/saturation instead of tying at the cap.
-      let chosen;
-      if (neighborIdxs.length === 0) {
-        chosen = candidates[Math.floor(rng() * candidates.length)];
-      } else {
-        let bestClamped = -Infinity;
-        let bestRank = -Infinity;
-        let bestCandidates = [];
-        for (const idx of candidates) {
-          let minClamped = Infinity;
-          let minRank = Infinity;
-          for (const nIdx of neighborIdxs) {
-            const dc = colorDist(idx, nIdx);
-            const dr = colorRankDist(idx, nIdx);
-            if (dc < minClamped) minClamped = dc;
-            if (dr < minRank) minRank = dr;
-          }
-          const clampedBetter = minClamped > bestClamped + 1e-9;
-          const clampedTied = Math.abs(minClamped - bestClamped) < 1e-9;
-          if (clampedBetter || (clampedTied && minRank > bestRank + 1e-9)) {
-            bestClamped = minClamped;
-            bestRank = minRank;
-            bestCandidates = [idx];
-          } else if (clampedTied && Math.abs(minRank - bestRank) < 1e-9) {
-            bestCandidates.push(idx);
-          }
-        }
-        chosen = bestCandidates[Math.floor(rng() * bestCandidates.length)];
-      }
-
-      assignment[device.key] = chosen;
-      usage[chosen]++;
-    });
-
-    // Identify strict-distinctness edges. Two cases:
-    //   - Fixture mates: user's explicit "this housing holds multiple
-    //     bulbs that should never match" grouping.
-    //   - Segment siblings: physically-adjacent panels of one multi-segment
-    //     device (e.g. H6061 hexa). Siblings should never share a color.
-    // Both outrank a spatial adjacency conflict — a violation here costs
-    // FIXTURE_VIOL_COST × more in the swap pass and is force-repaired
-    // afterwards.
+    // ─── Which pairs must never match, as opposed to prefer not to ────
+    //   - fixture mates: the user's explicit "one housing, several bulbs";
+    //   - segment siblings: panels of one multi-segment device.
+    // (Segmented devices are held out of this graph and cycled instead, so the
+    // sibling case only bites on a linear layout. It stays because the rule is
+    // about the relationship, not about which caller happens to hit it.)
     const parentKeyOf = (k) => {
       const m = k.match(/^(.+):seg\d+$/);
       return m ? m[1] : k;
@@ -1142,21 +1061,53 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
       const fb = keyToFixture[pb];
       return !!(fa && fa === fb);
     };
-
-    // Post-pass: greedy local-search swap. The forward pass is myopic —
-    // when relax-1 drops the similarity gate it can leave same-family
-    // colors on adjacent devices even though a global rearrangement
-    // would resolve the conflict. Fixture-mate violations are weighted
-    // FIXTURE_VIOL_COST × heavier than spatial violations so the swap
-    // pass accepts a swap that fixes a fixture conflict even if it
-    // creates a smaller non-fixture conflict elsewhere.
+    // A violation between mates outranks a merely-spatial one by this much.
     const FIXTURE_VIOL_COST = 100;
-    const pairCost = (a, b, ca, cb) => {
-      if (ca === cb || colorDist(ca, cb) < SIMILARITY_THRESHOLD) {
-        return mustBeDistinct(a, b) ? FIXTURE_VIOL_COST : 1;
+    const pairCost = (a, b, ca, cb) =>
+      (mustBeDistinct(a, b) ? FIXTURE_VIOL_COST : 1) * conflict(ca, cb);
+
+    // ─── Greedy seed: most-constrained entry first ────────────────────
+    const sorted = [...anchored].sort((a, b) =>
+      (adj[b.key]?.size || 0) - (adj[a.key]?.size || 0)
+    );
+
+    const usage = new Array(N).fill(0);
+    const assignment = {};
+
+    sorted.forEach(device => {
+      const placed = [];
+      adj[device.key]?.forEach(nk => {
+        if (assignment[nk] !== undefined) placed.push([nk, assignment[nk]]);
+      });
+      // Score EVERY color, always. The old gate → relax-1 → relax-2 cascade
+      // collapses into this: there is no candidate set that can come up empty,
+      // and the worst case is simply the least-bad color rather than an
+      // arbitrary one from the bottom of the ladder.
+      let best = [], bestCost = Infinity, bestUse = Infinity;
+      for (let i = 0; i < N; i++) {
+        let cost = 0;
+        for (const [nk, nIdx] of placed) cost += pairCost(device.key, nk, i, nIdx);
+        // Usage balance is a TIE-BREAK, not a constraint. It used to be the
+        // outer loop (pick the lowest-usage tier, THEN look at color), which is
+        // how a well-balanced but ugly assignment beat a slightly lopsided
+        // clean one.
+        const better = cost < bestCost - 1e-9;
+        const tied = Math.abs(cost - bestCost) < 1e-9;
+        if (better || (tied && usage[i] < bestUse)) {
+          bestCost = cost; bestUse = usage[i]; best = [i];
+        } else if (tied && usage[i] === bestUse) {
+          best.push(i);
+        }
       }
-      return 0;
-    };
+      const chosen = best[Math.floor(rng() * best.length)];
+      assignment[device.key] = chosen;
+      usage[chosen]++;
+    });
+
+    // ─── Swap pass: exchange two entries' colors when it lowers the bill ──
+    // The greedy pass is myopic — it can't undo an early choice that boxed in
+    // a later one. Swapping preserves the color balance exactly, so it's the
+    // cheap global fix to try first.
     const deltaSwap = (a, b) => {
       const ca = assignment[a], cb = assignment[b];
       if (ca === cb) return 0;
@@ -1197,47 +1148,42 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
       assignment[b] = tmp;
     }
 
-    // Final strict-distinctness repair pass. If a fixture-mate or
-    // segment-sibling pair still violates the similarity gate (typical for
-    // isolated fixtures and lone hexa devices where no external device
-    // exists to swap with), force one member to recolor — any palette color
-    // that doesn't violate against its neighbors is accepted, ignoring
-    // global usage balance because strict-distinctness outranks balance.
+    // ─── Repair pass: recolor a single entry when that lowers the bill ────
+    // The old version only recolored when it found a color that violated
+    // NOTHING, and otherwise left the violation untouched — so it did nothing
+    // in precisely the rooms that needed it (an isolated fixture with a small
+    // palette). Taking the least-bad color instead means it can always make
+    // progress, and the strict-improvement test means it can never make things
+    // worse. Unlike the swap pass this changes the color balance, which is why
+    // it runs second.
+    const costAt = (key, idx) => {
+      let c = 0;
+      (adj[key] || []).forEach(nk => {
+        if (nk !== key && assignment[nk] !== undefined) {
+          c += pairCost(key, nk, idx, assignment[nk]);
+        }
+      });
+      return c;
+    };
     for (let pass = 0; pass < 8; pass++) {
-      let repaired = false;
+      let improved = false;
       for (const a of deviceKeys) {
-        for (const b of adj[a] || []) {
-          if (a >= b) continue;
-          if (!mustBeDistinct(a, b)) continue;
-          const ca = assignment[a], cb = assignment[b];
-          if (ca !== cb && colorDist(ca, cb) >= SIMILARITY_THRESHOLD) continue;
-          // Try to recolor b first, then a, with any palette color that
-          // doesn't violate against its neighbors.
-          let fixed = false;
-          for (const target of [b, a]) {
-            const otherNeighbors = [];
-            (adj[target] || []).forEach(nk => {
-              if (assignment[nk] !== undefined) otherNeighbors.push(assignment[nk]);
-            });
-            for (let i = 0; i < N; i++) {
-              let ok = true;
-              for (const nIdx of otherNeighbors) {
-                if (i === nIdx || colorDist(i, nIdx) < SIMILARITY_THRESHOLD) { ok = false; break; }
-              }
-              if (ok) {
-                usage[assignment[target]]--;
-                assignment[target] = i;
-                usage[i]++;
-                fixed = true;
-                repaired = true;
-                break;
-              }
-            }
-            if (fixed) break;
-          }
+        const cur = costAt(a, assignment[a]);
+        if (cur === 0) continue;
+        let bestIdx = assignment[a], bestCost = cur;
+        for (let i = 0; i < N; i++) {
+          if (i === assignment[a]) continue;
+          const c = costAt(a, i);
+          if (c < bestCost - 1e-9) { bestCost = c; bestIdx = i; }
+        }
+        if (bestIdx !== assignment[a]) {
+          usage[assignment[a]]--;
+          assignment[a] = bestIdx;
+          usage[bestIdx]++;
+          improved = true;
         }
       }
-      if (!repaired) break;
+      if (!improved) break;
     }
 
     const result = {};

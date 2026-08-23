@@ -37,3 +37,23 @@ Notes:
 - `channel` defaults to `msedge`; set `BROWSER_CHANNEL=chrome` if Edge isn't present.
 - The version in the footer comes from the Pi's `/api/version`, so it reflects the
   Pi's build, not the working tree — that's expected.
+
+## fixture-check.mjs — regression test for palette adjacency
+
+`node fixture-check.mjs` (with `serve.mjs` running) sweeps palettes against the
+real room and **exits non-zero** if a fixture — several bulbs in one housing —
+ever shows fewer distinct colors than it has bulbs.
+
+This exists because that property broke repeatedly and quietly. It broke on
+*some* palettes while typical library ones passed, so hand-testing kept missing
+it: before v3.37.0 the saved 4-color palette gave the Triple Lamp 2 colors
+across 3 bulbs on every single shuffle, while Cotton Candy / Pop Art / Frostbite
+/ Autumn all looked fine. **Run this after touching anything in
+`computePalette` or `buildAdjacency`.**
+
+```
+ROOM_INDEX=1 SHUFFLES=6 node fixture-check.mjs
+PALETTES='["Pop Art","Frostbite"]' node fixture-check.mjs
+```
+
+The room's own saved palette is always tested first, as `(saved)`.
