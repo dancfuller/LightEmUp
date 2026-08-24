@@ -139,10 +139,13 @@ backend/
     index.html         # HTML shell — CSS, CDN imports, script tags
     js/                   # Load order is set by <script> tags in index.html (authoritative)
       utils.js            # React hooks, api() wrapper, color math, useIsMobile, useThrottledControl,
+                          # the color clipboard (copyColorToClipboard/useColorClipboard — the
+                          # ONE piece of color state kept in localStorage, not config),
                           # seeded PRNG, goveeSlug/goveeSegmentCount (mirror of the backend's
                           # gv_slug/gv_segment_count — keep them in step)
       audio.js            # Thunder synth (WebAudio), fart sounds (preloaded MP3s)
-      components-shared.js # ColorPicker, ColorWheel, Slider, ColorTempSlider, StatusBadge,
+      components-shared.js # ColorPicker (incl. the Copy button + PASTE strip every picker in
+                          # the app inherits), ColorWheel, Slider, ColorTempSlider, StatusBadge,
                           # RgbSliderInput, SceneAddressToggle, SCENE_FILL_MODES — the
                           # controls the light card and the Scenes panel BOTH render, so
                           # the two can't drift into describing one setting differently

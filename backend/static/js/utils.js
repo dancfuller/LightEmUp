@@ -577,3 +577,120 @@ function spreadKelvin(minK, maxK, n) {
 // Favorite colors now live in backend config (GET /api/config → favorites,
 // POST /api/favorites), loaded/saved by app.js — not in localStorage — so they
 // sync across every session and device.
+
+// ─── Color Clipboard ────────────────────────────────────────────────────────
+// Copy a color off one light or segment and paste it onto another ("make the
+// Triple Lamp's bottom bulb match its top"). Deliberately a short stack of
+// RECENT copies rather than a single slot: the real job is usually "make these
+// three match" or "reuse the two colors I just set", where one copy gets pasted
+// several times and you want the previous one still reachable.
+//
+// This is the one piece of color state that DOESN'T live in backend config, and
+// that's on purpose — it is not a re-litigation of the favorites decision above.
+// Favorites are curated, durable, synced, and belong in a backup; the clipboard
+// is churn from the last few minutes, scoped to the browser you're copying in,
+// and would be noise in an export. The ★ Save button on a clipboard entry is the
+// promotion path from "I used this a second ago" to "keep this forever".
+const COLOR_CLIPBOARD_KEY = "leu.colorClipboard";
+const COLOR_CLIPBOARD_MAX = 8;
+// Same-tab notification. The native "storage" event only fires in OTHER tabs, so
+// on its own it would leave the tab that did the copying showing a stale strip.
+const COLOR_CLIPBOARD_EVENT = "leu-color-clipboard";
+
+// Storage can throw outright (Safari private mode, site data blocked) and can
+// hold anything a previous version — or a person with devtools — left there, so
+// every read is defensive and a bad entry costs an empty strip, not a crash.
+function readColorClipboard() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(COLOR_CLIPBOARD_KEY) || "[]");
+    if (!Array.isArray(raw)) return [];
+    return raw
+      .filter(c => c && Number.isFinite(c.r) && Number.isFinite(c.g) && Number.isFinite(c.b))
+      .slice(0, COLOR_CLIPBOARD_MAX);
+  } catch (e) {
+    return [];
+  }
+}
+
+let colorClipboard = readColorClipboard();
+
+function writeColorClipboard(next) {
+  colorClipboard = next;
+  try {
+    localStorage.setItem(COLOR_CLIPBOARD_KEY, JSON.stringify(next));
+  } catch (e) {
+    // No persistence available — the clipboard still works for this page's life.
+  }
+  window.dispatchEvent(new CustomEvent(COLOR_CLIPBOARD_EVENT));
+}
+
+// `source` is a human label for where the color came from ("Triple Lamp - Top",
+// "Hexa · Segment C") and is shown as the paste swatch's tooltip. Optional: the
+// pickers that don't know what device they're editing just omit it.
+function copyColorToClipboard(color, source) {
+  const chan = (v) => Math.max(0, Math.min(255, Math.round(Number(v) || 0)));
+  const entry = { r: chan(color?.r), g: chan(color?.g), b: chan(color?.b) };
+  if (source) entry.source = String(source);
+  // Copying a color you already have shouldn't fill the strip with duplicates —
+  // the existing entry moves back to the front instead.
+  const rest = colorClipboard.filter(
+    c => !(c.r === entry.r && c.g === entry.g && c.b === entry.b)
+  );
+  writeColorClipboard([entry, ...rest].slice(0, COLOR_CLIPBOARD_MAX));
+  return entry;
+}
+
+function clearColorClipboard() {
+  writeColorClipboard([]);
+}
+
+// Subscribe a component to the clipboard. Every ColorPicker in the app calls
+// this, which is why the store is a module-level singleton rather than props or
+// context — there are eleven call sites across seven files, and threading a
+// clipboard through all of them would be a lot of plumbing for a scratchpad.
+function useColorClipboard() {
+  const [items, setItems] = useState(colorClipboard);
+  useEffect(() => {
+    const onLocal = () => setItems(colorClipboard);
+    const onStorage = (e) => {
+      // Another tab copied something; our in-memory copy is now stale.
+      if (e.key && e.key !== COLOR_CLIPBOARD_KEY) return;
+      colorClipboard = readColorClipboard();
+      setItems(colorClipboard);
+    };
+    window.addEventListener(COLOR_CLIPBOARD_EVENT, onLocal);
+    window.addEventListener("storage", onStorage);
+    return () => {
+      window.removeEventListener(COLOR_CLIPBOARD_EVENT, onLocal);
+      window.removeEventListener("storage", onStorage);
+    };
+  }, []);
+  return items;
+}
+
+// Best-effort mirror to the SYSTEM clipboard, so a copied color can also be
+// pasted into anything else — including this app's own hex field. Note the Pi is
+// served over plain http://, which is NOT a secure context, so
+// navigator.clipboard is usually undefined here and the deprecated execCommand
+// path is the one that actually runs. Failure is silent by design: the in-app
+// clipboard is the feature and it has already succeeded by this point.
+function copyTextToSystemClipboard(text) {
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).catch(() => {});
+      return;
+    }
+  } catch (e) { /* fall through to the legacy path */ }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.top = "-1000px";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand("copy");
+    document.body.removeChild(ta);
+  } catch (e) { /* no system clipboard reachable; in-app copy still happened */ }
+}

@@ -1877,6 +1877,7 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
             <div style={{ marginTop: 4 }}>
               <ColorPicker
                 size={140}
+                sourceLabel={getDeviceLabel(selectedLight, nicknames)}
                 currentColor={selectedColor}
                 onColorSelect={(r, g, b) => {
                   if (selectedLight.type === "hue") {

@@ -132,6 +132,46 @@ sliders, hex) converge on the same `onColorSelect(r,g,b)`. `HexColorInput` is al
   guards the `currentColor`→local sync effect so an SSE refresh mid-edit can't clobber an
   unapplied pick. The bar reads "Pick a color to apply" until a color is known/applied.
 
+## components-shared.js — the color clipboard (v3.38.0)
+Copy a color off one light or segment and paste it onto another ("make the Triple Lamp's
+bottom bulb match its top"). The store is `utils.js`; the UI is two rows inside
+**ColorPicker**, so all eleven call sites got it at once — per-light card, per-segment
+editor, room map, room Controls, the scene base pickers, schedules.
+- **It's a stack of recent copies, not one slot.** The job is nearly always "make these
+  three match" or "reuse the two colors I just set", where one copy is pasted repeatedly
+  and the previous one still needs to be reachable. Cap is `COLOR_CLIPBOARD_MAX` (8),
+  newest first, and re-copying a color you already hold moves that entry to the front
+  rather than duplicating it. The newest swatch wears an indigo ring — that's the one a
+  plain system paste would have given you.
+- **Copy takes the LOCAL pick (`localR/G/B`), not `currentColor`.** Otherwise dragging the
+  hue bar and hitting Copy would silently copy the color you just moved away from.
+- **Paste goes through `chooseColor`**, so it obeys `stageApply`: in the room Controls it
+  *stages* like any other pick instead of jumping straight to the lights. Don't shortcut it
+  to `onColorSelect`.
+- **The PASTE row only renders once something has been copied.** That keeps it free until
+  the feature is used, and appearing on the very first Copy is how it teaches itself —
+  there is no empty state to explain.
+- `sourceLabel` (optional prop) is what the paste tooltip credits the color to. `light-card.js`
+  passes the device name, or `"{device} · Segment C"` in segment mode; `room-map.js` passes
+  the selected dot's label. The scene/schedule pickers omit it on purpose — their color is
+  an input to a look, not a color that came off a device — and the tooltip is just the hex.
+- **Why this one is in `localStorage` when favorites deliberately are not** — see the
+  comment block in `utils.js`. Favorites are curated, durable, synced, and belong in a
+  backup; the clipboard is churn from the last few minutes, is scoped to the browser you're
+  copying in, and would be noise in an export. It is NOT a config key and there is nothing
+  for the config-key checklist to do. The ★ Save button next to Copy is the promotion path
+  from "used it a second ago" to "keep it forever". Don't "fix" this by moving it to the
+  server.
+- Cross-tab sync is real: same tab hears the `leu-color-clipboard` CustomEvent (the native
+  `storage` event fires only in OTHER tabs, so on its own the copying tab would show a
+  stale strip), other tabs hear `storage` and re-read. Every storage access is wrapped —
+  it throws outright when site data is blocked, and a corrupt entry must cost an empty
+  strip, not a crash.
+- `copyTextToSystemClipboard` mirrors the hex to the real clipboard as a bonus. The Pi is
+  served over plain `http://`, which is **not** a secure context, so `navigator.clipboard`
+  is usually undefined and the deprecated `execCommand` fallback is the path that actually
+  runs. It fails silently on purpose — the in-app clipboard has already succeeded by then.
+
 ## The "Live" bar (app.js, above `<main>`)
 The always-present strip holding **All lights off** + `ZoneBar`. It renders on every tab,
 which is the point — a panic button has to be reachable from wherever you are.

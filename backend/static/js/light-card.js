@@ -380,6 +380,7 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
                 <ColorPicker
                   size={130}
                   compact={true}
+                  sourceLabel={displayName}
                   currentColor={lightColor}
                   onColorSelect={(r, g, b) => {
                     setLightColor({ r, g, b });
@@ -485,6 +486,7 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
               <ColorPicker
                 size={130}
                 compact={true}
+                sourceLabel={`${displayName} · Segment ${String.fromCharCode(65 + selectedSegment)}`}
                 currentColor={segmentColors?.[selectedSegment] || lightColor}
                 onColorSelect={(r, g, b) => {
                   api("/govee/segment-control", {

@@ -191,7 +191,7 @@ function HexColorInput({ value, onChange }) {
 }
 
 function ColorPicker({ size = 140, currentColor, onColorSelect, favorites, onFavoritesChange, compact = false,
-                       stageApply = false, onApply, applyLabel }) {
+                       stageApply = false, onApply, applyLabel, sourceLabel }) {
   // stageApply (opt-in): picking a color/favorite/RGB does NOT drive the lights —
   // it *stages* a pending color, committed only by the "Apply to …" button
   // (onApply). Used by the room Controls so selecting a favorite or nudging RGB
@@ -205,6 +205,12 @@ function ColorPicker({ size = 140, currentColor, onColorSelect, favorites, onFav
   const [localB, setLocalB] = useState(currentColor?.b ?? 100);
   const [editingFavs, setEditingFavs] = useState(false);
   const [newFavLabel, setNewFavLabel] = useState("");
+  // Copied colors, shared by every ColorPicker in the app (module-level store in
+  // utils.js). Copy here, paste from any other picker — that's the whole feature.
+  const clipboard = useColorClipboard();
+  const [copied, setCopied] = useState(false);
+  const copiedTimer = useRef(null);
+  useEffect(() => () => clearTimeout(copiedTimer.current), []);
   // staged = there's a pending color the user picked but hasn't Applied yet
   // (stageApply mode only). A ref mirrors it so the currentColor sync effect can
   // read it without re-subscribing.
@@ -247,6 +253,19 @@ function ColorPicker({ size = 140, currentColor, onColorSelect, favorites, onFav
     chooseColor(r, g, b);
   };
 
+  // Copy takes what the preview is SHOWING (the local pick), not the light's
+  // last-reported color — otherwise dragging the wheel and hitting Copy would
+  // silently copy the color you just moved away from. The in-app clipboard is
+  // the feature; mirroring the hex to the system clipboard is a bonus that may
+  // silently no-op (see copyTextToSystemClipboard).
+  const copyCurrent = () => {
+    copyColorToClipboard({ r: localR, g: localG, b: localB }, sourceLabel);
+    copyTextToSystemClipboard(rgbToHex(localR, localG, localB));
+    setCopied(true);
+    clearTimeout(copiedTimer.current);
+    copiedTimer.current = setTimeout(() => setCopied(false), 1200);
+  };
+
   const addCurrentAsFavorite = () => {
     const label = newFavLabel.trim() || `${localR},${localG},${localB}`;
     const updated = [...favorites, { r: localR, g: localG, b: localB, label }];
@@ -283,10 +302,12 @@ function ColorPicker({ size = 140, currentColor, onColorSelect, favorites, onFav
         </button>
       </div>
 
-      {/* Current color preview */}
+      {/* Current color preview — and the copy control, which lives here because
+          this row already means "the color you have right now". */}
       <div style={{
-        display: "flex", alignItems: "center", gap: 10, marginBottom: 10,
-        padding: "6px 10px", background: "#0f172a", borderRadius: 8,
+        display: "flex", alignItems: "center", gap: 10,
+        marginBottom: clipboard.length > 0 ? 6 : 10,
+        padding: "6px 10px", background: "#0f172a", borderRadius: 8, flexWrap: "wrap",
       }}>
         <div style={{
           width: 28, height: 28, borderRadius: 8, flexShrink: 0,
@@ -296,17 +317,70 @@ function ColorPicker({ size = 140, currentColor, onColorSelect, favorites, onFav
         <span style={{ fontSize: 12, color: "#94a3b8" }}>
           R:{localR} G:{localG} B:{localB}
         </span>
-        {mode !== "favorites" && (
+        {/* Copy and ★ Save wrap together as a unit, so a narrow card drops both
+            onto the second line rather than splitting them. */}
+        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
           <button
-            onClick={() => { setMode("favorites"); setEditingFavs(true); }}
+            onClick={copyCurrent}
+            title={`Copy ${rgbToHex(localR, localG, localB)} — then paste it onto another light or segment`}
             style={{
-              marginLeft: "auto", padding: "3px 8px", borderRadius: 6, border: "none",
-              background: "rgba(99,102,241,0.15)", color: "#a5b4fc",
-              fontSize: 10, fontWeight: 600, cursor: "pointer",
+              padding: "3px 8px", borderRadius: 6, border: "none",
+              background: copied ? "rgba(74,222,128,0.18)" : "rgba(148,163,184,0.14)",
+              color: copied ? "#86efac" : "#cbd5e1",
+              fontSize: 10, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap",
+              transition: "background .15s, color .15s",
             }}
-          >★ Save</button>
-        )}
+          >{copied ? "Copied" : "Copy"}</button>
+          {mode !== "favorites" && (
+            <button
+              onClick={() => { setMode("favorites"); setEditingFavs(true); }}
+              style={{
+                padding: "3px 8px", borderRadius: 6, border: "none",
+                background: "rgba(99,102,241,0.15)", color: "#a5b4fc",
+                fontSize: 10, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap",
+              }}
+            >★ Save</button>
+          )}
+        </div>
       </div>
+
+      {/* Paste strip — copied colors, newest first, ringed if it's the one a
+          plain system paste would have given you. It only renders once something
+          has been copied: that costs nothing until the feature is used, and
+          appearing on the very first Copy is how it teaches itself. Clicking a
+          swatch goes through chooseColor, so in stageApply mode a paste STAGES
+          like any other pick instead of jumping straight to the lights. */}
+      {clipboard.length > 0 && (
+        <div style={{
+          display: "flex", alignItems: "center", gap: 6, marginBottom: 10,
+          padding: "5px 8px", background: "#0f172a", borderRadius: 8, flexWrap: "wrap",
+        }}>
+          <span style={{
+            fontSize: 9, fontWeight: 700, letterSpacing: 0.5, color: "#64748b",
+          }}>PASTE</span>
+          {clipboard.map((c, i) => (
+            <button
+              key={`${c.r},${c.g},${c.b}`}
+              onClick={() => chooseColor(c.r, c.g, c.b)}
+              title={`${c.source ? c.source + " — " : ""}${rgbToHex(c.r, c.g, c.b)}${i === 0 ? " (most recent)" : ""}`}
+              style={{
+                width: 22, height: 22, borderRadius: 6, padding: 0, flexShrink: 0,
+                cursor: "pointer", background: `rgb(${c.r},${c.g},${c.b})`,
+                border: i === 0 ? "2px solid #a5b4fc" : "1px solid rgba(255,255,255,0.18)",
+              }}
+            />
+          ))}
+          <button
+            onClick={clearColorClipboard}
+            title="Clear copied colors"
+            style={{
+              marginLeft: "auto", padding: "2px 6px", borderRadius: 6, border: "none",
+              background: "transparent", color: "#475569",
+              fontSize: 12, fontWeight: 700, lineHeight: 1, cursor: "pointer",
+            }}
+          >&#10005;</button>
+        </div>
+      )}
 
       {/* Wheel mode — either the full wheel or the compact HueBar,
           depending on the user's Settings preference. */}
