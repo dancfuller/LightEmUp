@@ -924,6 +924,50 @@ keeping written down:
 - **`enabled` is the RUNNING flag and it is persisted on purpose**, so a show survives a
   restart. `_resume_lightshows` restarts them **behind `_recovery_done`**, like everything
   else that drives lights at startup.
+### Something else turned the room off (v3.40.2)
+"Turn off the living room lights" to a Google Home turned them off — and a few
+seconds later the show turned them back on. Google talks to the bridge directly, so
+LightEmUp never hears about it; this is the same reality `/api/rooms/status` exists
+for, and a background loop is the worst possible place to be ignorant of it.
+
+**`_lightshow_external_off` asks the bridge once per frame, BEFORE painting**: are
+the lights this show most recently lit now off? One GET covers the whole house
+regardless of light count, which at a 20s+ cadence is free. If so, the show stops
+itself (persisting `enabled: False` — you asked for the room off, so it stays off).
+Precision beats coverage, because a false positive stops a show the user wanted:
+- **Only cells the show LIT count.** Alternate rests half the room at level 0 by
+  design, and those must never read as evidence.
+- **Unreachable lights are skipped** — a bulb on a flipped wall switch reports
+  `on: false` forever and says nothing about the room.
+- **Any lit light still on ⇒ not an external off.** A bridge that can't be read, an
+  empty response, or a room with no Hue lights all return False: "can't tell" must
+  never become "stop". Same rule as `_room_status`.
+- **Known gap:** a Govee-only room can't be checked. LAN devStatus is a blocking
+  sequential read holding port 4002 — not something to do every frame of every show.
+- **Known window:** an off landing *during* a paint is missed, since we've already
+  re-lit the room before the next check. That's ~1s in every interval; closing it
+  would mean polling the bridge continuously.
+
+**Note this got worse before it got better.** With the v3.40.1 budget rule a cheap
+room repaints EVERY light every step, so an external off used to bring back two
+lights and now brought back the whole room. The check is what makes that safe.
+
+### Two more things that made "off" unreliable (v3.40.2)
+- **`stop_lightshow` now settles for `LIGHTSHOW_SETTLE_S` (0.3s) after cancelling.**
+  `govee_lan_send` schedules its duplicate datagram as an **independent** task
+  (`asyncio.create_task`, `GOVEE_RESEND_DELAY_S` later), so cancelling the show does
+  NOT cancel it. A straggling "on + color" from the frame we just killed landed
+  after the caller's "off" and switched that light back on — which is why turning a
+  room off could take two presses. **Anything that cancels a task mid-send has this
+  problem**; the resend is deliberately fire-and-forget and won't change.
+- **Start/stop are serialized per room** (`_lightshow_locks`). Both had an `await`
+  before registering their task, so two concurrent starts — and the panel
+  auto-saves every control you touch, so two quick edits are two overlapping POSTs —
+  could each get past it, both create a loop, and the second overwrite the first in
+  `_lightshow_tasks`. The orphan then painted forever and nothing could ever stop
+  it. `start_lightshow`/`stop_lightshow` take the lock; `_start_lightshow_locked`/
+  `_stop_lightshow_locked` are the bodies, since start reuses stop.
+
 - **Every hand-driven WHOLE-ROOM path retires the show** — `control_room`,
   `scene_room_apply` (non-scoped only), `_start_scene_apply`, `_apply_room_white`,
   `_apply_room_color`, `start_lightning` — because a show that repaints 30 seconds after
@@ -937,7 +981,11 @@ keeping written down:
 - It is room-name-keyed, so it's in **both** `rename_room` and `delete_room` — and
   `rename_room` also **re-keys the running task**, which is keyed by name and would
   otherwise keep painting a room that no longer exists.
-- Covered by three scratch tests. `test_accent_bug.py` (9 assertions) is the regression
+- Covered by four scratch tests. `test_external_off.py` (17 assertions) fakes a
+  bridge and covers the detector's whole truth table (lit-only, unreachable, partial,
+  unreadable, empty, unpainted), proves the loop stops itself without repainting over
+  the off, times the settle, and races three concurrent starts to prove exactly one
+  loop survives. `test_accent_bug.py` (9 assertions) is the regression
   guard for the above: it drives the real loop logic over a simulated room, drops one
   command mid-Accent to **reproduce two lit accents**, and proves the next step heals it —
   plus that a segment-heavy room still diffs and still resyncs on the clock.

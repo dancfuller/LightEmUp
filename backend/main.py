@@ -1343,6 +1343,12 @@ LIGHTSHOW_FULL_BUDGET = 0.34
 # and a show stepping every 5 minutes would otherwise go an hour and a half
 # between resyncs.
 LIGHTSHOW_RESYNC_S = 300
+# After cancelling a show we wait this long before driving the same lights.
+# `govee_lan_send` schedules its duplicate datagram as an INDEPENDENT task
+# (GOVEE_RESEND_DELAY_S later), so cancelling the show does not cancel it — a
+# straggler "on + color" would otherwise land just after a room-off and switch
+# that light back on. See stop_lightshow.
+LIGHTSHOW_SETTLE_S = 0.3
 
 LIGHTSHOW_DEFAULTS = {
     "enabled": False,
@@ -1373,6 +1379,12 @@ LIGHTSHOW_DEFAULTS = {
 }
 
 _lightshow_tasks: "dict[str, asyncio.Task]" = {}
+# Serializes start/stop per room. Both have an `await` before they register their
+# task, so two concurrent starts (the panel auto-saves each control you touch, so
+# two quick edits are two overlapping POSTs) could each get past it, both create a
+# task, and the second would overwrite the first in _lightshow_tasks — orphaning a
+# loop that keeps painting forever and that nothing can ever stop.
+_lightshow_locks: "dict[str, asyncio.Lock]" = {}
 _lightshow_stops: "dict[str, asyncio.Event]" = {}
 _lightshow_nudges: "dict[str, asyncio.Event]" = {}
 _lightshow_runtime: "dict[str, dict]" = {}
@@ -1754,6 +1766,69 @@ async def _lightshow_paint(room_name: str, show: dict, cells: list[dict],
     return failed
 
 
+async def _lightshow_external_off(room_name: str, cells: list[dict],
+                                  prev_map) -> bool:
+    """Has something outside LightEmUp turned this room off?
+
+    Google Home, the Hue app and the Govee app all drive these lights and the hub
+    never hears about it (the same reality `/api/rooms/status` exists for). Say
+    "turn off the living room lights" to a speaker and the room goes dark — then
+    the show's next frame paints it, and the lights come back on a few seconds
+    later. That reads as the house fighting you, and it is the single most
+    annoying thing a background loop can do.
+
+    So each frame asks the bridge, ONCE, before painting anything: are the lights
+    this show most recently lit now off? One GET covers every light in the house
+    regardless of count, which at a 20s+ cadence is nothing.
+
+    Precision matters more than coverage here, because a false positive stops a
+    show the user wanted:
+    - Only cells the show LIT are considered. Alternate deliberately rests half
+      the room at level 0, and those must not count as evidence of anything.
+    - Unreachable lights are skipped — a bulb on a flipped wall switch reports
+      `on: false` forever and is not a statement about the room.
+    - ANY lit light still on ⇒ not an external off. A bridge that can't be read,
+      or a room with no Hue lights at all, returns False: "can't tell" must never
+      become "stop".
+
+    **Known gap:** a Govee-only room can't be checked this way. LAN devStatus is a
+    blocking sequential read that holds port 4002, which is not something to do on
+    every frame of every show. The same gap exists in `_room_status`, and for the
+    same reason.
+
+    **Known window:** an off that lands *during* a paint is missed — we've already
+    re-lit the room by the time the next check runs, so the check sees lights on.
+    That's about a second in every interval. Closing it would mean polling the
+    bridge continuously, which costs far more than it saves."""
+    if not prev_map:
+        return False                     # nothing painted yet — nothing to judge
+    lit = [c for c in cells if c["kind"] == "hue"
+           and (prev_map.get(c["key"]) or (0, 0, 0, 0.0))[3] > 0]
+    if not lit:
+        return False
+    ip, username = config.get("hue_bridge_ip"), config.get("hue_username")
+    if not (ip and username):
+        return False
+    try:
+        lights = await get_hue_lights(ip, username)
+    except Exception as e:
+        log.debug("Lightshow %r: bridge read failed, assuming nothing changed (%s)",
+                  room_name, e)
+        return False
+    if not lights:
+        return False                     # a bridge returning nothing proves nothing
+    actual = {l["id"]: (l.get("state") or {}) for l in lights}
+    judged = 0
+    for c in lit:
+        st = actual.get(str(c["light_id"]))
+        if not st or st.get("reachable") is False:
+            continue
+        if st.get("on"):
+            return False
+        judged += 1
+    return judged > 0
+
+
 def _lightshow_disable(room_name: str) -> bool:
     """Flip the persisted `enabled` flag off. Separate from stopping the task so
     the loop can retire itself (nothing left to animate) and have that survive a
@@ -1788,6 +1863,17 @@ async def _lightshow_loop(room_name: str):
                 _lightshow_disable(room_name)
                 publish_event("lightshow", room=room_name, running=False)
                 return
+            # Before painting anything: did someone turn this room off without
+            # going through LightEmUp? Repainting over that is what makes a voice
+            # command look like it didn't work.
+            if await _lightshow_external_off(room_name, cells, rt.get("frame_map")):
+                log.info("Lightshow %r: room was turned off outside LightEmUp "
+                         "(voice assistant / vendor app) — stopping the show",
+                         room_name)
+                _lightshow_disable(room_name)
+                publish_event("lightshow", room=room_name, running=False)
+                return
+
             keys = [c["key"] for c in cells]
             interval = _lightshow_interval(show, cells, len(colors))
             cost = _lightshow_step_cost(cells, len(colors))
@@ -1851,12 +1937,9 @@ def lightshow_running(room_name: str) -> bool:
     return bool(task and not task.done())
 
 
-async def stop_lightshow(room_name: str, reason=None, persist: bool = True):
-    """Stop a room's show. Called by every hand-driven whole-room path — turning
-    the room off, applying a scene, a white/color preset, starting lightning —
-    because a show that repaints 30 seconds after you set the room would look
-    like the app ignoring you. A DEVICE-scoped scene (one light card) does NOT
-    stop it: that isn't a claim about the room."""
+async def _stop_lightshow_locked(room_name: str, reason=None, persist: bool = True):
+    """The body of stop_lightshow. Split out so start_lightshow can reuse it
+    while already holding the room's lock."""
     task = _lightshow_tasks.get(room_name)
     ev = _lightshow_stops.get(room_name)
     if ev:
@@ -1868,17 +1951,38 @@ async def stop_lightshow(room_name: str, reason=None, persist: bool = True):
             await task
         except BaseException:
             pass
+        # Cancelling stops the loop, but NOT the duplicate datagram
+        # `govee_lan_send` already scheduled as an independent task. Without this
+        # pause a straggling "on + color" from the frame we just killed lands
+        # after the caller's "off" and switches that light back on — which is
+        # exactly what made turning a room off take two presses.
+        await asyncio.sleep(LIGHTSHOW_SETTLE_S)
     disabled = _lightshow_disable(room_name) if persist else False
     if was_running or disabled:
         publish_event("lightshow", room=room_name, running=False)
         log.info("Lightshow %r stopped%s", room_name, f" ({reason})" if reason else "")
 
 
+async def stop_lightshow(room_name: str, reason=None, persist: bool = True):
+    """Stop a room's show. Called by every hand-driven whole-room path — turning
+    the room off, applying a scene, a white/color preset, starting lightning —
+    because a show that repaints 30 seconds after you set the room would look
+    like the app ignoring you. A DEVICE-scoped scene (one light card) does NOT
+    stop it: that isn't a claim about the room."""
+    async with _lightshow_locks.setdefault(room_name, asyncio.Lock()):
+        await _stop_lightshow_locked(room_name, reason, persist)
+
+
 async def start_lightshow(room_name: str):
     """(Re)start a room's show from step 0. Restarting on every edit is
     deliberate — at a 30-second cadence, a change you can't see for half a minute
     reads as a change that didn't take."""
-    await stop_lightshow(room_name, persist=False)
+    async with _lightshow_locks.setdefault(room_name, asyncio.Lock()):
+        await _start_lightshow_locked(room_name)
+
+
+async def _start_lightshow_locked(room_name: str):
+    await _stop_lightshow_locked(room_name, persist=False)
     _lightshow_stops[room_name] = asyncio.Event()
     _lightshow_nudges[room_name] = asyncio.Event()
     _lightshow_runtime[room_name] = {}
