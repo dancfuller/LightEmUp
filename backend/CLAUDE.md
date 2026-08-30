@@ -870,10 +870,38 @@ back to its parent's spot.
   which is the same reason there is no per-schedule segments flag.
 - **`exclude`** holds device keys left out entirely (a device takes its segments with it).
 - **Three things make it affordable, and all three matter:**
-  1. **Frames DIFF.** Only cells whose `(r,g,b,level)` changed are repainted, so Swap costs
-     two segment calls instead of fourteen. A **full** repaint happens on (re)start, when
-     the room's cell list changes under it, and every `LIGHTSHOW_FULL_REPAINT_EVERY` (20)
-     frames so a show something else disturbed heals itself.
+  1. **Frames DIFF — but only when diffing actually saves something (v3.40.1).**
+     `_lightshow_should_full` repaints EVERY cell whenever a full repaint costs no more
+     than `LIGHTSHOW_FULL_BUDGET` (34%) of the interval; a room of whole lights costs
+     ~0.4s against 30s, so it never diffs at all. Only a segment-heavy room diffs, and it
+     still resyncs fully every `LIGHTSHOW_RESYNC_S` (300s) — **wall clock, not frames**,
+     because staleness is something a person experiences in minutes and a 5-minute step
+     would otherwise go 100 minutes between resyncs.
+
+### Why the diff had to become conditional — the two-accents bug (v3.40.1)
+Reported: *"triple lamp bottom and hex lights were both showing the accent color at the
+same time."* The pattern math was innocent (600 simulated steps, always exactly one accent
+cell). The **diff** was the bug, and the reasoning behind it was wrong in a way worth
+keeping written down:
+
+- Accent moves the accent by repainting exactly **two** cells — the light gaining it and
+  the light losing it. Lose the "back to base" command and two lights wear the accent.
+- `frame_map` recorded what we **meant to send**. A Govee LAN send is unacknowledged UDP
+  and a Hue 200 only means the bridge *queued* it (this repo has known that since v3.10.0),
+  so "sent" is not "landed" — and the diff then believed the stale light was already
+  correct and never retried it. At 20 frames between full repaints that's **10 minutes** of
+  two-accent room.
+- **`_lightshow_paint` now returns the cells that failed** and the loop leaves them out of
+  `frame_map`, so the next frame retries them. That only catches errors we can *see*, which
+  is why the load-bearing fix is the budget rule above: in the room that was reported, every
+  step now re-asserts every light and a lost command heals in one step.
+- **Seeding was decoupled from `full`.** The whole-device brightness seed for cloud_v2
+  devices is a solid flash; now that a cheap room repaints fully every step, seeding with it
+  would flash the strip solid every step. It rides the first paint of a run (and a cell-list
+  change) only. Brightness doesn't drift on its own and any edit restarts the show.
+- **Hue verify-and-repair is still deliberately NOT used here.** It compares only `on` and
+  `bri`, never color — the bridge gamut-clamps, so comparing color re-repairs forever — and
+  a show's entire content is color. Re-asserting the frame is cheaper and more direct.
   2. cloud_v2 segments are batched by color, exactly as a scene apply does. razer is never
      diffed — its wire protocol carries the whole strip in one packet, and re-sending it
      is also what keeps razer mode from timing out at 60s.
@@ -909,7 +937,11 @@ back to its parent's spot.
 - It is room-name-keyed, so it's in **both** `rename_room` and `delete_room` — and
   `rename_room` also **re-keys the running task**, which is keyed by name and would
   otherwise keep painting a room that no longer exists.
-- Covered by two scratch tests. `test_lightshow.py` (25 assertions): cell ordering, the
+- Covered by three scratch tests. `test_accent_bug.py` (9 assertions) is the regression
+  guard for the above: it drives the real loop logic over a simulated room, drops one
+  command mid-Accent to **reproduce two lit accents**, and proves the next step heals it —
+  plus that a segment-heavy room still diffs and still resyncs on the clock.
+  `test_lightshow.py` (26 assertions): cell ordering, the
   segments/exclude narrowing, the interval floor, the diff (an unchanged frame sends
   nothing), Alternate's rest handling, the loop + nudge, every stop hook, and the rename
   re-key. `test_geo.py` (24 assertions): geometry detection, own-position ordering with the

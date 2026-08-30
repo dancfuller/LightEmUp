@@ -59,7 +59,12 @@ log = logging.getLogger("lightemup.main")
 
 # ─── Config ──────────────────────────────────────────────────────────────────
 
-CONFIG_PATH = Path("config.json")
+# Module-relative, NOT cwd-relative (v3.40.1). It was `Path("config.json")`, so
+# running main.py from anywhere but backend/ silently created and read a
+# DIFFERENT config — a fresh empty one, which looks exactly like losing every
+# room. systemd sets WorkingDirectory to backend/ so production resolved to the
+# same file either way; a dev box or a REPL import did not.
+CONFIG_PATH = Path(__file__).parent / "config.json"
 DEFAULT_CONFIG = {
     "hue_bridge_ip": None,
     "hue_username": None,
@@ -1330,7 +1335,14 @@ async def _apply_action_to_room(room: str, action: dict,
 LIGHTSHOW_MIN_INTERVAL_S = 10       # floor, whatever the cost model says
 LIGHTSHOW_MAX_INTERVAL_S = 3600
 LIGHTSHOW_INTERVAL_HEADROOM_S = 5   # slack between "painting done" and "next step"
-LIGHTSHOW_FULL_REPAINT_EVERY = 20   # frames between self-healing full repaints
+# When a full repaint costs no more than this fraction of the interval, DON'T
+# diff at all — just repaint everything, every step. See _lightshow_should_full.
+LIGHTSHOW_FULL_BUDGET = 0.34
+# And when diffing does pay, never let a missed command persist longer than this.
+# Wall clock, not frames: staleness is something a person experiences in minutes,
+# and a show stepping every 5 minutes would otherwise go an hour and a half
+# between resyncs.
+LIGHTSHOW_RESYNC_S = 300
 
 LIGHTSHOW_DEFAULTS = {
     "enabled": False,
@@ -1524,6 +1536,33 @@ def _lightshow_floor(cells: list[dict], palette_size: int) -> int:
                + LIGHTSHOW_INTERVAL_HEADROOM_S)
 
 
+def _lightshow_should_full(cost: float, interval: int, rt: dict, keys: list) -> bool:
+    """Repaint every cell this frame, rather than only the ones that changed?
+
+    **The diff is an optimization, and an optimization that costs correctness has
+    to earn its place.** A frame is sent over fire-and-forget UDP (Govee) or a
+    bridge that returns 200 the moment it *queues* a command (Hue) — so a send
+    can silently not land, and `frame_map` records what we MEANT to send. Diffing
+    against that means a light which missed its command keeps the wrong color
+    until the next full repaint.
+
+    That produced a real bug (v3.40.1): Accent moves the accent color by
+    repainting exactly two cells — the light gaining it and the light losing it —
+    so a single lost "back to base" left TWO lights wearing the accent, and the
+    diff never retried because it believed it had already sent it.
+
+    So: if a full repaint fits comfortably inside the interval, always do one. A
+    room of whole lights costs ~0.15s per device against a 20s+ interval, which
+    is nothing — there was never anything to save there. Only a room whose
+    segments make a full repaint genuinely expensive diffs, and even that
+    resyncs on a wall-clock timer."""
+    if rt.get("cells") != keys:
+        return True                      # the room changed under us
+    if cost <= interval * LIGHTSHOW_FULL_BUDGET:
+        return True                      # diffing buys nothing here
+    return time.time() - (rt.get("last_full") or 0) >= LIGHTSHOW_RESYNC_S
+
+
 def _lightshow_interval(show: dict, cells: list[dict], palette_size: int) -> int:
     """The interval actually used: the user's, floored by what a step costs."""
     want = int(show.get("interval_s") or LIGHTSHOW_DEFAULTS["interval_s"])
@@ -1585,13 +1624,21 @@ def _lightshow_dim(rgb, level: float):
 
 
 async def _lightshow_paint(room_name: str, show: dict, cells: list[dict],
-                           frame: list, prev, full: bool):
-    """Put one frame on the lights, touching only what changed.
+                           frame: list, prev, full: bool, seed: bool = False) -> set:
+    """Put one frame on the lights. Returns the cell keys that FAILED to send.
 
-    No Hue verify-and-repair here, deliberately: that machinery exists to fight
-    a bridge that quietly disagrees with a look meant to STAY, and a show
-    replaces its own frame in half a minute. Re-sending it would be churn."""
+    The caller drops those from its record of what's painted, so the next frame
+    retries them instead of believing a command landed because it was issued.
+    That only catches errors we can see — a Govee LAN send is unacknowledged UDP
+    and a Hue 200 only means "queued" — which is exactly why the real defense is
+    `_lightshow_should_full` repainting everything whenever that's affordable.
+
+    No Hue verify-and-repair here, deliberately: it compares only `on` and `bri`,
+    never color (the bridge gamut-clamps, so comparing color re-repairs forever),
+    and a show's whole content is color. Re-asserting the frame is the cheaper
+    and more direct answer."""
     bri = max(1, min(100, int(show.get("brightness") or 80)))
+    failed: set = set()
     desired = {c["key"]: tuple(frame[i]) for i, c in enumerate(cells)}
     prev = {} if full else (prev or {})
 
@@ -1608,14 +1655,17 @@ async def _lightshow_paint(room_name: str, show: dict, cells: list[dict],
                 r, g, b, level = desired[c["key"]]
                 try:
                     if level <= 0:
-                        await control_hue_light(HueLightStateRequest(
+                        res = await control_hue_light(HueLightStateRequest(
                             light_id=c["light_id"], on=False))
                     else:
-                        await control_hue_light(HueLightStateRequest(
+                        res = await control_hue_light(HueLightStateRequest(
                             light_id=c["light_id"], on=True, r=int(r), g=int(g), b=int(b),
                             brightness=max(1, min(254, round(bri * level * 254 / 100)))))
+                    if not (res or {}).get("success"):
+                        failed.add(c["key"])
                 except Exception as e:
                     log.warning("Lightshow %r: hue %s failed: %s", room_name, c["light_id"], e)
+                    failed.add(c["key"])
         finally:
             _in_bulk_hue.set(False)
 
@@ -1631,6 +1681,7 @@ async def _lightshow_paint(room_name: str, show: dict, cells: list[dict],
                     brightness=max(1, min(100, round(bri * level)))))
         except Exception as e:
             log.warning("Lightshow %r: govee %s failed: %s", room_name, c["ip"], e)
+            failed.add(c["key"])
         await asyncio.sleep(SCENE_GOVEE_STAGGER_S)
 
     seg_by_dev: dict = {}
@@ -1638,12 +1689,14 @@ async def _lightshow_paint(room_name: str, show: dict, cells: list[dict],
         if c["kind"] == "segment":
             seg_by_dev.setdefault(c["device"], []).append(c)
 
-    # A full repaint seeds each cloud_v2 device whole-device first — that is the
-    # only place the show's brightness reaches a segmented device, since segment
-    # calls are color-only (the same trick _build_palette_scene uses). Doing it
-    # every frame would flash the strip a solid color twice a minute, so it rides
-    # with the full repaint only.
-    if full:
+    # Seeding paints each cloud_v2 device a single whole-device color, which is
+    # the only place the show's brightness reaches a segmented device (segment
+    # calls are color-only — the same trick _build_palette_scene uses). It is
+    # deliberately NOT tied to `full` any more: now that a cheap room repaints
+    # fully every step, seeding with it would flash the strip solid every step.
+    # Brightness doesn't drift on its own, and any edit restarts the show, so the
+    # first paint of a run (and a change to the cell list) is enough.
+    if seed:
         for dev, group in seg_by_dev.items():
             if group[0]["protocol"] == "razer":
                 continue                 # brightness rides in the bulk packet
@@ -1673,6 +1726,7 @@ async def _lightshow_paint(room_name: str, show: dict, cells: list[dict],
                     colors=[list(c) for c in colors], brightness=bri))
             except Exception as e:
                 log.warning("Lightshow %r: razer %s failed: %s", room_name, group[0]["ip"], e)
+                failed.update(c["key"] for c in group)
             continue
         by_color: dict = {}
         for c in group:
@@ -1685,11 +1739,19 @@ async def _lightshow_paint(room_name: str, show: dict, cells: list[dict],
                 await asyncio.sleep(SCENE_SEG_STAGGER_S)
             first = False
             try:
-                await control_govee_segments_multi(GoveeSegmentsMultiRequest(
+                res = await control_govee_segments_multi(GoveeSegmentsMultiRequest(
                     ip=group[0]["ip"], sku=group[0]["sku"], device_mac=group[0]["mac"],
                     segments=idxs, r=color[0], g=color[1], b=color[2]))
+                if not (res or {}).get("success"):
+                    failed.update(f"{dev}#{i}" for i in idxs)
             except Exception as e:
                 log.warning("Lightshow %r: segments %s failed: %s", room_name, group[0]["ip"], e)
+                failed.update(f"{dev}#{i}" for i in idxs)
+
+    if failed:
+        log.warning("Lightshow %r: %d cell(s) did not take, retrying next step",
+                    room_name, len(failed))
+    return failed
 
 
 def _lightshow_disable(room_name: str) -> bool:
@@ -1727,29 +1789,35 @@ async def _lightshow_loop(room_name: str):
                 publish_event("lightshow", room=room_name, running=False)
                 return
             keys = [c["key"] for c in cells]
-            # A full repaint on (re)start, whenever the room's cells change under
-            # us (a light added, a device gone), and periodically so a show that
-            # something else disturbed heals itself.
-            full = frames % LIGHTSHOW_FULL_REPAINT_EVERY == 0 or rt.get("cells") != keys
+            interval = _lightshow_interval(show, cells, len(colors))
+            cost = _lightshow_step_cost(cells, len(colors))
+            full = _lightshow_should_full(cost, interval, rt, keys)
+            # The whole-device brightness seed is a solid flash, so it belongs to
+            # the first paint of a run only — not to every full repaint.
+            seed = rt.get("frame_map") is None or rt.get("cells") != keys
             geometry = _lightshow_geometry(room_name)
             frame = lightshow.plan_frame(
                 _lightshow_pattern(show, geometry),
                 [c.get("pos") or (0.0, 0.0) for c in cells],
                 colors, step, opts=show, prev=rt.get("frame_list"),
                 geometry=geometry)
-            await _lightshow_paint(room_name, show, cells, frame,
-                                   rt.get("frame_map"), full)
+            failed = await _lightshow_paint(room_name, show, cells, frame,
+                                            rt.get("frame_map"), full, seed)
 
-            interval = _lightshow_interval(show, cells, len(colors))
             rt.update({
                 "frame_list": frame,
-                "frame_map": {c["key"]: tuple(frame[i]) for i, c in enumerate(cells)},
+                # A cell we could not send is NOT recorded as painted, so the next
+                # frame's diff retries it rather than trusting an intent.
+                "frame_map": {c["key"]: tuple(frame[i]) for i, c in enumerate(cells)
+                              if c["key"] not in failed},
                 "cells": keys,
                 "step": step,
                 "palette": pool_label,
                 "interval_s": interval,
                 "next_at": time.time() + interval,
             })
+            if full:
+                rt["last_full"] = time.time()
             publish_event("lightshow", room=room_name, running=True, step=step,
                           palette=pool_label, interval_s=interval,
                           next_at=int(rt["next_at"] * 1000))
@@ -5864,6 +5932,10 @@ def _lightshow_status(room_name: str) -> dict:
         "palette": rt.get("palette") or label,
         "step": rt.get("step"),
         "step_seconds": round(cost, 1),
+        # Does this room repaint every light every step, or only what changed?
+        # Worth surfacing: it's the difference between a missed command healing
+        # in one step and persisting until the next resync.
+        "full_repaint": cost <= _lightshow_interval(show, cells, len(colors) or 1) * LIGHTSHOW_FULL_BUDGET,
         "min_interval_s": _lightshow_floor(cells, len(colors) or 1),
         "effective_interval_s": _lightshow_interval(show, cells, len(colors) or 1),
         "next_at": int(rt["next_at"] * 1000) if rt.get("next_at") else None,

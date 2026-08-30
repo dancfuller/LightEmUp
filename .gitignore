@@ -1,5 +1,7 @@
 # Config with local IPs, API keys, room assignments
-backend/config.json
+# Any location, not just backend/: a config.json written from the wrong cwd used
+# to fall outside this rule and was stageable — and it holds local IPs + creds.
+config.json
 
 # Runtime clean-shutdown marker (power-recovery: planned reboot vs outage)
 backend/.clean_shutdown
