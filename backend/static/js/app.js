@@ -324,6 +324,11 @@ function App() {
   const [nicknames, setNicknames] = useState({});
   const [refreshing, setRefreshing] = useState(false);
   const [lightningActiveRooms, setLightningActiveRooms] = useState([]);
+  // Room lightshows run on the Pi; this is just the mirror. `patterns` is the
+  // backend's catalog (names + blurbs), served rather than duplicated in JS so
+  // the description in the panel is the one the math implements.
+  const [lightshows, setLightshows] = useState({});
+  const [lightshowPatterns, setLightshowPatterns] = useState([]);
   const [segmentInfo, setSegmentInfo] = useState({ sku_table: {}, configured_counts: {}, segment_mode: {} });
   // segmentState: server-side last-known per-segment colors for any Govee
   // device currently in segment mode. Shape: { ip: { segIdx: {r,g,b} } }.
@@ -559,6 +564,7 @@ function App() {
         // read serves every room; failure just means "unknown", never a wrong
         // claim either way.
         api("/rooms/status").catch(() => ({ rooms: {} })),
+        api("/lightshow").catch(() => ({ shows: {}, patterns: [] })),
       ];
 
       if (cfg.hue_paired) {
@@ -579,10 +585,12 @@ function App() {
       setSegmentInfo(results[2]);
       setSegmentState(results[3]?.state || {});
       setRoomStatus(results[4]?.rooms || {});
+      setLightshows(results[5]?.shows || {});
+      setLightshowPatterns(results[5]?.patterns || []);
 
       if (cfg.hue_paired) {
-        setHueLights(results[5]?.lights || []);
-        setHueGroups(results[6]?.groups || []);
+        setHueLights(results[6]?.lights || []);
+        setHueGroups(results[7]?.groups || []);
       }
     } catch (e) {
       setError(e.message);
@@ -627,6 +635,15 @@ function App() {
         window.dispatchEvent(new CustomEvent("lightemup-scene-apply", { detail: evt }));
         return;
       }
+      // A running lightshow emits one of these at the end of every frame,
+      // forever. A full loadAll() on each would have every open browser refetch
+      // the bridge, the phantom list and the room-status sweep twice a minute
+      // for as long as a show is running — so this does a LIGHTS-ONLY refresh:
+      // the show status plus whatever the frame just changed.
+      if (evt.type === "lightshow") {
+        refreshLightshows();
+        return;
+      }
       if (evt.source === CLIENT_ID) return;
       if (syncTimer.current) clearTimeout(syncTimer.current);
       syncTimer.current = setTimeout(() => { loadAll(); }, 400);
@@ -641,6 +658,49 @@ function App() {
   // Fetch version once on boot — cheap, doesn't change without a restart.
   useEffect(() => {
     api("/version").then(setVersionInfo).catch(() => {});
+  }, []);
+
+  // ─── Lightshows ───────────────────────────────────────────────────────
+  // Cheap refresh for the every-frame event: no /hue/phantoms, no
+  // /devices/stale, no /rooms/status (all bridge or sweep work), and the CACHED
+  // Govee list rather than a LAN scan.
+  const refreshLightshows = useCallback(async () => {
+    try {
+      const [ls, gv, seg] = await Promise.all([
+        api("/lightshow"),
+        api("/discover/govee/cached").catch(() => null),
+        api("/govee/segment-state").catch(() => null),
+      ]);
+      setLightshows(ls.shows || {});
+      if (ls.patterns?.length) setLightshowPatterns(ls.patterns);
+      if (gv?.devices) setGoveeDevices(gv.devices);
+      if (seg?.state) setSegmentState(seg.state);
+      api("/hue/lights").then(h => h?.lights && setHueLights(h.lights)).catch(() => {});
+    } catch (e) {
+      console.warn("Lightshow refresh failed:", e);
+    }
+  }, []);
+
+  // The backend answers with the full recomputed status (cell count, step cost,
+  // the interval it will actually use), so take its word rather than patching
+  // local state optimistically — the derived numbers are the point.
+  const saveLightshow = useCallback(async (room, patch) => {
+    try {
+      const res = await api("/lightshow", {
+        method: "POST", body: JSON.stringify({ room, ...patch }),
+      });
+      setLightshows(prev => ({ ...prev, [room]: res.show }));
+    } catch (e) {
+      console.warn("Lightshow save failed:", e);
+    }
+  }, []);
+
+  const stepLightshow = useCallback(async (room) => {
+    try {
+      await api("/lightshow/step", { method: "POST", body: JSON.stringify({ room }) });
+    } catch (e) {
+      console.warn("Lightshow step failed:", e);
+    }
   }, []);
 
   const updatePickerStyle = useCallback(async (style) => {
@@ -1495,6 +1555,10 @@ function App() {
                   ctCorrection={ctCalibrated}
                   onRecheck={recheckDevice}
                   onScheduleLook={handleScheduleLook}
+                  lightshow={lightshows[roomName]}
+                  lightshowPatterns={lightshowPatterns}
+                  onLightshowSave={saveLightshow}
+                  onLightshowStep={stepLightshow}
                 />
               );
             })}

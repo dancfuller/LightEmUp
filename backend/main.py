@@ -45,6 +45,7 @@ from discovery import (
 )
 from scenes import scene_manager, LightningSettings
 from razer_keeper import razer_keeper
+import lightshow
 import palettes
 from version import __version__ as APP_VERSION, GIT_HASH, GIT_DATE, version_string
 import segment_state
@@ -163,6 +164,12 @@ DEFAULT_CONFIG = {
     "govee_segment_mode": {},    # govee slug → bool: per-segment LIGHTNING. NOT scene
                                  # addressing (that's govee_scene_address above).
     "room_presets": {},          # room name → saved preset list (GET/POST /api/room-presets)
+    "lightshows": {},            # room name → the room's ambient lightshow (v3.39.0):
+                                 #   { enabled, pattern, interval_s, brightness, segments,
+                                 #     source, palettes, colors, exclude, + per-pattern opts }
+                                 # `enabled` is the RUNNING flag, persisted on purpose so a
+                                 # show survives a restart (it resumes behind _recovery_done).
+                                 # See LIGHTSHOW_DEFAULTS / _lightshow_loop.
     # NOT here on purpose: "schema_version". It's a migration marker, not a setting.
     # Defaulting it to the current version would make an ancient backup that carries
     # no schema_version look already-migrated, so migrate_govee_to_mac would skip an
@@ -656,7 +663,7 @@ _in_bulk_hue: ContextVar[bool] = ContextVar("in_bulk_hue", default=False)
 def publish_event(event_type: str, **fields):
     """Broadcast a change signal to all connected sessions. Best-effort:
     a full subscriber queue is skipped rather than blocking the request."""
-    if _suppress_publish.get() and event_type != "scene_apply":
+    if _suppress_publish.get() and event_type not in ("scene_apply", "lightshow"):
         return
     evt = {"type": event_type, "source": _current_client_id.get(), **fields}
     for q in list(_event_subscribers):
@@ -898,6 +905,7 @@ async def _recover_then_release(clean_shutdown: bool):
 _scheduler_task: "asyncio.Task | None" = None
 _scheduler_stop: "asyncio.Event | None" = None
 _catchup_task: "asyncio.Task | None" = None
+_lightshow_resume_task: "asyncio.Task | None" = None
 # Set once power recovery has finished (or immediately, when none is scheduled).
 # The span catch-up waits on this so the two can't fight over the same lights —
 # see _catch_up_spans for why the schedule deliberately gets the last word.
@@ -1011,6 +1019,7 @@ async def _apply_room_white(room_name: str, kelvin: int, brightness_pct: int,
     if not room:
         log.warning("Scheduler: white action — room %r not found", room_name)
         return
+    await stop_lightshow(room_name, "room set to white")
     mireds = max(153, min(500, round(1_000_000 / max(1, kelvin))))
     bri254 = max(1, min(254, round(brightness_pct * 254 / 100)))
     sent = {}
@@ -1043,6 +1052,7 @@ async def _apply_room_color(room_name: str, r: int, g: int, b: int, brightness_p
     if not room:
         log.warning("Scheduler: color action — room %r not found", room_name)
         return
+    await stop_lightshow(room_name, "room set to a solid color")
     bri254 = max(1, min(254, round(brightness_pct * 254 / 100)))
     sent = {}
     _in_bulk_hue.set(True)
@@ -1083,33 +1093,10 @@ async def _apply_room_color(room_name: str, r: int, g: int, b: int, brightness_p
 # in the room layout. That gives the two properties that actually matter — no
 # two neighbours share a color, and the arrangement differs each fire.
 
-class _ColorDealer:
-    """Hands out palette colors so that consecutive calls never repeat.
-
-    Reshuffles at each cycle boundary (and re-rolls if the new cycle would open
-    with the color the last one closed on), so a long strip doesn't show the
-    same repeating ABCABC pattern down its whole length."""
-
-    def __init__(self, colors: list, rng=None):
-        self.colors = list(colors)
-        self.rng = rng or random
-        self.queue: list = []
-        self.last = None
-
-    def _refill(self):
-        pool = list(self.colors)
-        self.rng.shuffle(pool)
-        if len(pool) > 1 and pool[0] == self.last:
-            pool.append(pool.pop(0))
-        self.queue = pool
-
-    def next(self):
-        if not self.colors:
-            return (255, 255, 255)
-        if not self.queue:
-            self._refill()
-        self.last = self.queue.pop(0)
-        return self.last
+# The dealer itself lives in `lightshow.py` (v3.39.0): room lightshows need the
+# same "shuffle so no two neighbors match" rule, and two copies of a shuffle rule
+# that must agree is exactly the drift this codebase keeps paying for elsewhere.
+_ColorDealer = lightshow.ColorDealer
 
 
 def _palette_device_order(room_name: str, keys: list[str]) -> list[str]:
@@ -1257,6 +1244,7 @@ async def _start_scene_apply(req):
     room. Two applies fighting over the same lights is the one thing worse than
     a slow one, so the outgoing task is awaited to completion after cancelling —
     it must have let go of the Govee socket before the new one grabs it."""
+    await stop_lightshow(req.room, "a scene was applied")
     existing = _scene_tasks.get(req.room)
     if existing and not existing.done():
         existing.cancel()
@@ -1314,6 +1302,470 @@ async def _apply_action_to_room(room: str, action: dict,
                                 source, source_detail)
     elif atype == "power":
         await _apply_room_power(room, bool(action.get("on", True)), source, source_detail)
+
+
+# ─── Room lightshows (v3.39.0) ───────────────────────────────────────────────
+# "Neat — the last time I looked at the house, these lights were different
+# colors." A lightshow slowly re-arranges a room's colors on a timer. It is NOT
+# synced to anything and deliberately can't be: a cloud_v2 segment call costs
+# ~1.8s and the V2 rate limit is per-account, so a hexa's worth of segments is
+# seconds of wall clock. Segment addressing sets the tempo, which is why the
+# interesting cadence here is 20–60 SECONDS and every pattern is designed to
+# look deliberate at a standstill rather than to animate.
+#
+# Division of labor, same split as palettes: `lightshow.py` is pure math
+# (cells + colors + step → a color and a level per cell) and knows nothing about
+# devices; everything below turns cells into Hue/Govee calls.
+#
+# Three things make it affordable:
+#  1. A frame DIFFS against the previous one, so Swap repaints two segments
+#     rather than fourteen. A full repaint happens on (re)start, when the room's
+#     device list changes, and every LIGHTSHOW_FULL_REPAINT_EVERY frames so the
+#     show self-heals if something else moved a light.
+#  2. cloud_v2 segments are batched by color, exactly as a scene apply does.
+#  3. Per-device events are suppressed for the whole run; one `lightshow` event
+#     per frame tells the browsers to do a LIGHT refresh (lights + segment
+#     state) instead of a full reload every 30 seconds forever.
+
+LIGHTSHOW_MIN_INTERVAL_S = 10       # floor, whatever the cost model says
+LIGHTSHOW_MAX_INTERVAL_S = 3600
+LIGHTSHOW_INTERVAL_HEADROOM_S = 5   # slack between "painting done" and "next step"
+LIGHTSHOW_FULL_REPAINT_EVERY = 20   # frames between self-healing full repaints
+
+LIGHTSHOW_DEFAULTS = {
+    "enabled": False,
+    "pattern": lightshow.DEFAULT_PATTERN,
+    "interval_s": 30,
+    "brightness": 80,
+    # Room-level narrowing, NOT a second opinion: True means "address devices the
+    # way this room already addresses them" (gv_scene_address per device), False
+    # forces every device in the room to one color. A per-device switch here
+    # could only disagree with the Scenes panel's.
+    "segments": True,
+    "source": "palettes",            # palettes | favorites | custom
+    "palettes": [],                  # library names; one is drawn per run (per STEP for hop)
+    "colors": [],                    # source=custom
+    "exclude": [],                   # device keys left out of the show entirely
+    "direction": "forward",          # walk
+    "groups": 2,                     # alternate
+    "rest": "dim",                   # alternate: dim | off
+    "rest_pct": 15,
+    "swaps": 2,                      # swap
+}
+
+_lightshow_tasks: "dict[str, asyncio.Task]" = {}
+_lightshow_stops: "dict[str, asyncio.Event]" = {}
+_lightshow_nudges: "dict[str, asyncio.Event]" = {}
+_lightshow_runtime: "dict[str, dict]" = {}
+
+
+def _lightshow_cfg(room_name: str) -> dict:
+    """A room's show, defaults filled in. Missing keys are normal — the config is
+    additive and older entries predate whatever option was added last."""
+    stored = (config.get("lightshows", {}) or {}).get(room_name) or {}
+    return {**LIGHTSHOW_DEFAULTS, **stored}
+
+
+def _lightshow_cells(room_name: str, show: dict) -> list[dict]:
+    """The addressable units of a room's show, in room-layout order.
+
+    A cell is one Hue light, one whole Govee device, or ONE SEGMENT of one — the
+    ordering is what makes "walk" mean anything spatially, and within a device a
+    segment's index IS its position. Excluded devices drop out entirely (and
+    take their segments with them), which is the point of excluding them."""
+    room = config.get("rooms", {}).get(room_name) or {}
+    exclude = set(show.get("exclude") or [])
+    hue_keys = [f"hue:{lid}" for lid in room.get("hue_light_ids", [])]
+    gv_keys = [f"govee:{slug}" for slug in room.get("govee_devices", [])]
+    cells: list[dict] = []
+    for key in _palette_device_order(room_name, hue_keys + gv_keys):
+        if key in exclude:
+            continue
+        if key.startswith("hue:"):
+            cells.append({"kind": "hue", "key": key, "device": key,
+                          "light_id": key[4:],
+                          "label": _device_label(key, f"Light {key[4:]}")})
+            continue
+        slug = key[6:]
+        mac, info = _gv_info_for_slug(slug)
+        ip = (info or {}).get("ip") or gv_ip_for_slug(slug)
+        if not ip:
+            continue                     # never seen / gone — nothing to address
+        sku = (info or {}).get("sku")
+        label = _device_label(key, (info or {}).get("name") or slug)
+        count = gv_segment_count(slug, sku)
+        protocol = (GOVEE_SEGMENT_INFO.get(sku) or {}).get("protocol")
+        per_segment = (bool(show.get("segments", True))
+                       and gv_scene_address(slug, sku) == "segments"
+                       and count > 1 and bool(protocol))
+        if per_segment:
+            for idx in range(count):
+                cells.append({"kind": "segment", "key": f"{key}#{idx}", "device": key,
+                              "ip": ip, "mac": mac or slug, "sku": sku,
+                              "protocol": protocol, "idx": idx, "count": count,
+                              "label": f"{label} · {idx + 1}"})
+        else:
+            cells.append({"kind": "govee", "key": key, "device": key, "ip": ip,
+                          "mac": mac or slug, "label": label})
+    return cells
+
+
+def _lightshow_step_cost(cells: list[dict], palette_size: int) -> float:
+    """Worst-case seconds for ONE full repaint of these cells.
+
+    Worst case because it assumes no diffing: a cloud_v2 device needs one call
+    per distinct color, capped by its segment count and by the palette size.
+    This is what the interval floor is derived from — a show whose step takes
+    longer than its interval would just be a queue of overlapping repaints."""
+    whole = sum(1 for c in cells if c["kind"] == "govee")
+    has_hue = any(c["kind"] == "hue" for c in cells)
+    groups = 0
+    razer_devices = set()
+    seg_by_dev: dict = {}
+    for c in cells:
+        if c["kind"] == "segment":
+            seg_by_dev.setdefault(c["device"], []).append(c)
+    for dev, group in seg_by_dev.items():
+        if group[0]["protocol"] == "razer":
+            razer_devices.add(dev)       # one LAN packet for the whole strip
+        else:
+            groups += min(len(group), max(1, palette_size))
+    return (groups * SCENE_SEG_STAGGER_S
+            + whole * SCENE_GOVEE_STAGGER_S
+            + len(razer_devices) * 0.3
+            + (0.4 if has_hue else 0.0))
+
+
+def _lightshow_floor(cells: list[dict], palette_size: int) -> int:
+    """The shortest interval this room can actually sustain. A show whose step
+    costs longer than its interval is just a queue of overlapping repaints, so
+    the panel shows this number and the loop enforces it."""
+    return max(LIGHTSHOW_MIN_INTERVAL_S,
+               int(math.ceil(_lightshow_step_cost(cells, palette_size)))
+               + LIGHTSHOW_INTERVAL_HEADROOM_S)
+
+
+def _lightshow_interval(show: dict, cells: list[dict], palette_size: int) -> int:
+    """The interval actually used: the user's, floored by what a step costs."""
+    want = int(show.get("interval_s") or LIGHTSHOW_DEFAULTS["interval_s"])
+    return max(_lightshow_floor(cells, palette_size),
+               min(LIGHTSHOW_MAX_INTERVAL_S, want))
+
+
+def _lightshow_pool(show: dict, rt: dict, rng=None) -> tuple:
+    """(colors, label) for this step.
+
+    Palette hop redraws every step — that IS the pattern. Every other pattern
+    draws ONCE per run and keeps it, so picking three palettes means "surprise me
+    with one of these tonight" rather than a look that changes underneath the
+    pattern you chose."""
+    src = show.get("source")
+    if src == "custom":
+        cols = [tuple(int(v) for v in c[:3]) for c in (show.get("colors") or [])
+                if isinstance(c, (list, tuple)) and len(c) >= 3]
+        return cols, "Custom colors"
+    if src == "favorites":
+        cols = [tuple(int(v) for v in c[:3])
+                for c in (config.get("favorites") or DEFAULT_FAVORITES)
+                if isinstance(c, (list, tuple)) and len(c) >= 3]
+        return cols, "My colors"
+    candidates = [p for p in (palettes.by_name(n) for n in (show.get("palettes") or [])) if p]
+    if not candidates:
+        return [], "No palette"
+    if show.get("pattern") == "hop" or not rt.get("palette_name"):
+        chosen = palettes.pick(candidates, avoid=rt.get("palette_name"), rng=rng)
+        rt["palette_name"] = chosen["name"]
+        return list(chosen["colors"]), chosen["name"]
+    held = palettes.by_name(rt["palette_name"]) or candidates[0]
+    return list(held["colors"]), held["name"]
+
+
+def _lightshow_dim(rgb, level: float):
+    """A segment carries no brightness of its own (a cloud_v2 segment call is
+    color-only), so a resting segment is dimmed in RGB. Gamma-corrected via the
+    same helper the razer bulk path uses, so 15% looks like 15%."""
+    if level >= 1.0:
+        return (int(rgb[0]), int(rgb[1]), int(rgb[2]))
+    if level <= 0:
+        return (0, 0, 0)
+    return _scale_colors([(int(rgb[0]), int(rgb[1]), int(rgb[2]))],
+                         max(1, int(round(level * 100))))[0]
+
+
+async def _lightshow_paint(room_name: str, show: dict, cells: list[dict],
+                           frame: list, prev, full: bool):
+    """Put one frame on the lights, touching only what changed.
+
+    No Hue verify-and-repair here, deliberately: that machinery exists to fight
+    a bridge that quietly disagrees with a look meant to STAY, and a show
+    replaces its own frame in half a minute. Re-sending it would be churn."""
+    bri = max(1, min(100, int(show.get("brightness") or 80)))
+    desired = {c["key"]: tuple(frame[i]) for i, c in enumerate(cells)}
+    prev = {} if full else (prev or {})
+
+    def moved(key):
+        return full or prev.get(key) != desired[key]
+
+    # Hue first: instant, and the bulk guard keeps each light from booking its
+    # own read-back for the length of the frame.
+    hue_cells = [c for c in cells if c["kind"] == "hue" and moved(c["key"])]
+    if hue_cells:
+        _in_bulk_hue.set(True)
+        try:
+            for c in hue_cells:
+                r, g, b, level = desired[c["key"]]
+                try:
+                    if level <= 0:
+                        await control_hue_light(HueLightStateRequest(
+                            light_id=c["light_id"], on=False))
+                    else:
+                        await control_hue_light(HueLightStateRequest(
+                            light_id=c["light_id"], on=True, r=int(r), g=int(g), b=int(b),
+                            brightness=max(1, min(254, round(bri * level * 254 / 100)))))
+                except Exception as e:
+                    log.warning("Lightshow %r: hue %s failed: %s", room_name, c["light_id"], e)
+        finally:
+            _in_bulk_hue.set(False)
+
+    # Whole Govee devices: fast LAN, lightly staggered.
+    for c in [c for c in cells if c["kind"] == "govee" and moved(c["key"])]:
+        r, g, b, level = desired[c["key"]]
+        try:
+            if level <= 0:
+                await control_govee(GoveeCommandRequest(ip=c["ip"], mac=c["mac"], on=False))
+            else:
+                await control_govee(GoveeCommandRequest(
+                    ip=c["ip"], mac=c["mac"], on=True, r=int(r), g=int(g), b=int(b),
+                    brightness=max(1, min(100, round(bri * level)))))
+        except Exception as e:
+            log.warning("Lightshow %r: govee %s failed: %s", room_name, c["ip"], e)
+        await asyncio.sleep(SCENE_GOVEE_STAGGER_S)
+
+    seg_by_dev: dict = {}
+    for c in cells:
+        if c["kind"] == "segment":
+            seg_by_dev.setdefault(c["device"], []).append(c)
+
+    # A full repaint seeds each cloud_v2 device whole-device first — that is the
+    # only place the show's brightness reaches a segmented device, since segment
+    # calls are color-only (the same trick _build_palette_scene uses). Doing it
+    # every frame would flash the strip a solid color twice a minute, so it rides
+    # with the full repaint only.
+    if full:
+        for dev, group in seg_by_dev.items():
+            if group[0]["protocol"] == "razer":
+                continue                 # brightness rides in the bulk packet
+            mid = desired[group[len(group) // 2]["key"]]
+            try:
+                await control_govee(GoveeCommandRequest(
+                    ip=group[0]["ip"], mac=group[0]["mac"], on=True,
+                    r=int(mid[0]), g=int(mid[1]), b=int(mid[2]), brightness=bri))
+            except Exception as e:
+                log.warning("Lightshow %r: seed %s failed: %s", room_name, group[0]["ip"], e)
+        if seg_by_dev:
+            await asyncio.sleep(SCENE_HOLD_S)
+
+    first = True
+    for dev, group in seg_by_dev.items():
+        if group[0]["protocol"] == "razer":
+            # The razer wire protocol carries the WHOLE strip in one packet, so
+            # there is nothing to diff — and re-sending it every frame is also
+            # what keeps razer mode from timing out at 60s.
+            colors = [(0, 0, 0)] * group[0]["count"]
+            for c in group:
+                r, g, b, level = desired[c["key"]]
+                colors[c["idx"]] = _lightshow_dim((r, g, b), level)
+            try:
+                await control_govee_segments_bulk(GoveeSegmentsBulkRequest(
+                    ip=group[0]["ip"], sku=group[0]["sku"],
+                    colors=[list(c) for c in colors], brightness=bri))
+            except Exception as e:
+                log.warning("Lightshow %r: razer %s failed: %s", room_name, group[0]["ip"], e)
+            continue
+        by_color: dict = {}
+        for c in group:
+            if not moved(c["key"]):
+                continue
+            r, g, b, level = desired[c["key"]]
+            by_color.setdefault(_lightshow_dim((r, g, b), level), []).append(c["idx"])
+        for color, idxs in by_color.items():
+            if not first:
+                await asyncio.sleep(SCENE_SEG_STAGGER_S)
+            first = False
+            try:
+                await control_govee_segments_multi(GoveeSegmentsMultiRequest(
+                    ip=group[0]["ip"], sku=group[0]["sku"], device_mac=group[0]["mac"],
+                    segments=idxs, r=color[0], g=color[1], b=color[2]))
+            except Exception as e:
+                log.warning("Lightshow %r: segments %s failed: %s", room_name, group[0]["ip"], e)
+
+
+def _lightshow_disable(room_name: str) -> bool:
+    """Flip the persisted `enabled` flag off. Separate from stopping the task so
+    the loop can retire itself (nothing left to animate) and have that survive a
+    restart instead of coming straight back."""
+    show = (config.get("lightshows", {}) or {}).get(room_name)
+    if not show or not show.get("enabled"):
+        return False
+    show["enabled"] = False
+    schedule_save()
+    return True
+
+
+async def _lightshow_loop(room_name: str):
+    stop = _lightshow_stops[room_name]
+    nudge = _lightshow_nudges[room_name]
+    rt = _lightshow_runtime.setdefault(room_name, {})
+    # Suppress the per-call device events for this task's context: a frame drives
+    # up to a dozen devices, and each one publishing would have every open
+    # browser reload the world several times a minute, forever. One `lightshow`
+    # event per frame instead (exempt from suppression by type), which the
+    # frontend answers with a lights-only refresh.
+    _suppress_publish.set(True)
+    step, frames = 0, 0
+    try:
+        while not stop.is_set():
+            show = _lightshow_cfg(room_name)
+            cells = _lightshow_cells(room_name, show)
+            colors, pool_label = _lightshow_pool(show, rt)
+            if not cells or not colors:
+                log.warning("Lightshow %r: %d cells, %d colors — nothing to animate, stopping",
+                            room_name, len(cells), len(colors))
+                _lightshow_disable(room_name)
+                publish_event("lightshow", room=room_name, running=False)
+                return
+            keys = [c["key"] for c in cells]
+            # A full repaint on (re)start, whenever the room's cells change under
+            # us (a light added, a device gone), and periodically so a show that
+            # something else disturbed heals itself.
+            full = frames % LIGHTSHOW_FULL_REPAINT_EVERY == 0 or rt.get("cells") != keys
+            frame = lightshow.plan_frame(show.get("pattern"), len(cells), colors, step,
+                                         opts=show, prev=rt.get("frame_list"))
+            await _lightshow_paint(room_name, show, cells, frame,
+                                   rt.get("frame_map"), full)
+
+            interval = _lightshow_interval(show, cells, len(colors))
+            rt.update({
+                "frame_list": frame,
+                "frame_map": {c["key"]: tuple(frame[i]) for i, c in enumerate(cells)},
+                "cells": keys,
+                "step": step,
+                "palette": pool_label,
+                "interval_s": interval,
+                "next_at": time.time() + interval,
+            })
+            publish_event("lightshow", room=room_name, running=True, step=step,
+                          palette=pool_label, interval_s=interval,
+                          next_at=int(rt["next_at"] * 1000))
+            step += 1
+            frames += 1
+
+            waiters = [asyncio.ensure_future(stop.wait()), asyncio.ensure_future(nudge.wait())]
+            try:
+                await asyncio.wait(waiters, timeout=interval,
+                                   return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                for w in waiters:
+                    w.cancel()
+            nudge.clear()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        log.exception("Lightshow %r crashed — stopping", room_name)
+        _lightshow_disable(room_name)
+        publish_event("lightshow", room=room_name, running=False)
+    finally:
+        if _lightshow_tasks.get(room_name) is asyncio.current_task():
+            _lightshow_tasks.pop(room_name, None)
+            _lightshow_stops.pop(room_name, None)
+            _lightshow_nudges.pop(room_name, None)
+            _lightshow_runtime.pop(room_name, None)
+
+
+def lightshow_running(room_name: str) -> bool:
+    task = _lightshow_tasks.get(room_name)
+    return bool(task and not task.done())
+
+
+async def stop_lightshow(room_name: str, reason=None, persist: bool = True):
+    """Stop a room's show. Called by every hand-driven whole-room path — turning
+    the room off, applying a scene, a white/color preset, starting lightning —
+    because a show that repaints 30 seconds after you set the room would look
+    like the app ignoring you. A DEVICE-scoped scene (one light card) does NOT
+    stop it: that isn't a claim about the room."""
+    task = _lightshow_tasks.get(room_name)
+    ev = _lightshow_stops.get(room_name)
+    if ev:
+        ev.set()
+    was_running = bool(task and not task.done())
+    if was_running and task is not asyncio.current_task():
+        task.cancel()
+        try:
+            await task
+        except BaseException:
+            pass
+    disabled = _lightshow_disable(room_name) if persist else False
+    if was_running or disabled:
+        publish_event("lightshow", room=room_name, running=False)
+        log.info("Lightshow %r stopped%s", room_name, f" ({reason})" if reason else "")
+
+
+async def start_lightshow(room_name: str):
+    """(Re)start a room's show from step 0. Restarting on every edit is
+    deliberate — at a 30-second cadence, a change you can't see for half a minute
+    reads as a change that didn't take."""
+    await stop_lightshow(room_name, persist=False)
+    _lightshow_stops[room_name] = asyncio.Event()
+    _lightshow_nudges[room_name] = asyncio.Event()
+    _lightshow_runtime[room_name] = {}
+    _lightshow_tasks[room_name] = asyncio.create_task(
+        _lightshow_loop(room_name), name=f"lightshow-{room_name}")
+    show = _lightshow_cfg(room_name)
+    cells = _lightshow_cells(room_name, show)
+    colors, label = _lightshow_pool(show, {})
+    pattern = next((p["name"] for p in lightshow.PATTERNS
+                    if p["key"] == show.get("pattern")), show.get("pattern"))
+    # Recorded ONCE, at the start — not per frame. "Now showing" is a claim about
+    # the room, and "Lightshow · Walk · Tropical" stays true for the whole run,
+    # where stamping every frame would be an SD-card write every 30 seconds for a
+    # strip that says the same thing. No `expect`: the room genuinely is moving,
+    # so /api/rooms/status should answer "unknown" rather than cry divergence.
+    record_room_applied(room_name, "lightshow", f"Lightshow · {pattern} · {label}",
+                        swatches=[list(c) for c in colors])
+    log.info("Lightshow %r started: %s over %d cells, %s", room_name, pattern,
+             len(cells), label)
+
+
+def nudge_lightshow(room_name: str) -> bool:
+    """Advance to the next step now instead of waiting out the interval — the
+    editor's "Next step" button. At half a minute a step, previewing a pattern
+    any other way means sitting and watching."""
+    ev = _lightshow_nudges.get(room_name)
+    if not ev or not lightshow_running(room_name):
+        return False
+    ev.set()
+    return True
+
+
+async def _resume_lightshows():
+    """Restart the shows that were running before this process started.
+
+    Behind `_recovery_done` for the same reason the scheduler is: on an outage
+    boot the bridge and the Govee devices aren't back on the LAN yet, and a show
+    that paints into the void just burns its first frame. Anything that drives
+    lights at startup belongs behind this event."""
+    if _recovery_done is not None:
+        try:
+            await _recovery_done.wait()
+        except asyncio.CancelledError:
+            return
+    for room_name, show in list((config.get("lightshows", {}) or {}).items()):
+        if not (show or {}).get("enabled"):
+            continue
+        if room_name not in config.get("rooms", {}):
+            log.warning("Lightshow resume: room %r no longer exists, skipped", room_name)
+            continue
+        await start_lightshow(room_name)
 
 
 def _zone_rooms(zone_name: str, sched_name: str) -> list[str]:
@@ -1783,6 +2235,10 @@ async def lifespan(app: FastAPI):
     # One-shot: re-enter any on/off span that should be running right now (an
     # outage across its start would otherwise lose BOTH halves — see _catch_up_spans).
     _catchup_task = asyncio.create_task(_catch_up_spans())
+    # Room lightshows that were running before this process started. Behind
+    # _recovery_done like everything else that drives lights at startup.
+    global _lightshow_resume_task
+    _lightshow_resume_task = asyncio.create_task(_resume_lightshows())
 
     yield
 
@@ -1793,6 +2249,13 @@ async def lifespan(app: FastAPI):
         _scheduler_task.cancel()
     if _catchup_task is not None:
         _catchup_task.cancel()   # may still be waiting on power recovery
+    if _lightshow_resume_task is not None:
+        _lightshow_resume_task.cancel()
+    for _room in list(_lightshow_tasks):
+        # `enabled` stays set in the config: these are being stopped by a
+        # shutdown, not by the user, so they must come back on the next start.
+        _lightshow_stops[_room].set()
+        _lightshow_tasks[_room].cancel()
 
     # Mark this as a clean stop FIRST (before the flush, which could be slow), so
     # even if shutdown is force-killed after SIGTERM the marker is already down —
@@ -2724,7 +3187,7 @@ async def delete_room(room_name: str):
     if removed:
         del config["rooms"][room_name]
     for key in ("room_layouts", "room_color_state", "lightning_scenes", "room_presets",
-                "room_last_applied"):
+                "room_last_applied", "lightshows"):
         d = config.get(key)
         if isinstance(d, dict) and room_name in d:
             del d[room_name]
@@ -2748,6 +3211,7 @@ async def control_room(req: RoomStateRequest):
     room = rooms.get(req.room_name)
     if not room:
         raise HTTPException(404, f"Room '{req.room_name}' not found")
+    await stop_lightshow(req.room_name, "room controlled directly")
 
     ip = config.get("hue_bridge_ip")
     username = config.get("hue_username")
@@ -2862,6 +3326,8 @@ async def start_lightning(req: LightningStartRequest):
 
     if scene_manager.is_active(req.room_name):
         raise HTTPException(409, f"Lightning already active for '{req.room_name}'")
+
+    await stop_lightshow(req.room_name, "lightning started")
 
     # Load saved settings or use defaults.
     saved = config.get("lightning_scenes", {}).get(req.room_name, {})
@@ -3804,6 +4270,10 @@ async def scene_room_apply(req: SceneApplyRequest):
     task, so painting a hexa no longer cancels its ROOM's in-flight scene — one
     task per room would make the two fight over devices that don't overlap."""
     scope = req.scope or req.room
+    # A WHOLE-room apply retires the room's lightshow; a device-scoped one does
+    # not, because painting one hexa isn't a statement about the room.
+    if not req.scope:
+        await stop_lightshow(req.room, "a scene was applied")
     existing = _scene_tasks.get(scope)
     if existing and not existing.done():
         existing.cancel()
@@ -4350,6 +4820,7 @@ async def get_config():
         "zones": config.get("zones", {}),
         "favorites": config.get("favorites") or DEFAULT_FAVORITES,
         "favorite_lights": config.get("favorite_lights", []),
+        "lightshows": config.get("lightshows", {}),
     }
 
 
@@ -4439,6 +4910,7 @@ _SETTING_LABELS = {
     "lightning_scenes": "Saved lightning scenes",
     "room_color_state": "Saved room scenes",
     "room_presets": "Room presets",
+    "lightshows": "Room lightshows",
     "ct_rgb": "White calibration (RGB)",
     "ct_correction": "White calibration (legacy)",
     "govee_scene_address": "Segments-or-whole per device",
@@ -5241,6 +5713,120 @@ async def delete_zone(zone_name: str):
 
 # ─── Safe room rename ───────────────────────────────────────────────────────
 
+# ─── Lightshow endpoints (v3.39.0) ──────────────────────────────────────────
+
+class LightshowRequest(BaseModel):
+    """A PATCH, not a replacement: every field is optional and only the ones
+    present are written. The panel auto-saves each control as you touch it (no
+    Save button anywhere else in this app), so a full-object POST would race
+    itself and clobber the field you changed a moment ago."""
+    room: str
+    enabled: Optional[bool] = None
+    pattern: Optional[str] = None
+    interval_s: Optional[int] = None
+    brightness: Optional[int] = None
+    segments: Optional[bool] = None
+    source: Optional[str] = None
+    palettes: Optional[list] = None
+    colors: Optional[list] = None
+    exclude: Optional[list] = None
+    direction: Optional[str] = None
+    groups: Optional[int] = None
+    rest: Optional[str] = None
+    rest_pct: Optional[int] = None
+    swaps: Optional[int] = None
+
+
+def _lightshow_status(room_name: str) -> dict:
+    """One room's show plus everything the editor needs to explain itself: how
+    many cells it will animate, what a step costs, and therefore why the
+    interval it is actually using may be longer than the one you asked for."""
+    show = _lightshow_cfg(room_name)
+    rt = _lightshow_runtime.get(room_name) or {}
+    cells = _lightshow_cells(room_name, show)
+    colors, label = _lightshow_pool(show, dict(rt))
+    cost = _lightshow_step_cost(cells, len(colors) or 1)
+    return {
+        **show,
+        "room": room_name,
+        "running": lightshow_running(room_name),
+        "cells": len(cells),
+        "segment_cells": sum(1 for c in cells if c["kind"] == "segment"),
+        "colors": [list(c) for c in colors],
+        "palette": rt.get("palette") or label,
+        "step": rt.get("step"),
+        "step_seconds": round(cost, 1),
+        "min_interval_s": _lightshow_floor(cells, len(colors) or 1),
+        "effective_interval_s": _lightshow_interval(show, cells, len(colors) or 1),
+        "next_at": int(rt["next_at"] * 1000) if rt.get("next_at") else None,
+    }
+
+
+@app.get("/api/lightshow")
+async def get_lightshows():
+    """Every room's show, plus the pattern catalog. The catalog is served rather
+    than duplicated in JS so the labels and blurbs can't drift from the math."""
+    names = set(config.get("rooms", {}).keys()) | set((config.get("lightshows", {}) or {}).keys())
+    return {
+        "patterns": lightshow.PATTERNS,
+        "shows": {name: _lightshow_status(name) for name in sorted(names)},
+    }
+
+
+@app.post("/api/lightshow")
+async def upsert_lightshow(req: LightshowRequest):
+    if req.room not in config.get("rooms", {}):
+        raise HTTPException(404, f"Room '{req.room}' not found")
+    if req.pattern is not None and req.pattern not in lightshow.PATTERN_KEYS:
+        raise HTTPException(400, f"Unknown pattern '{req.pattern}'")
+    if req.source is not None and req.source not in ("palettes", "favorites", "custom"):
+        raise HTTPException(400, f"Unknown color source '{req.source}'")
+
+    shows = config.setdefault("lightshows", {})
+    show = shows.setdefault(req.room, {})
+    patch = req.model_dump(exclude_none=True)
+    patch.pop("room", None)
+    if "interval_s" in patch:
+        patch["interval_s"] = max(LIGHTSHOW_MIN_INTERVAL_S,
+                                  min(LIGHTSHOW_MAX_INTERVAL_S, int(patch["interval_s"])))
+    if "brightness" in patch:
+        patch["brightness"] = max(1, min(100, int(patch["brightness"])))
+    if "colors" in patch:
+        patch["colors"] = [[int(v) for v in c[:3]] for c in patch["colors"]
+                           if isinstance(c, (list, tuple)) and len(c) >= 3]
+    was_running = lightshow_running(req.room)
+    show.update(patch)
+    schedule_save()
+
+    # A running show is restarted on ANY edit, not just on enable: at a
+    # 30-second cadence a change you can't see for half a minute reads as a
+    # change that didn't take.
+    if show.get("enabled"):
+        await start_lightshow(req.room)
+    elif was_running:
+        await stop_lightshow(req.room, "turned off in the panel", persist=False)
+    publish_event("lightshow", room=req.room, running=lightshow_running(req.room))
+    return {"success": True, "show": _lightshow_status(req.room)}
+
+
+@app.post("/api/lightshow/step")
+async def step_lightshow(req: SceneCancelRequest):
+    """Advance a running show one step immediately (the panel's "Next step").
+    `SceneCancelRequest` is reused only for its shape — {room} — since the body
+    is the same one field."""
+    return {"stepped": nudge_lightshow(req.room), "room": req.room}
+
+
+@app.delete("/api/lightshow/{room_name}")
+async def delete_lightshow(room_name: str):
+    await stop_lightshow(room_name, "deleted", persist=False)
+    removed = (config.get("lightshows", {}) or {}).pop(room_name, None) is not None
+    if removed:
+        schedule_save()
+        publish_event("lightshow", room=room_name, running=False)
+    return {"success": removed}
+
+
 class RoomRenameRequest(BaseModel):
     old_name: str
     new_name: str
@@ -5264,7 +5850,7 @@ async def rename_room(req: RoomRenameRequest):
 
     # Move the key in every room-name-keyed sidecar dict.
     for key in ("rooms", "room_layouts", "room_color_state", "lightning_scenes",
-                "room_presets", "room_last_applied"):
+                "room_presets", "room_last_applied", "lightshows"):
         d = config.get(key)
         if isinstance(d, dict) and old in d:
             d[new] = d.pop(old)
@@ -5279,6 +5865,13 @@ async def rename_room(req: RoomRenameRequest):
 
     save_config(config)
     publish_event("config")
+    # The config key moved, but a RUNNING lightshow task is keyed by the old
+    # name — it would keep painting a room that no longer exists and could never
+    # be stopped from the UI. Re-key it by restarting under the new name.
+    if lightshow_running(old):
+        await stop_lightshow(old, "room renamed", persist=False)
+        if (config.get("lightshows", {}) or {}).get(new, {}).get("enabled"):
+            await start_lightshow(new)
     return {"success": True, "old_name": old, "new_name": new}
 
 

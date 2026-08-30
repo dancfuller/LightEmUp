@@ -159,6 +159,7 @@ function RoomLastApplied({ entry, status, onReapply, isMobile, applying }) {
         }} />
       )}
       {entry.kind === "lightning" && <span style={{ fontSize: dot }}>⚡</span>}
+      {entry.kind === "lightshow" && <span style={{ fontSize: dot }}>✨</span>}
 
       <span style={{
         fontSize: isMobile ? 11 : 12, fontWeight: 600,
@@ -284,7 +285,7 @@ function ControlSurface({ view, views, onView, onClose, roomName, isMobile, chil
   );
 }
 
-function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGovee, onControlRoom, favorites, onFavoritesChange, nicknames, onNicknameChange, lightningActive, onLightningStart, onLightningStop, segmentInfo, segmentState, onSegmentStateRefresh, deviceModes, onDeviceModeChange, onDeviceModesBulkChange, sceneAddress, onSceneAddressChange, unassignedDevices, onAssignDevices, onNavigate, segmentFillModes, onSegmentFillModeChange, onSegmentCountChange, roomLayouts, onLayoutChange, fixtures, onFixtureUpsert, onFixtureDelete, minSatEnabled, minSatPct, savedColorState, ctCorrection, onScheduleLook, lastApplied, lastStatus, onReapply, onRecheck }) {
+function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGovee, onControlRoom, favorites, onFavoritesChange, nicknames, onNicknameChange, lightningActive, onLightningStart, onLightningStop, segmentInfo, segmentState, onSegmentStateRefresh, deviceModes, onDeviceModeChange, onDeviceModesBulkChange, sceneAddress, onSceneAddressChange, unassignedDevices, onAssignDevices, onNavigate, segmentFillModes, onSegmentFillModeChange, onSegmentCountChange, roomLayouts, onLayoutChange, fixtures, onFixtureUpsert, onFixtureDelete, minSatEnabled, minSatPct, savedColorState, ctCorrection, onScheduleLook, lastApplied, lastStatus, onReapply, onRecheck, lightshow, lightshowPatterns, onLightshowSave, onLightshowStep }) {
   const isMobile = useIsMobile();
   const [collapsed, setCollapsed] = useState(true);
   // Single overlay surface state — replaces the old per-panel show* booleans.
@@ -361,11 +362,20 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
   // A real room has a layout handler; the pseudo-"Unassigned" group doesn't. Used
   // to word the whole-room white group as "Set room to" vs "Set lights to".
   const isRealRoom = !!onLayoutChange;
+  // A lightshow only makes sense where there is more than one thing to move a
+  // color between, and only for a real room (the pseudo-"Unassigned" group has
+  // no backend room to key a show to).
+  const showRunning = !!lightshow?.running;
+  const canLightshow = isRealRoom && !!onLightshowSave && allLights.length > 1;
   const views = [
     { key: "lightning", label: lightningActive ? "⚡ Storm" : "⚡ Lightning", accent: "#fbbf24" },
     { key: "scenes", label: "Scenes", accent: "#34d399" },
     { key: "controls", label: "Controls", accent: "#a5b4fc" },
   ];
+  if (canLightshow) {
+    views.push({ key: "lightshow", label: showRunning ? "✨ Show ●" : "✨ Lightshow",
+                 accent: "#a78bfa" });
+  }
   if (canMap) views.push({ key: "map", label: "🗺 Room Map", accent: "#22d3ee" });
   if (anySegmented) views.push({ key: "debug", label: "Debug", accent: "#fbbf24" });
 
@@ -571,6 +581,28 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
         }}
       />
     );
+  } else if (surfaceView === "lightshow") {
+    panel = (
+      <LightshowPanel
+        roomName={name}
+        show={lightshow}
+        patterns={lightshowPatterns}
+        // Built here rather than in the panel: RoomSection already has the room's
+        // devices, their nicknames and their segment counts in the shape every
+        // other surface uses.
+        devices={allLights.map(l => ({
+          key: deviceKey(l),
+          label: getDeviceDisplayName(l, nicknames).nickname
+                 || getDeviceDisplayName(l, nicknames).friendlyName,
+          segments: l.type === "hue" ? 1 : segmentCountFor(l),
+        }))}
+        favorites={favorites}
+        onFavoritesChange={onFavoritesChange}
+        onSave={(patch) => onLightshowSave(name, patch)}
+        onStep={() => onLightshowStep(name)}
+        isMobile={isMobile}
+      />
+    );
   } else if (surfaceView === "controls") {
     panel = controlsPanel;
   } else if (surfaceView === "map") {
@@ -642,6 +674,11 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
           {openerBtn("lightning", lightningActive ? "⚡ Storm" : "⚡ Lightning", lightningActive ? "#fbbf24" : "#94a3b8")}
           {openerBtn("scenes", "Scenes", "#34d399")}
           {openerBtn("controls", "Controls", "#a5b4fc")}
+          {/* A running show is a state of the ROOM, so it has to be visible from
+              the room header — not only once you've opened the panel. */}
+          {canLightshow && openerBtn("lightshow",
+            showRunning ? "✨ Show running" : "✨ Lightshow",
+            showRunning ? "#a78bfa" : "#94a3b8")}
           {canMap && openerBtn("map", "🗺 Room Map", "#22d3ee")}
           {anySegmented && openerBtn("debug", "Debug", "#64748b", true)}
           {/* Adding a light LATER hits the same wall as creating an empty room,

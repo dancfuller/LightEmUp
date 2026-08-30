@@ -9,7 +9,7 @@ rules that apply to every UI change. **Keep this file current when behavior chan
 ## Load order (from index.html)
 utils → audio → components-shared → light-card → favorite-lights → lightning-panel →
 room-map → palette-data → palette-library → color-mode → light-scene → location-data →
-schedules → segment-reset-debug → room-section → zones → room-assignment →
+schedules → lightshow → segment-reset-debug → room-section → zones → room-assignment →
 setup-wizard → server-logs → ct-calibration → backup-restore → app
 
 A new file must be added to index.html in the correct slot (after its dependencies).
@@ -667,6 +667,35 @@ add/edit form; `LocationCard` renders in Settings.
   (like `saveSchedule`). **The rename UI is a pencil on each Assign-Rooms `RoomCard`** →
   `onRenameRoom` → `POST /api/rooms/rename`; it is NOT gated on `isDefault` (the seed room
   "Outside" is default yet must be renamable — the backend migrates every reference).
+
+## lightshow.js — a room's ambient lightshow (v3.39.0)
+`LightshowPanel` is a room surface (its own opener in the room header + a tab in the
+control drawer). **The show runs on the Pi**; this panel only edits a config object and
+reads a status back — which is the point: set a room walking, close the browser, it keeps
+walking. Live state (step, palette, countdown) comes from `GET /api/lightshow`, refreshed
+by the `lightshow` SSE event the backend emits at the end of every frame.
+- **The `lightshow` SSE event does a LIGHTS-ONLY refresh, never `loadAll()`.**
+  `refreshLightshows` in app.js pulls `/lightshow` + `/discover/govee/cached` +
+  `/govee/segment-state` (+ `/hue/lights`) and skips `/hue/phantoms`, `/devices/stale` and
+  `/rooms/status` — all bridge or sweep work. A running show fires this event forever, so
+  a full reload here would tax every open browser twice a minute indefinitely.
+- **Speed is stated, not hidden.** The panel prints what a step costs on THIS room ("about
+  12.6s to paint here") and the floor that follows from it, so an interval you can't have
+  is explained rather than silently ignored. Same principle as `light-scene.js`'s apply
+  estimate — **don't remove it**; a user who isn't told assumes it hung.
+- **The pattern catalog comes from the backend**, so a name or blurb can't drift from the
+  math. Per-pattern options are rendered from each pattern's `opts` — a "Rest brightness"
+  slider under Walk, which never reads it, is worse than no slider.
+- **The backend's response is the source of truth after a save.** `saveLightshow` takes
+  `res.show` rather than patching local state optimistically (the deliberate exception the
+  same as `saveSchedule`): cell count, step cost and the effective interval are all
+  *derived*, and a guess at them is exactly the number the panel exists to report.
+- Reuses `PaletteStrip` / `PALETTE_FILTERS` / `palettesFor` from **schedules.js**, which is
+  why it must load after it. Bulk "Add all shown" / "Remove shown" mirror the scheduler's
+  palette editor — "Summer and Winter" and "Summer minus three" should not be different
+  kinds of work.
+- **A running show is announced in the room HEADER** ("✨ Show running"), not only inside
+  the panel — it's a state of the room, like a storm.
 
 ## "Changed since" + the "Set here" button (v3.16.0)
 Other controllers (Hue app, Govee app, Google Home routines) change these lights too, so

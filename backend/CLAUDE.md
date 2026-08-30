@@ -803,6 +803,73 @@ span which should be running right now, and arms its end.
 - `last_fired` is stamped with the **occurrence**, not the boot time — that's the truth,
   and it keeps the normal tick's dedupe correct.
 
+## Room lightshows (v3.39.0)
+"Neat — the last time I looked at the house, these lights were different colors."
+`config["lightshows"][room]` drives a background task that re-arranges the room's colors
+every N seconds. **It is not synced to anything and can't be**: a cloud_v2 segment call
+costs ~1.8s and the V2 rate limit is per-account, so segment addressing sets the tempo and
+the interesting cadence is 20–60 SECONDS. Every pattern is therefore designed to look
+deliberate at a standstill rather than to animate.
+
+- **`lightshow.py` is pure math**, like `palettes.py`: `plan_frame(pattern, n, colors,
+  step, opts, prev)` → `(r,g,b,level)` per cell. It knows nothing about rooms or devices.
+  `PATTERNS` (key/name/blurb/opts) is **served** by `GET /api/lightshow` rather than
+  duplicated in JS, so the blurb you read in the panel is the one the math implements.
+  **`ColorDealer` moved here from main.py** — the palette scheduler and Shuffle/Palette-hop
+  need the same "no two neighbors match" shuffle, and two copies of that rule is exactly
+  the drift this codebase keeps paying for elsewhere.
+- **A CELL is one Hue light, one whole Govee device, or ONE SEGMENT of one**, ordered by
+  `_palette_device_order` (segments expand in index order at their device's position).
+  The ordering is what makes Walk mean anything spatially.
+- **`segments` is a room-level NARROWING, not a second opinion.** True ⇒ each device is
+  addressed the way `gv_scene_address` already addresses it; False ⇒ every device in the
+  room is one color. A per-device switch here could only disagree with the Scenes panel's,
+  which is the same reason there is no per-schedule segments flag.
+- **`exclude`** holds device keys left out entirely (a device takes its segments with it).
+- **Three things make it affordable, and all three matter:**
+  1. **Frames DIFF.** Only cells whose `(r,g,b,level)` changed are repainted, so Swap costs
+     two segment calls instead of fourteen. A **full** repaint happens on (re)start, when
+     the room's cell list changes under it, and every `LIGHTSHOW_FULL_REPAINT_EVERY` (20)
+     frames so a show something else disturbed heals itself.
+  2. cloud_v2 segments are batched by color, exactly as a scene apply does. razer is never
+     diffed — its wire protocol carries the whole strip in one packet, and re-sending it
+     is also what keeps razer mode from timing out at 60s.
+  3. **Per-device events are suppressed for the whole run** (`_suppress_publish`), with one
+     `lightshow` event per frame instead — exempt from suppression by type, alongside
+     `scene_apply`. Without that, every open browser would `loadAll()` (bridge read,
+     phantom sweep, room-status pass) twice a minute for as long as a show runs. The
+     frontend answers a `lightshow` event with a **lights-only** refresh.
+- **The interval has a FLOOR derived from the actual cell composition**
+  (`_lightshow_floor`), and the panel shows it. A show whose step costs more than its
+  interval is just a queue of overlapping repaints. `interval_s` stores what the user
+  asked for; `_lightshow_interval` is what runs.
+- **Brightness reaches a segmented device only on a full repaint**, as a whole-device seed
+  before the segment calls (the same trick `_build_palette_scene` uses) — segment calls are
+  color-only. Doing it every frame would flash the strip a solid color twice a minute. A
+  *resting* segment (Alternate) is dimmed in RGB via `_scale_colors`, because that is the
+  only lever a segment has.
+- **`enabled` is the RUNNING flag and it is persisted on purpose**, so a show survives a
+  restart. `_resume_lightshows` restarts them **behind `_recovery_done`**, like everything
+  else that drives lights at startup.
+- **Every hand-driven WHOLE-ROOM path retires the show** — `control_room`,
+  `scene_room_apply` (non-scoped only), `_start_scene_apply`, `_apply_room_white`,
+  `_apply_room_color`, `start_lightning` — because a show that repaints 30 seconds after
+  you set the room reads as the app ignoring you. A **device-scoped** scene (one light
+  card) deliberately does not: that isn't a claim about the room. **A new whole-room path
+  needs `await stop_lightshow(room, reason)`.**
+- **"Now showing" is stamped ONCE, at start** (`kind: "lightshow"`), not per frame — an
+  SD-card write every 30 seconds for a strip that says the same thing. No `expect`, so
+  `/api/rooms/status` answers `unknown` rather than crying divergence at a room that is
+  genuinely moving.
+- It is room-name-keyed, so it's in **both** `rename_room` and `delete_room` — and
+  `rename_room` also **re-keys the running task**, which is keyed by name and would
+  otherwise keep painting a room that no longer exists.
+- Covered by the scratch test `test_lightshow.py` (25 assertions): cell ordering, the
+  segments/exclude narrowing, the interval floor, the diff (an unchanged frame sends
+  nothing), Alternate's rest handling, the loop + nudge, every stop hook, and the rename
+  re-key. It stubs `set_hue_light_state` as well as `control_hue_light` — `control_room`
+  builds its own bridge calls, so without that the test reaches the real network.
+
 ## Zones + safe room rename + Power action (v3.9.0, live control v3.15.0)
 **Zones** (`config["zones"]`, additive `{ zoneName: { rooms: [name,…] } }`, name-keyed
 like `rooms`; a room may be in several) are **both a live-control surface and a scheduling
