@@ -818,9 +818,52 @@ deliberate at a standstill rather than to animate.
   **`ColorDealer` moved here from main.py** — the palette scheduler and Shuffle/Palette-hop
   need the same "no two neighbors match" shuffle, and two copies of that rule is exactly
   the drift this codebase keeps paying for elsewhere.
-- **A CELL is one Hue light, one whole Govee device, or ONE SEGMENT of one**, ordered by
-  `_palette_device_order` (segments expand in index order at their device's position).
-  The ordering is what makes Walk mean anything spatially.
+- **A CELL is one Hue light, one whole Govee device, or ONE SEGMENT of one**, and it
+  carries its `pos` from the room layout. The patterns need POSITIONS, not just indices.
+
+### Geometry: a line and a floor plan are different spaces (v3.40.0)
+`_lightshow_geometry(room)` reads `room_layouts[room].mode` and returns
+**`"line"` | `"plan"` | `"none"`** (no layout at all). It decides three things:
+
+- **Which patterns the room is offered.** `lightshow.patterns_for(geometry)`: six are
+  geometry-neutral (Walk, Alternate, Shuffle, Swap, Palette hop, Accent); a **line** also
+  gets **Wipe** and **Comet**, which both need an end to start from and a direction to
+  travel; a **floor plan** also gets **Ripple** and **Sweep**, which need a center to
+  radiate from and an axis to cross. `"none"` gets exactly the six that never read a
+  position — offering a Ripple with no coordinates to ripple through would be a lie.
+  `GET /api/lightshow` serves the catalog *and* each room's allowed keys, and **POST
+  refuses a pattern the room's layout can't run**, so the editor and the API agree.
+- **Whether the striping patterns count cells or read coordinates.** On a line, index IS
+  position (the same call `color-mode.js` made for linear palettes: on a strip people
+  expect color 1 on the leftmost light, not a color derived from raw coordinates with the
+  physical gaps baked in). On a floor plan, Walk reads the real coordinate — so it marches
+  actual stripes instead of rotating an arbitrary reading order — and Alternate becomes a
+  checkerboard on `(x+y)` parity instead of index parity.
+- **The `axis` option**, which only exists on a floor plan (a line has one axis). It is
+  stored ABSENT by default, deliberately: each pattern's natural axis differs, and a
+  stored `"x"` would mean Alternate could never resolve to the checkerboard that is its
+  whole point. `lightshow.default_axis(pattern)` is the resolver, and the panel mirrors it
+  so the chip it highlights is the one in effect.
+
+Switching a room from Line to Floor Plan can leave a show holding a pattern that no longer
+suits it. `_lightshow_pattern` **falls back** (to Walk, which is in every set) rather than
+refusing to start — a show that silently stopped working after an unrelated layout edit is
+the worse failure. `_lightshow_status` reports both `pattern` and `effective_pattern`.
+
+**`_lightshow_order` sorts each cell by ITS OWN position, not its device's** — and that is
+not a nicety. On the real Exterior Front line, a rope's device node sits at x=33 while the
+segments it owns are laid out at x=2 and x=3; ordering by device would put that strip at
+the wrong end of the run and make Walk crawl through it in the wrong place. Same rule
+`color-mode.js` settled on for its preview swatches. A segment never dragged onto the map
+has no position of its own, so it collapses to its parent's spot with ties broken on
+segment index, which keeps an un-laid-out strip contiguous and in order. This is why the
+lightshow does **not** use `_palette_device_order` (which sorts devices, and is left alone
+for the palette scheduler).
+
+**Segment positions are stored per DEVICE**, as
+`segments[deviceKey] = {expanded, positions: {"<idx>": {x, y}}}` — not under a per-segment
+key. `_lightshow_positions` flattens that; get it wrong and every segment silently falls
+back to its parent's spot.
 - **`segments` is a room-level NARROWING, not a second opinion.** True ⇒ each device is
   addressed the way `gv_scene_address` already addresses it; False ⇒ every device in the
   room is one color. A per-device switch here could only disagree with the Scenes panel's,
@@ -839,10 +882,12 @@ deliberate at a standstill rather than to animate.
      `scene_apply`. Without that, every open browser would `loadAll()` (bridge read,
      phantom sweep, room-status pass) twice a minute for as long as a show runs. The
      frontend answers a `lightshow` event with a **lights-only** refresh.
-- **The interval has a FLOOR derived from the actual cell composition**
-  (`_lightshow_floor`), and the panel shows it. A show whose step costs more than its
-  interval is just a queue of overlapping repaints. `interval_s` stores what the user
-  asked for; `_lightshow_interval` is what runs.
+- **The interval is the user's, floored by what a step actually costs.**
+  `_lightshow_floor` derives the floor from the real cell composition and the panel shows
+  it; a show whose step costs more than its interval is just a queue of overlapping
+  repaints. `interval_s` stores what was asked for, `_lightshow_interval` is what runs, and
+  the range is 10s–1h (`LIGHTSHOW_MAX_INTERVAL_S`) because "re-arrange the room every half
+  hour" is a perfectly reasonable ask for something this ambient.
 - **Brightness reaches a segmented device only on a full repaint**, as a whole-device seed
   before the segment calls (the same trick `_build_palette_scene` uses) — segment calls are
   color-only. Doing it every frame would flash the strip a solid color twice a minute. A
@@ -864,11 +909,17 @@ deliberate at a standstill rather than to animate.
 - It is room-name-keyed, so it's in **both** `rename_room` and `delete_room` — and
   `rename_room` also **re-keys the running task**, which is keyed by name and would
   otherwise keep painting a room that no longer exists.
-- Covered by the scratch test `test_lightshow.py` (25 assertions): cell ordering, the
+- Covered by two scratch tests. `test_lightshow.py` (25 assertions): cell ordering, the
   segments/exclude narrowing, the interval floor, the diff (an unchanged frame sends
   nothing), Alternate's rest handling, the loop + nudge, every stop hook, and the rename
-  re-key. It stubs `set_hue_light_state` as well as `control_hue_light` — `control_room`
-  builds its own bridge calls, so without that the test reaches the real network.
+  re-key. `test_geo.py` (24 assertions): geometry detection, own-position ordering with the
+  x=33 rope case, the per-geometry catalogs, the fallback, Walk reading indices on a line
+  and coordinates on a plan, Alternate's checkerboard, Wipe moving exactly one cell per
+  step *including across the wrap*, Comet's fade, Ripple's rings, Sweep's band, and the API
+  refusal. Both stub `set_hue_light_state` as well as `control_hue_light` — `control_room`
+  builds its own bridge calls, so without that a test reaches the real network.
+  **When writing a pattern test, don't let the ring/stripe index alias against the palette
+  length** (a distance of 3 against a 3-color palette passes for the wrong reason).
 
 ## Zones + safe room rename + Power action (v3.9.0, live control v3.15.0)
 **Zones** (`config["zones"]`, additive `{ zoneName: { rooms: [name,…] } }`, name-keyed

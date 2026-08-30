@@ -131,10 +131,12 @@ backend/
   scenes.py            # Lightning storm scene engine
   palettes.py          # Palette library loader + candidate resolution / random pick
                        # for the scheduler's "random palette" action (v3.17.0)
-  lightshow.py         # PURE pattern math for room lightshows (v3.39.0) — cells +
-                       # colors + step → a color and a level per cell. Knows nothing
-                       # about devices; main.py turns cells into Hue/Govee calls.
-                       # Also owns ColorDealer (shared with the palette scheduler)
+  lightshow.py         # PURE pattern math for room lightshows (v3.39.0) — cell
+                       # POSITIONS + colors + step → a color and a level per cell.
+                       # Knows nothing about devices; main.py turns cells into
+                       # Hue/Govee calls. Each pattern declares which room GEOMETRY
+                       # it suits (line / floor plan), v3.40.0. Also owns ColorDealer
+                       # (shared with the palette scheduler)
   palette_library.json # SOURCE OF TRUTH for the 160 curated palettes, shared by the
                        # server and (via a generated JS file) the browser
   config.json          # LOCAL ONLY (gitignored) — user config
@@ -344,11 +346,15 @@ All endpoints are under `/api/`. Key groups:
   room UI reports itself as applying, and nothing is written to "Now showing" (one
   light isn't the room). Absent = a whole-room apply, which is every other caller
 - `/api/lightshow` — room lightshows (v3.39.0): a slow, ambient re-arrangement of a
-  room's colors on a timer (Walk / Alternate / Shuffle / Swap / Palette hop / Accent).
-  `GET` returns every room's show plus the pattern catalog; `POST` PATCHes one room's
-  show (and starts/stops/restarts it); `POST /api/lightshow/step` advances a step now;
-  `DELETE /api/lightshow/{room}` removes it. Config key `lightshows`, room-name-keyed.
-  It runs on the Pi and resumes after a restart. See `backend/CLAUDE.md` "Room lightshows"
+  room's colors on a timer. **The pattern set depends on the room's LAYOUT (v3.40.0)**:
+  every room gets Walk / Alternate / Shuffle / Swap / Palette hop / Accent, a **line**
+  also gets Wipe + Comet, a **floor plan** also gets Ripple + Sweep, and a room with no
+  layout gets only the six that never read a position. `GET` returns every room's show
+  (with its `geometry` and the patterns it may run) plus the full catalog; `POST` PATCHes
+  one room's show (and starts/stops/restarts it); `POST /api/lightshow/step` advances a
+  step now; `DELETE /api/lightshow/{room}` removes it. Config key `lightshows`,
+  room-name-keyed. It runs on the Pi and resumes after a restart. See
+  `backend/CLAUDE.md` "Room lightshows"
 - `/api/govee/segment-*` — per-segment mode and count config (the `segment-mode` one is
   the **lightning** scene's switch, not the color tool's)
 - `/api/govee/scene-address` — per-device "do room scenes paint this as segments or as

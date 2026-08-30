@@ -683,6 +683,25 @@ by the `lightshow` SSE event the backend emits at the end of every frame.
   12.6s to paint here") and the floor that follows from it, so an interval you can't have
   is explained rather than silently ignored. Same principle as `light-scene.js`'s apply
   estimate — **don't remove it**; a user who isn't told assumes it hung.
+- **The pattern list is the Pi's, filtered by the room's layout (v3.40.0).** `show.geometry`
+  and `show.patterns` come from the backend; the panel renders that set and never widens it,
+  or it would offer something POST rejects. A short list has to read as deliberate, so the
+  panel always says WHY ("Laid out as a line, so patterns run along the strip…"), and a room
+  with no layout gets a note pointing at Room Map naming what it would unlock. Walk and
+  Alternate carry a second `plan_blurb` because they genuinely read differently in 2D — a
+  sliding cycle along a strip vs. marching stripes across a room.
+- **`axis` chips are labelled per pattern** (`LIGHTSHOW_AXES`): for Walk/Sweep it's the
+  direction of travel ("left → right"), for Alternate it's the shape of the grouping
+  ("checkerboard"). One stored key, honest names. `LIGHTSHOW_AXIS_DEFAULT` mirrors the Pi's
+  `default_axis` so the highlighted chip is the one actually in effect — the value is
+  deliberately absent from config until you pick one.
+- **The interval slider steps through `LIGHTSHOW_INTERVALS`, it isn't linear.** 10s–1h on a
+  linear range makes one pixel worth twelve seconds at the top, and capping at 300s can't
+  express "change it every half hour" — which is a normal ask for something this ambient.
+  Indexing a named scale gives fine control where it matters and reach where it doesn't;
+  `humanInterval` renders 30s / 5m / 1h everywhere a duration appears. **Timing sits
+  directly under Pattern**, not at the bottom: how often it moves is half of what a
+  lightshow is.
 - **The pattern catalog comes from the backend**, so a name or blurb can't drift from the
   math. Per-pattern options are rendered from each pattern's `opts` — a "Rest brightness"
   slider under Walk, which never reads it, is worse than no slider.

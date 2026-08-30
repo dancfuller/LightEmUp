@@ -7,8 +7,8 @@
 // GET /api/lightshow, refreshed by the `lightshow` SSE event the loop emits at
 // the end of every frame.
 //
-// Two things this UI has to be honest about, because the hardware isn't gentle
-// about them:
+// Three things this UI has to be honest about, because neither the hardware nor
+// the rooms are gentle about them:
 //   1. SPEED. A cloud_v2 segment call costs ~1.8s and the rate limit is
 //      per-account, so a room full of segments cannot step every 5 seconds. The
 //      backend computes a floor from the actual cell composition and the panel
@@ -18,6 +18,11 @@
 //      on, each device is addressed the way the Scenes panel already addresses
 //      it (govee_scene_address); off, every device in the room is one color.
 //      A per-device switch here could only disagree with that one.
+//   3. GEOMETRY. A room laid out as a LINE and one laid out as a FLOOR PLAN are
+//      different spaces, and the backend offers each the patterns that actually
+//      read well there (`show.geometry` + `show.patterns`). The panel never
+//      invents that list — it renders what the Pi says this room may run, so the
+//      editor can't offer something the API would refuse.
 //
 // The pattern catalog (names + blurbs) is served by the backend rather than
 // duplicated here, so the description you read is the one the math implements.
@@ -28,10 +33,43 @@ const LIGHTSHOW_SOURCES = [
   { key: "custom", label: "Custom" },
 ];
 
-// Options each pattern actually uses. Rendering the full set for every pattern
-// would put a "Rest brightness" slider under Walk, which does nothing with it.
-function lightshowOptsFor(patterns, key) {
-  return (patterns || []).find(p => p.key === key)?.opts || [];
+// Every interval the slider can land on, 10 seconds to an hour. A plain linear
+// 10-3600 slider is unusable (a pixel is 12 seconds at the top end) and a
+// 10-300 one can't express "change it every half hour", which is a perfectly
+// reasonable ask for something this ambient. Stepping through named values gives
+// fine control where it matters and reach where it doesn't.
+const LIGHTSHOW_INTERVALS = [10, 15, 20, 30, 45, 60, 90, 120, 180, 300, 450,
+                             600, 900, 1200, 1800, 2700, 3600];
+
+function humanInterval(s) {
+  s = Number(s) || 0;
+  if (s < 60) return `${s}s`;
+  if (s % 3600 === 0) return `${s / 3600}h`;
+  if (s % 60 === 0) return `${s / 60}m`;
+  return `${Math.floor(s / 60)}m ${s % 60}s`;
+}
+
+function nearestIntervalIndex(seconds) {
+  let best = 0;
+  LIGHTSHOW_INTERVALS.forEach((v, i) => {
+    if (Math.abs(v - seconds) < Math.abs(LIGHTSHOW_INTERVALS[best] - seconds)) best = i;
+  });
+  return best;
+}
+
+// Axis labels are per PATTERN, because one stored value means a different thing
+// depending on what reads it: for a Walk or a Sweep it's the direction of
+// travel, for Alternate it's the shape of the grouping. One key, honest names.
+const LIGHTSHOW_AXES = {
+  alternate: [["diag", "checkerboard"], ["x", "columns"], ["y", "rows"]],
+  _default: [["x", "left → right"], ["y", "front → back"], ["diag", "diagonal"]],
+};
+// Mirrors lightshow.default_axis on the Pi: absent means "whatever suits this
+// pattern", so the chip we highlight has to resolve it the same way.
+const LIGHTSHOW_AXIS_DEFAULT = { alternate: "diag" };
+
+function lightshowPattern(patterns, key) {
+  return (patterns || []).find(p => p.key === key) || null;
 }
 
 function LightshowCountdown({ nextAt, running }) {
@@ -43,14 +81,20 @@ function LightshowCountdown({ nextAt, running }) {
   }, [running, nextAt]);
   if (!running || !nextAt) return null;
   const left = Math.max(0, Math.round((nextAt - Date.now()) / 1000));
-  return <span>next in {left}s</span>;
+  return <span>next in {humanInterval(left)}</span>;
 }
 
 function LightshowPanel({ roomName, show, patterns, devices, favorites,
                           onFavoritesChange, onSave, onStep, isMobile }) {
   const s = show || {};
-  const pattern = s.pattern || "walk";
-  const opts = lightshowOptsFor(patterns, pattern);
+  const geometry = s.geometry || "none";
+  const isPlan = geometry === "plan";
+  // The Pi decides which patterns this room's layout can actually run; never
+  // widen it here, or the editor offers something POST will reject.
+  const allowed = Array.isArray(s.patterns) ? s.patterns : null;
+  const shownPatterns = (patterns || []).filter(p => !allowed || allowed.includes(p.key));
+  const pattern = s.effective_pattern || s.pattern || "walk";
+  const opts = lightshowPattern(patterns, pattern)?.opts || [];
   const [paletteFilter, setPaletteFilter] = useState("Featured");
   const [paletteSearch, setPaletteSearch] = useState("");
   const [showLights, setShowLights] = useState(false);
@@ -98,6 +142,12 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
     color: active ? accent : "#94a3b8",
     fontSize: isMobile ? 11 : 12, fontWeight: 700, whiteSpace: "nowrap",
   });
+  const optRow = (label, children) => (
+    <div style={{ display: "flex", gap: 6, marginTop: 12, alignItems: "center", flexWrap: "wrap" }}>
+      <span style={{ fontSize: 11, color: "#64748b", fontWeight: 600 }}>{label}</span>
+      {children}
+    </div>
+  );
 
   const filtered = (typeof palettesFor === "function" ? palettesFor(paletteFilter) : [])
     .filter(p => !paletteSearch
@@ -106,6 +156,12 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
   const colorCount = (s.colors || []).length;
   const ready = s.source === "palettes" ? selected.length > 0
     : s.source === "custom" ? colorCount >= 2 : true;
+
+  const axisChoices = LIGHTSHOW_AXES[pattern] || LIGHTSHOW_AXES._default;
+  const axisValue = s.axis || LIGHTSHOW_AXIS_DEFAULT[pattern] || "x";
+  const intervalIdx = nearestIntervalIndex(s.interval_s ?? 30);
+  const geometryLabel = isPlan ? "Floor plan"
+    : geometry === "line" ? "Line layout" : "No layout";
 
   return (
     <div>
@@ -131,9 +187,9 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
                 : (ready ? "Not running" : "Pick some colors below")}
             </div>
             <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>
-              {s.cells || 0} {s.cells === 1 ? "light" : "lights"}
+              {geometryLabel} · {s.cells || 0} {s.cells === 1 ? "light" : "lights"}
               {s.segment_cells > 0 && <> ({s.segment_cells} segments)</>}
-              {" · "}every {s.effective_interval_s}s
+              {" · "}every {humanInterval(s.effective_interval_s)}
               {s.running && <> · <LightshowCountdown nextAt={s.next_at} running={s.running} /></>}
             </div>
           </div>
@@ -150,7 +206,7 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
           display: "grid", gap: 8,
           gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fill, minmax(168px, 1fr))",
         }}>
-          {(patterns || []).map(p => {
+          {shownPatterns.map(p => {
             const active = p.key === pattern;
             return (
               <button key={p.key} onClick={() => onSave({ pattern: p.key })} style={{
@@ -162,58 +218,127 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
                   {p.name}
                 </div>
                 <div style={{ fontSize: 11, color: "#64748b", marginTop: 3, lineHeight: 1.4 }}>
-                  {p.blurb}
+                  {/* A pattern can read differently in 2D — Walk is a sliding
+                      cycle along a strip but marching stripes across a room. */}
+                  {(isPlan && p.plan_blurb) || p.blurb}
                 </div>
               </button>
             );
           })}
         </div>
 
-        {/* Per-pattern options. Only what this pattern reads. */}
-        {opts.includes("direction") && (
-          <div style={{ display: "flex", gap: 6, marginTop: 12, alignItems: "center", flexWrap: "wrap" }}>
-            <span style={{ fontSize: 11, color: "#64748b", fontWeight: 600 }}>Direction</span>
-            {["forward", "backward", "bounce"].map(d => (
-              <button key={d} onClick={() => onSave({ direction: d })}
-                style={chip((s.direction || "forward") === d)}>{d}</button>
-            ))}
+        {/* Why the list is the length it is. Naming the layout is what makes a
+            shorter set read as deliberate rather than as something missing. */}
+        {geometry === "none" ? (
+          <div style={{
+            marginTop: 12, padding: 10, borderRadius: 8, background: "#0a0f1e",
+            border: "1px solid #334155", fontSize: 11, color: "#94a3b8", lineHeight: 1.5,
+          }}>
+            This room has no layout yet, so only the patterns that don't need to know
+            where a light <i>is</i> are available. Arrange it in{" "}
+            <b style={{ color: "#c4b5fd" }}>Room Map</b> to unlock the rest — a line
+            gains Wipe and Comet, a floor plan gains Ripple and Sweep.
+          </div>
+        ) : (
+          <div style={{ marginTop: 10, fontSize: 11, color: "#64748b", lineHeight: 1.5 }}>
+            {isPlan
+              ? "Laid out as a floor plan, so patterns run across real coordinates and this room gets the two-dimensional ones."
+              : "Laid out as a line, so patterns run along the strip and this room gets the ones that need a direction to travel."}
           </div>
         )}
-        {opts.includes("groups") && (
-          <div style={{ display: "flex", gap: 6, marginTop: 12, alignItems: "center", flexWrap: "wrap" }}>
-            <span style={{ fontSize: 11, color: "#64748b", fontWeight: 600 }}>Take turns in</span>
-            {[2, 3, 4].map(g => (
-              <button key={g} onClick={() => onSave({ groups: g })}
-                style={chip((s.groups || 2) === g)}>{g} groups</button>
-            ))}
-          </div>
-        )}
-        {opts.includes("rest") && (
+
+        {/* Per-pattern options. Only what this pattern reads — a rest-brightness
+            slider under Walk, which never looks at it, is worse than none. */}
+        {opts.includes("direction") && optRow("Direction",
+          (pattern === "ripple" ? [["forward", "outward"], ["backward", "inward"]]
+           : pattern === "wipe" ? [["forward", "from the start"], ["backward", "from the end"]]
+           : [["forward", "forward"], ["backward", "backward"], ["bounce", "bounce"]]
+          ).map(([k, label]) => (
+            <button key={k} onClick={() => onSave({ direction: k })}
+              style={chip((s.direction || "forward") === k)}>{label}</button>
+          )))}
+
+        {/* Axis is a floor-plan question: a line has only one. */}
+        {opts.includes("axis") && isPlan && optRow(
+          pattern === "alternate" ? "Grouping" : "Across",
+          axisChoices.map(([k, label]) => (
+            <button key={k} onClick={() => onSave({ axis: k })}
+              style={chip(axisValue === k)}>{label}</button>
+          )))}
+
+        {opts.includes("groups") && optRow("Take turns in",
+          [2, 3, 4].map(g => (
+            <button key={g} onClick={() => onSave({ groups: g })}
+              style={chip((s.groups || 2) === g)}>{g} groups</button>
+          )))}
+
+        {opts.includes("swaps") && optRow("Pairs per step",
+          [1, 2, 3].map(n => (
+            <button key={n} onClick={() => onSave({ swaps: n })}
+              style={chip((s.swaps || 2) === n)}>{n}</button>
+          )))}
+
+        {opts.includes("tail") && optRow("Tail length",
+          [1, 2, 3, 4, 6].map(n => (
+            <button key={n} onClick={() => onSave({ tail: n })}
+              style={chip((s.tail || 3) === n)}>{n}</button>
+          )))}
+
+        {opts.includes("band") && optRow("Band width",
+          [1, 2, 3, 4].map(n => (
+            <button key={n} onClick={() => onSave({ band: n })}
+              style={chip((s.band || 2) === n)}>{n}</button>
+          )))}
+
+        {opts.includes("rest") && optRow("Resting lights",
+          [["dim", "dim"], ["off", "off"]].map(([k, label]) => (
+            <button key={k} onClick={() => onSave({ rest: k })}
+              style={chip((s.rest || "dim") === k)}>{label}</button>
+          )))}
+
+        {opts.includes("rest_pct") && (s.rest || "dim") === "dim" && (
           <div style={{ marginTop: 12 }}>
-            <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-              <span style={{ fontSize: 11, color: "#64748b", fontWeight: 600 }}>Resting lights</span>
-              {[["dim", "dim"], ["off", "off"]].map(([k, label]) => (
-                <button key={k} onClick={() => onSave({ rest: k })}
-                  style={chip((s.rest || "dim") === k)}>{label}</button>
-              ))}
-            </div>
-            {(s.rest || "dim") === "dim" && (
-              <div style={{ marginTop: 10 }}>
-                <Slider label={`Rest brightness · ${s.rest_pct ?? 15}%`} value={s.rest_pct ?? 15}
-                  min={1} max={80} onChange={(v) => saveSoon({ rest_pct: v })} />
-              </div>
-            )}
+            <Slider label={opts.includes("rest") ? "Rest brightness" : "Base brightness"}
+              value={s.rest_pct ?? 15} min={1} max={80} unit="%"
+              onChange={(v) => saveSoon({ rest_pct: v })} />
           </div>
         )}
-        {opts.includes("swaps") && (
-          <div style={{ display: "flex", gap: 6, marginTop: 12, alignItems: "center", flexWrap: "wrap" }}>
-            <span style={{ fontSize: 11, color: "#64748b", fontWeight: 600 }}>Pairs per step</span>
-            {[1, 2, 3].map(n => (
-              <button key={n} onClick={() => onSave({ swaps: n })}
-                style={chip((s.swaps || 2) === n)}>{n}</button>
-            ))}
-          </div>
-        )}
+      </div>
+
+      {/* ── Timing ────────────────────────────────────────────────────────
+          Directly under Pattern rather than buried at the bottom: how often it
+          moves is half of what a lightshow IS, and it's the setting people reach
+          for second. The scale is stepped (see LIGHTSHOW_INTERVALS) so it can
+          reach an hour without a slider where one pixel is twelve seconds. */}
+      <div style={card}>
+        <div style={heading}>Timing</div>
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+          <span style={{ fontSize: 12, color: "#94a3b8", fontWeight: 500 }}>Change colors every</span>
+          <span style={{ fontSize: 13, color: "#e2e8f0", fontWeight: 700 }}>
+            {humanInterval(LIGHTSHOW_INTERVALS[intervalIdx])}
+          </span>
+        </div>
+        <input
+          type="range" min={0} max={LIGHTSHOW_INTERVALS.length - 1} step={1}
+          value={intervalIdx}
+          onChange={(e) => saveSoon({ interval_s: LIGHTSHOW_INTERVALS[Number(e.target.value)] })}
+          style={{ width: "100%", accentColor: "#a78bfa", touchAction: "pan-y" }}
+        />
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "#475569" }}>
+          <span>10s</span><span>1m</span><span>5m</span><span>1h</span>
+        </div>
+        <div style={{ fontSize: 11, color: "#64748b", marginTop: 8, lineHeight: 1.5 }}>
+          A step takes about <b style={{ color: "#94a3b8" }}>{s.step_seconds}s</b> to paint here
+          {s.segment_cells > 0 && " (segments go one color at a time — the Govee rate limit, not us)"},
+          so this room can't step faster than every {humanInterval(s.min_interval_s)}.
+          {(s.interval_s ?? 30) < (s.min_interval_s ?? 10) && (
+            <> <b style={{ color: "#fbbf24" }}>Using {humanInterval(s.effective_interval_s)}.</b></>
+          )}
+        </div>
+        <div style={{ marginTop: 14 }}>
+          <Slider label="Brightness" value={s.brightness ?? 80} min={1} max={100} unit="%"
+            onChange={(v) => saveSoon({ brightness: v })} />
+        </div>
       </div>
 
       {/* ── Colors ──────────────────────────────────────────────────────── */}
@@ -333,28 +458,6 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
             />
           </div>
         )}
-      </div>
-
-      {/* ── Timing + brightness ─────────────────────────────────────────── */}
-      <div style={card}>
-        <div style={heading}>Timing</div>
-        <Slider
-          label={`Step every ${s.effective_interval_s ?? s.interval_s}s`}
-          value={s.interval_s ?? 30} min={10} max={300}
-          onChange={(v) => saveSoon({ interval_s: v })}
-        />
-        <div style={{ fontSize: 11, color: "#64748b", marginTop: 6, lineHeight: 1.5 }}>
-          A step takes about <b style={{ color: "#94a3b8" }}>{s.step_seconds}s</b> to paint here
-          {s.segment_cells > 0 && " (segments go one color at a time — the Govee rate limit, not us)"},
-          so this room can't step faster than every {s.min_interval_s}s.
-          {(s.interval_s ?? 30) < (s.min_interval_s ?? 10) && (
-            <> <b style={{ color: "#fbbf24" }}>Using {s.effective_interval_s}s.</b></>
-          )}
-        </div>
-        <div style={{ marginTop: 14 }}>
-          <Slider label={`Brightness ${s.brightness ?? 80}%`} value={s.brightness ?? 80}
-            min={1} max={100} onChange={(v) => saveSoon({ brightness: v })} />
-        </div>
       </div>
 
       {/* ── Which lights ────────────────────────────────────────────────── */}

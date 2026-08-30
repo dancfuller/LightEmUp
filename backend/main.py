@@ -1346,11 +1346,18 @@ LIGHTSHOW_DEFAULTS = {
     "palettes": [],                  # library names; one is drawn per run (per STEP for hop)
     "colors": [],                    # source=custom
     "exclude": [],                   # device keys left out of the show entirely
-    "direction": "forward",          # walk
+    "direction": "forward",          # walk / wipe / ripple
+    "axis": None,                    # walk / alternate / sweep, floor plans only.
+                                     # Absent on purpose — see lightshow.plan_frame:
+                                     # each pattern resolves its own natural axis,
+                                     # and a stored default would deny Alternate the
+                                     # checkerboard it exists for.
     "groups": 2,                     # alternate
     "rest": "dim",                   # alternate: dim | off
-    "rest_pct": 15,
+    "rest_pct": 15,                  # alternate / comet / sweep: how dim "resting" is
     "swaps": 2,                      # swap
+    "tail": 3,                       # comet
+    "band": 2,                       # sweep
 }
 
 _lightshow_tasks: "dict[str, asyncio.Task]" = {}
@@ -1366,24 +1373,94 @@ def _lightshow_cfg(room_name: str) -> dict:
     return {**LIGHTSHOW_DEFAULTS, **stored}
 
 
-def _lightshow_cells(room_name: str, show: dict) -> list[dict]:
-    """The addressable units of a room's show, in room-layout order.
+def _lightshow_geometry(room_name: str) -> str:
+    """"line" | "plan" | "none" — the shape of the space this room's show runs in.
 
-    A cell is one Hue light, one whole Govee device, or ONE SEGMENT of one — the
-    ordering is what makes "walk" mean anything spatially, and within a device a
-    segment's index IS its position. Excluded devices drop out entirely (and
-    take their segments with them), which is the point of excluding them."""
+    A line and a floor plan are not the same space, and the patterns that read
+    well in one are not the ones that read well in the other (see lightshow.py's
+    module docstring). A room with no layout is "none": it gets only the
+    patterns that never look at a position, because it hasn't got any."""
+    layout = (config.get("room_layouts", {}) or {}).get(room_name) or {}
+    if not layout.get("devices"):
+        return "none"
+    return "line" if layout.get("mode") == "linear" else "plan"
+
+
+def _lightshow_positions(room_name: str) -> tuple[dict, dict]:
+    """(device positions, segment positions) from the room layout.
+
+    Segment positions are stored per DEVICE as
+    `segments[deviceKey] = {expanded, positions: {"<idx>": {x, y}}}` — not under a
+    per-segment key. Get that wrong and every segment silently falls back to its
+    parent's spot."""
+    layout = (config.get("room_layouts", {}) or {}).get(room_name) or {}
+    devices = layout.get("devices") or {}
+    segments = {}
+    for dev_key, entry in (layout.get("segments") or {}).items():
+        for idx, pos in ((entry or {}).get("positions") or {}).items():
+            try:
+                segments[(dev_key, int(idx))] = pos
+            except (TypeError, ValueError):
+                continue
+    return devices, segments
+
+
+def _lightshow_order(cells: list[dict], geometry: str) -> list[dict]:
+    """Cells in the order they physically run, each sorted by ITS OWN position.
+
+    Deliberately not `_palette_device_order`, which sorts DEVICES and would then
+    keep a device's segments together behind it. Real layouts don't cooperate: on
+    the Exterior Front line, one rope's node sits at x=33 while the segments it
+    actually owns are laid out at x=2 and x=3. Ordering by the device would put
+    that strip at the wrong end of the run and make Walk crawl through it in the
+    wrong place. Same rule `color-mode.js` settled on for its preview swatches.
+
+    A segment that was never dragged onto the map has no position of its own, so
+    it collapses to its parent's spot and ties break on segment index — which
+    keeps an un-laid-out strip contiguous and in order rather than interleaved
+    meaninglessly with whatever else shares that coordinate."""
+    def sort_key(item):
+        i, c = item
+        if c.get("pos") is None:
+            return (1, 0.0, 0.0, i, c.get("idx") or 0)   # unplaced sort last, config order
+        x, y = c["pos"]
+        # A line runs left to right; a floor plan reads row-major, which is the
+        # order a person would walk the room in.
+        primary, secondary = (x, y) if geometry == "line" else (y, x)
+        return (0, primary, secondary, i, c.get("idx") or 0)
+    return [c for _, c in sorted(enumerate(cells), key=sort_key)]
+
+
+def _lightshow_cells(room_name: str, show: dict) -> list[dict]:
+    """The addressable units of a room's show, in the order they physically run.
+
+    A cell is one Hue light, one whole Govee device, or ONE SEGMENT of one, and
+    each carries its `pos` from the room layout — the patterns need positions,
+    not just indices, or a Walk on a floor plan is only a rotation of an
+    arbitrary reading order. Excluded devices drop out entirely (and take their
+    segments with them), which is the point of excluding them."""
     room = config.get("rooms", {}).get(room_name) or {}
     exclude = set(show.get("exclude") or [])
+    geometry = _lightshow_geometry(room_name)
+    dev_pos, seg_pos = _lightshow_positions(room_name)
+
+    def at(entry):
+        if not entry:
+            return None
+        try:
+            return (float(entry.get("x", 0)), float(entry.get("y", 0)))
+        except (TypeError, ValueError):
+            return None
+
     hue_keys = [f"hue:{lid}" for lid in room.get("hue_light_ids", [])]
     gv_keys = [f"govee:{slug}" for slug in room.get("govee_devices", [])]
     cells: list[dict] = []
-    for key in _palette_device_order(room_name, hue_keys + gv_keys):
+    for key in hue_keys + gv_keys:
         if key in exclude:
             continue
         if key.startswith("hue:"):
             cells.append({"kind": "hue", "key": key, "device": key,
-                          "light_id": key[4:],
+                          "light_id": key[4:], "pos": at(dev_pos.get(key)),
                           "label": _device_label(key, f"Light {key[4:]}")})
             continue
         slug = key[6:]
@@ -1403,11 +1480,13 @@ def _lightshow_cells(room_name: str, show: dict) -> list[dict]:
                 cells.append({"kind": "segment", "key": f"{key}#{idx}", "device": key,
                               "ip": ip, "mac": mac or slug, "sku": sku,
                               "protocol": protocol, "idx": idx, "count": count,
+                              "pos": at(seg_pos.get((key, idx))) or at(dev_pos.get(key)),
                               "label": f"{label} · {idx + 1}"})
         else:
             cells.append({"kind": "govee", "key": key, "device": key, "ip": ip,
-                          "mac": mac or slug, "label": label})
-    return cells
+                          "mac": mac or slug, "pos": at(dev_pos.get(key)),
+                          "label": label})
+    return _lightshow_order(cells, geometry)
 
 
 def _lightshow_step_cost(cells: list[dict], palette_size: int) -> float:
@@ -1450,6 +1529,19 @@ def _lightshow_interval(show: dict, cells: list[dict], palette_size: int) -> int
     want = int(show.get("interval_s") or LIGHTSHOW_DEFAULTS["interval_s"])
     return max(_lightshow_floor(cells, palette_size),
                min(LIGHTSHOW_MAX_INTERVAL_S, want))
+
+
+def _lightshow_pattern(show: dict, geometry: str) -> str:
+    """The pattern this room will actually run.
+
+    Switching a room from Line to Floor Plan in the map can leave a show holding
+    a pattern that no longer suits it (a Comet needs a run to travel). Rather
+    than refuse to start, fall back to one that fits and say so — the alternative
+    is a show that silently stops working after an unrelated layout edit."""
+    want = show.get("pattern") or lightshow.DEFAULT_PATTERN
+    if lightshow.pattern_ok(want, geometry):
+        return want
+    return lightshow.fallback_pattern(geometry)
 
 
 def _lightshow_pool(show: dict, rt: dict, rng=None) -> tuple:
@@ -1639,8 +1731,12 @@ async def _lightshow_loop(room_name: str):
             # us (a light added, a device gone), and periodically so a show that
             # something else disturbed heals itself.
             full = frames % LIGHTSHOW_FULL_REPAINT_EVERY == 0 or rt.get("cells") != keys
-            frame = lightshow.plan_frame(show.get("pattern"), len(cells), colors, step,
-                                         opts=show, prev=rt.get("frame_list"))
+            geometry = _lightshow_geometry(room_name)
+            frame = lightshow.plan_frame(
+                _lightshow_pattern(show, geometry),
+                [c.get("pos") or (0.0, 0.0) for c in cells],
+                colors, step, opts=show, prev=rt.get("frame_list"),
+                geometry=geometry)
             await _lightshow_paint(room_name, show, cells, frame,
                                    rt.get("frame_map"), full)
 
@@ -1721,10 +1817,11 @@ async def start_lightshow(room_name: str):
     _lightshow_tasks[room_name] = asyncio.create_task(
         _lightshow_loop(room_name), name=f"lightshow-{room_name}")
     show = _lightshow_cfg(room_name)
+    geometry = _lightshow_geometry(room_name)
     cells = _lightshow_cells(room_name, show)
     colors, label = _lightshow_pool(show, {})
-    pattern = next((p["name"] for p in lightshow.PATTERNS
-                    if p["key"] == show.get("pattern")), show.get("pattern"))
+    key = _lightshow_pattern(show, geometry)
+    pattern = next((p["name"] for p in lightshow.PATTERNS if p["key"] == key), key)
     # Recorded ONCE, at the start — not per frame. "Now showing" is a claim about
     # the room, and "Lightshow · Walk · Tropical" stays true for the whole run,
     # where stamping every frame would be an SD-card write every 30 seconds for a
@@ -1732,8 +1829,8 @@ async def start_lightshow(room_name: str):
     # so /api/rooms/status should answer "unknown" rather than cry divergence.
     record_room_applied(room_name, "lightshow", f"Lightshow · {pattern} · {label}",
                         swatches=[list(c) for c in colors])
-    log.info("Lightshow %r started: %s over %d cells, %s", room_name, pattern,
-             len(cells), label)
+    log.info("Lightshow %r started: %s over %d cells (%s layout), %s", room_name,
+             pattern, len(cells), geometry, label)
 
 
 def nudge_lightshow(room_name: str) -> bool:
@@ -5731,10 +5828,13 @@ class LightshowRequest(BaseModel):
     colors: Optional[list] = None
     exclude: Optional[list] = None
     direction: Optional[str] = None
+    axis: Optional[str] = None
     groups: Optional[int] = None
     rest: Optional[str] = None
     rest_pct: Optional[int] = None
     swaps: Optional[int] = None
+    tail: Optional[int] = None
+    band: Optional[int] = None
 
 
 def _lightshow_status(room_name: str) -> dict:
@@ -5743,6 +5843,7 @@ def _lightshow_status(room_name: str) -> dict:
     interval it is actually using may be longer than the one you asked for."""
     show = _lightshow_cfg(room_name)
     rt = _lightshow_runtime.get(room_name) or {}
+    geometry = _lightshow_geometry(room_name)
     cells = _lightshow_cells(room_name, show)
     colors, label = _lightshow_pool(show, dict(rt))
     cost = _lightshow_step_cost(cells, len(colors) or 1)
@@ -5750,6 +5851,13 @@ def _lightshow_status(room_name: str) -> dict:
         **show,
         "room": room_name,
         "running": lightshow_running(room_name),
+        # The room's SHAPE, and therefore which patterns it's offered. A line has
+        # ends and a direction; a floor plan has a middle and two axes; a room
+        # with no layout has neither, so it only gets the position-blind ones.
+        "geometry": geometry,
+        "patterns": [p["key"] for p in lightshow.patterns_for(geometry)],
+        # What will really run — see _lightshow_pattern for why these can differ.
+        "effective_pattern": _lightshow_pattern(show, geometry),
         "cells": len(cells),
         "segment_cells": sum(1 for c in cells if c["kind"] == "segment"),
         "colors": [list(c) for c in colors],
@@ -5777,10 +5885,18 @@ async def get_lightshows():
 async def upsert_lightshow(req: LightshowRequest):
     if req.room not in config.get("rooms", {}):
         raise HTTPException(404, f"Room '{req.room}' not found")
-    if req.pattern is not None and req.pattern not in lightshow.PATTERN_KEYS:
-        raise HTTPException(400, f"Unknown pattern '{req.pattern}'")
+    if req.pattern is not None:
+        if req.pattern not in lightshow.PATTERN_KEYS:
+            raise HTTPException(400, f"Unknown pattern '{req.pattern}'")
+        geo = _lightshow_geometry(req.room)
+        if not lightshow.pattern_ok(req.pattern, geo):
+            raise HTTPException(
+                400, f"Pattern '{req.pattern}' needs a different room layout "
+                     f"(this room is '{geo}')")
     if req.source is not None and req.source not in ("palettes", "favorites", "custom"):
         raise HTTPException(400, f"Unknown color source '{req.source}'")
+    if req.axis is not None and req.axis not in ("x", "y", "diag"):
+        raise HTTPException(400, f"Unknown axis '{req.axis}'")
 
     shows = config.setdefault("lightshows", {})
     show = shows.setdefault(req.room, {})
