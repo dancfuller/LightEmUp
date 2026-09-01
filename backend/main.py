@@ -1335,14 +1335,15 @@ async def _apply_action_to_room(room: str, action: dict,
 LIGHTSHOW_MIN_INTERVAL_S = 10       # floor, whatever the cost model says
 LIGHTSHOW_MAX_INTERVAL_S = 3600
 LIGHTSHOW_INTERVAL_HEADROOM_S = 5   # slack between "painting done" and "next step"
-# When a full repaint costs no more than this fraction of the interval, DON'T
-# diff at all — just repaint everything, every step. See _lightshow_should_full.
-LIGHTSHOW_FULL_BUDGET = 0.34
-# And when diffing does pay, never let a missed command persist longer than this.
-# Wall clock, not frames: staleness is something a person experiences in minutes,
-# and a show stepping every 5 minutes would otherwise go an hour and a half
-# between resyncs.
-LIGHTSHOW_RESYNC_S = 300
+# Never let a missed command persist longer than this. Wall clock, not frames:
+# staleness is something a person experiences in minutes, and a show stepping
+# every 5 minutes would otherwise go an hour and a half between resyncs.
+LIGHTSHOW_RESYNC_S = 900
+# A Hue command is a ZIGBEE transmission and a bulb NVRAM write, and the mesh is
+# shared by every light in the house — so a show that includes Hue bulbs gets a
+# higher interval floor than the Govee cost model alone would ask for. See
+# _lightshow_floor for the incident that produced this number.
+LIGHTSHOW_HUE_MIN_INTERVAL_S = 60
 # After cancelling a show we wait this long before driving the same lights.
 # `govee_lan_send` schedules its duplicate datagram as an INDEPENDENT task
 # (GOVEE_RESEND_DELAY_S later), so cancelling the show does not cancel it — a
@@ -1540,39 +1541,70 @@ def _lightshow_step_cost(cells: list[dict], palette_size: int) -> float:
 
 
 def _lightshow_floor(cells: list[dict], palette_size: int) -> int:
-    """The shortest interval this room can actually sustain. A show whose step
-    costs longer than its interval is just a queue of overlapping repaints, so
-    the panel shows this number and the loop enforces it."""
-    return max(LIGHTSHOW_MIN_INTERVAL_S,
-               int(math.ceil(_lightshow_step_cost(cells, palette_size)))
-               + LIGHTSHOW_INTERVAL_HEADROOM_S)
+    """The shortest interval this room can actually sustain.
+
+    TWO different costs, and v3.39-v3.40 only modelled one of them:
+    - **Time.** A step that takes longer than the interval is just a queue of
+      overlapping repaints. That's `_lightshow_step_cost`, and it's driven by the
+      Govee cloud rate limit.
+    - **Writes.** Every Hue command is a Zigbee transmission and a bulb NVRAM
+      write, on a mesh shared by every light in the house. This cost is invisible
+      to a wall-clock model, and ignoring it did real damage: an Exterior Front
+      show at ~40s steps wrote its two outdoor bulbs **924 times each** over two
+      nights, against a house-wide baseline of 15-42 Hue writes PER DAY. Scenes
+      then started applying to only some lights and a scheduled off left lights
+      on — the classic signature of a congested mesh.
+
+    So a show that touches Hue bulbs floors at LIGHTSHOW_HUE_MIN_INTERVAL_S. At
+    60s that is still ~1,440 writes per bulb per day, which is why the panel also
+    states the number outright rather than leaving it to be discovered."""
+    floor = max(LIGHTSHOW_MIN_INTERVAL_S,
+                int(math.ceil(_lightshow_step_cost(cells, palette_size)))
+                + LIGHTSHOW_INTERVAL_HEADROOM_S)
+    if any(c["kind"] == "hue" for c in cells):
+        floor = max(floor, LIGHTSHOW_HUE_MIN_INTERVAL_S)
+    return floor
 
 
-def _lightshow_should_full(cost: float, interval: int, rt: dict, keys: list) -> bool:
-    """Repaint every cell this frame, rather than only the ones that changed?
+def _lightshow_should_full(rt: dict, keys: list) -> bool:
+    """Repaint EVERY cell this frame? Only on a genuine resync.
 
-    **The diff is an optimization, and an optimization that costs correctness has
-    to earn its place.** A frame is sent over fire-and-forget UDP (Govee) or a
-    bridge that returns 200 the moment it *queues* a command (Hue) — so a send
-    can silently not land, and `frame_map` records what we MEANT to send. Diffing
-    against that means a light which missed its command keeps the wrong color
-    until the next full repaint.
+    v3.40.1 made this "whenever a full repaint is cheap", measuring cheapness in
+    SECONDS. That was the wrong unit. A repaint is cheap in time and expensive in
+    writes, and writes are what wear a Zigbee mesh — see `_lightshow_floor`. The
+    correctness problem it was solving is now handled by re-asserting one step's
+    worth of changes (`_lightshow_write_set`) instead of the whole room."""
+    return (rt.get("cells") != keys                        # the room changed
+            or rt.get("frame_map") is None                 # first paint of a run
+            or time.time() - (rt.get("last_full") or 0) >= LIGHTSHOW_RESYNC_S)
 
-    That produced a real bug (v3.40.1): Accent moves the accent color by
-    repainting exactly two cells — the light gaining it and the light losing it —
-    so a single lost "back to base" left TWO lights wearing the accent, and the
-    diff never retried because it believed it had already sent it.
 
-    So: if a full repaint fits comfortably inside the interval, always do one. A
-    room of whole lights costs ~0.15s per device against a 20s+ interval, which
-    is nothing — there was never anything to save there. Only a room whose
-    segments make a full repaint genuinely expensive diffs, and even that
-    resyncs on a wall-clock timer."""
-    if rt.get("cells") != keys:
-        return True                      # the room changed under us
-    if cost <= interval * LIGHTSHOW_FULL_BUDGET:
-        return True                      # diffing buys nothing here
-    return time.time() - (rt.get("last_full") or 0) >= LIGHTSHOW_RESYNC_S
+def _lightshow_write_set(desired: dict, prev: dict, prev_changed: set,
+                         full: bool) -> tuple:
+    """Which cells this frame actually writes.
+
+    A send can silently not land — Govee LAN is unacknowledged UDP and a Hue 200
+    only means the bridge *queued* it — and `frame_map` records what we MEANT to
+    send. A pure diff therefore never retries a lost command, which is what left
+    two lights wearing the accent (v3.40.1).
+
+    The answer is not to repaint the room every step; that cost 924 writes per
+    bulb in two nights. It is to **re-assert exactly the previous step's writes,
+    once**. A command that didn't land is corrected one step later, and the cost
+    is one extra write per changed cell rather than one per cell in the room —
+    for Accent, 4 writes a step instead of 12, and it self-heals just as fast.
+
+    Returns (write, changed). The re-assert set must be what genuinely CHANGED,
+    never simply what was written: after a full repaint every cell was written,
+    and feeding that back would make the next step write the whole room too — and
+    the one after that, forever. A full repaint therefore hands back an empty
+    re-assert set, because it has already asserted everything, and a cell whose
+    send failed is dropped from `frame_map` and so reappears in `changed` on its
+    own."""
+    changed = {k for k, v in desired.items() if prev.get(k) != v}
+    if full:
+        return set(desired), set()
+    return changed | (prev_changed & desired.keys()), changed
 
 
 def _lightshow_interval(show: dict, cells: list[dict], palette_size: int) -> int:
@@ -1636,7 +1668,7 @@ def _lightshow_dim(rgb, level: float):
 
 
 async def _lightshow_paint(room_name: str, show: dict, cells: list[dict],
-                           frame: list, prev, full: bool, seed: bool = False) -> set:
+                           frame: list, write: set, seed: bool = False) -> set:
     """Put one frame on the lights. Returns the cell keys that FAILED to send.
 
     The caller drops those from its record of what's painted, so the next frame
@@ -1652,10 +1684,9 @@ async def _lightshow_paint(room_name: str, show: dict, cells: list[dict],
     bri = max(1, min(100, int(show.get("brightness") or 80)))
     failed: set = set()
     desired = {c["key"]: tuple(frame[i]) for i, c in enumerate(cells)}
-    prev = {} if full else (prev or {})
 
     def moved(key):
-        return full or prev.get(key) != desired[key]
+        return key in write
 
     # Hue first: instant, and the bulk guard keeps each light from booking its
     # own read-back for the length of the frame.
@@ -1876,10 +1907,9 @@ async def _lightshow_loop(room_name: str):
 
             keys = [c["key"] for c in cells]
             interval = _lightshow_interval(show, cells, len(colors))
-            cost = _lightshow_step_cost(cells, len(colors))
-            full = _lightshow_should_full(cost, interval, rt, keys)
+            full = _lightshow_should_full(rt, keys)
             # The whole-device brightness seed is a solid flash, so it belongs to
-            # the first paint of a run only — not to every full repaint.
+            # the first paint of a run only — not to every resync.
             seed = rt.get("frame_map") is None or rt.get("cells") != keys
             geometry = _lightshow_geometry(room_name)
             frame = lightshow.plan_frame(
@@ -1887,19 +1917,24 @@ async def _lightshow_loop(room_name: str):
                 [c.get("pos") or (0.0, 0.0) for c in cells],
                 colors, step, opts=show, prev=rt.get("frame_list"),
                 geometry=geometry)
-            failed = await _lightshow_paint(room_name, show, cells, frame,
-                                            rt.get("frame_map"), full, seed)
+            desired = {c["key"]: tuple(frame[i]) for i, c in enumerate(cells)}
+            write, changed = _lightshow_write_set(
+                desired, rt.get("frame_map") or {}, rt.get("changed") or set(), full)
+            failed = await _lightshow_paint(room_name, show, cells, frame, write, seed)
 
             rt.update({
                 "frame_list": frame,
                 # A cell we could not send is NOT recorded as painted, so the next
                 # frame's diff retries it rather than trusting an intent.
-                "frame_map": {c["key"]: tuple(frame[i]) for i, c in enumerate(cells)
-                              if c["key"] not in failed},
+                "frame_map": {k: v for k, v in desired.items() if k not in failed},
+                # What genuinely moved this step, so the next frame can
+                # re-assert it once and catch a command that never landed.
+                "changed": changed - failed,
                 "cells": keys,
                 "step": step,
                 "palette": pool_label,
                 "interval_s": interval,
+                "writes": len(write),
                 "next_at": time.time() + interval,
             })
             if full:
@@ -6036,10 +6071,13 @@ def _lightshow_status(room_name: str) -> dict:
         "palette": rt.get("palette") or label,
         "step": rt.get("step"),
         "step_seconds": round(cost, 1),
-        # Does this room repaint every light every step, or only what changed?
-        # Worth surfacing: it's the difference between a missed command healing
-        # in one step and persisting until the next resync.
-        "full_repaint": cost <= _lightshow_interval(show, cells, len(colors) or 1) * LIGHTSHOW_FULL_BUDGET,
+        # How hard this show leans on the hardware, stated rather than discovered.
+        # A light is written at most once per step, so this is the upper bound per
+        # light per day — the number that matters for a Zigbee bulb, and the one
+        # whose absence let a show do 924 writes to an outdoor bulb unnoticed.
+        "writes_per_light_per_day": round(
+            86400 / max(1, _lightshow_interval(show, cells, len(colors) or 1))),
+        "hue_cells": sum(1 for c in cells if c["kind"] == "hue"),
         "min_interval_s": _lightshow_floor(cells, len(colors) or 1),
         "effective_interval_s": _lightshow_interval(show, cells, len(colors) or 1),
         "next_at": int(rt["next_at"] * 1000) if rt.get("next_at") else None,

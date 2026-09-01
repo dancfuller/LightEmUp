@@ -335,6 +335,27 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
             <> <b style={{ color: "#fbbf24" }}>Using {humanInterval(s.effective_interval_s)}.</b></>
           )}
         </div>
+        {/* What this show costs the HARDWARE, stated rather than discovered.
+            A Hue command is a Zigbee transmission and a bulb NVRAM write, and a
+            show left running overnight quietly did ~900 writes to an outdoor bulb
+            against a house-wide baseline of a few dozen a day — after which
+            scenes stopped applying to every light. The number belongs on screen. */}
+        {s.hue_cells > 0 && (
+          <div style={{
+            fontSize: 11, marginTop: 8, padding: "8px 10px", borderRadius: 8,
+            lineHeight: 1.5,
+            background: s.writes_per_light_per_day > 900 ? "rgba(251,191,36,0.08)" : "#0a0f1e",
+            border: `1px solid ${s.writes_per_light_per_day > 900 ? "#78350f" : "#1e293b"}`,
+            color: s.writes_per_light_per_day > 900 ? "#fbbf24" : "#64748b",
+          }}>
+            Left running all day this changes each of the {s.hue_cells} Hue{" "}
+            {s.hue_cells === 1 ? "bulb" : "bulbs"} up to{" "}
+            <b>{s.writes_per_light_per_day.toLocaleString()}</b> times.
+            {s.writes_per_light_per_day > 900
+              ? " That is a lot of Zigbee traffic for one room — a longer interval is kinder to the mesh, and to the other lights sharing it."
+              : " Every change is a radio message on the mesh your other lights share."}
+          </div>
+        )}
         <div style={{ marginTop: 14 }}>
           <Slider label="Brightness" value={s.brightness ?? 80} min={1} max={100} unit="%"
             onChange={(v) => saveSoon({ brightness: v })} />

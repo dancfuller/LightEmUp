@@ -870,13 +870,46 @@ back to its parent's spot.
   which is the same reason there is no per-schedule segments flag.
 - **`exclude`** holds device keys left out entirely (a device takes its segments with it).
 - **Three things make it affordable, and all three matter:**
-  1. **Frames DIFF — but only when diffing actually saves something (v3.40.1).**
-     `_lightshow_should_full` repaints EVERY cell whenever a full repaint costs no more
-     than `LIGHTSHOW_FULL_BUDGET` (34%) of the interval; a room of whole lights costs
-     ~0.4s against 30s, so it never diffs at all. Only a segment-heavy room diffs, and it
-     still resyncs fully every `LIGHTSHOW_RESYNC_S` (300s) — **wall clock, not frames**,
-     because staleness is something a person experiences in minutes and a 5-minute step
-     would otherwise go 100 minutes between resyncs.
+  1. **Frames DIFF, and write one extra step's worth (v3.41.0).**
+     `_lightshow_write_set` writes the cells that changed, PLUS the cells that changed on
+     the previous step — re-asserted exactly once. That corrects a command that never
+     landed one step later, without repainting the room. `_lightshow_should_full` is now
+     only a genuine resync: first paint, the cell list changed, or
+     `LIGHTSHOW_RESYNC_S` (900s) elapsed — **wall clock, not frames**, since staleness is
+     experienced in minutes.
+
+### The unit that was missing: WRITES, not seconds (v3.41.0)
+**Read this before changing anything about how often a show paints.** v3.40.1 decided to
+repaint every cell every step whenever that was "cheap", and measured cheapness in
+SECONDS — the Govee cloud rate limit was the only cost in the model. A repaint is cheap in
+time and expensive in *writes*, and nothing measured writes.
+
+What it cost, from the Pi's own logs:
+
+| | Aug 26 | Aug 27 | Aug 28 | **Aug 29** | **Aug 30** | **Aug 31** | Sep 1 |
+|---|---|---|---|---|---|---|---|
+| Hue writes/day | 40 | 42 | 15 | **3,225** | **3,029** | **1,328** | 20 |
+
+An Exterior Front show (Alternate, ~40s steps, 10.5 hours overnight) wrote its two outdoor
+bulbs **924 times each** over two nights, against a house-wide baseline of 15-42 Hue writes
+*per day*. Every one of those is a Zigbee transmission on a mesh **shared by every light in
+the house** and an NVRAM write on the bulb. Reported symptoms, all consistent with a
+congested mesh: room scenes applying to only some lights, and a scheduled off leaving
+lights on — in rooms that had nothing to do with the show.
+
+Three defenses, and the third is the one that generalizes:
+1. **`_lightshow_write_set`** — the diff is back, with a one-step re-assert instead of a
+   full repaint. Accent went from 12 writes a step to ~3.4, and still self-heals in one
+   step. Measured by `test_writes.py`, which counts writes rather than trusting a rule.
+2. **`LIGHTSHOW_HUE_MIN_INTERVAL_S` (60s)** — a room containing Hue bulbs floors there
+   regardless of what the time-based cost model says. Zigbee is the scarce resource.
+3. **The panel states the number.** `writes_per_light_per_day` is on screen, with a caution
+   above ~900. A cost nobody can see is a cost nobody can weigh — this one was discovered
+   by a mesh misbehaving three days later, which is the worst possible feedback loop.
+
+**The rule to carry forward: a background loop's cost is not one number.** Wall-clock time,
+cloud rate limits, radio traffic and device wear are different budgets, and an optimization
+that trades one for another has to say so out loud.
 
 ### Why the diff had to become conditional — the two-accents bug (v3.40.1)
 Reported: *"triple lamp bottom and hex lights were both showing the accent color at the
@@ -981,7 +1014,9 @@ lights and now brought back the whole room. The check is what makes that safe.
 - It is room-name-keyed, so it's in **both** `rename_room` and `delete_room` — and
   `rename_room` also **re-keys the running task**, which is keyed by name and would
   otherwise keep painting a room that no longer exists.
-- Covered by four scratch tests. `test_external_off.py` (17 assertions) fakes a
+- Covered by five scratch tests. `test_writes.py` (9 assertions) counts WRITES per step
+  and guards the floor and the reported number — the unit the v3.40.1 model lacked.
+  `test_external_off.py` (17 assertions) fakes a
   bridge and covers the detector's whole truth table (lit-only, unreachable, partial,
   unreadable, empty, unpainted), proves the loop stops itself without repainting over
   the off, times the settle, and races three concurrent starts to prove exactly one
