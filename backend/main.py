@@ -1350,6 +1350,11 @@ LIGHTSHOW_HUE_MIN_INTERVAL_S = 60
 # straggler "on + color" would otherwise land just after a room-off and switch
 # that light back on. See stop_lightshow.
 LIGHTSHOW_SETTLE_S = 0.3
+# How long after painting a frame we look again. The top-of-loop check catches an
+# off that landed while the show was sleeping; this one catches an off that landed
+# while the show was PAINTING, which the top check structurally cannot — see
+# _lightshow_overridden.
+LIGHTSHOW_POST_PAINT_CHECK_S = 4.0
 
 LIGHTSHOW_DEFAULTS = {
     "enabled": False,
@@ -1817,7 +1822,7 @@ async def _lightshow_paint(room_name: str, show: dict, cells: list[dict],
 
 
 async def _lightshow_external_off(room_name: str, cells: list[dict],
-                                  prev_map) -> bool:
+                                  prev_map, skip: Optional[set] = None) -> bool:
     """Has something outside LightEmUp turned this room off?
 
     Google Home, the Hue app and the Govee app all drive these lights and the hub
@@ -1846,14 +1851,21 @@ async def _lightshow_external_off(room_name: str, cells: list[dict],
     every frame of every show. The same gap exists in `_room_status`, and for the
     same reason.
 
-    **Known window:** an off that lands *during* a paint is missed — we've already
-    re-lit the room by the time the next check runs, so the check sees lights on.
-    That's about a second in every interval. Closing it would mean polling the
-    bridge continuously, which costs far more than it saves."""
+    **`skip`** excludes cells this frame just wrote, and it is what makes the
+    POST-PAINT call work at all (v3.42.1). An off landing mid-paint turns the room
+    dark, and then our remaining writes light some of it back up — so the lights we
+    wrote *after* the off report "on" and the all-must-be-off rule can never fire.
+    The cells we did NOT touch this frame are clean witnesses: the show lit them on
+    an earlier frame and nothing inside LightEmUp has touched them since, so if
+    they are dark now, something outside did that. Excluding our own fresh writes
+    is the difference between catching the override and being blinded by it.
+
+    A full repaint leaves no witnesses, so that frame simply isn't judged."""
     if not prev_map:
         return False                     # nothing painted yet — nothing to judge
     lit = [c for c in cells if c["kind"] == "hue"
-           and (prev_map.get(c["key"]) or (0, 0, 0, 0.0))[3] > 0]
+           and (prev_map.get(c["key"]) or (0, 0, 0, 0.0))[3] > 0
+           and not (skip and c["key"] in skip)]
     if not lit:
         return False
     ip, username = config.get("hue_bridge_ip"), config.get("hue_username")
@@ -1877,6 +1889,56 @@ async def _lightshow_external_off(room_name: str, cells: list[dict],
             return False
         judged += 1
     return judged > 0
+
+
+async def _lightshow_wait(stop: "asyncio.Event", nudge: "asyncio.Event",
+                          timeout: float) -> str:
+    """Sleep, but wake early for a stop or a "next step". Returns why it woke:
+    "stop" | "nudge" | "timeout".
+
+    Factored out because the loop now waits TWICE per frame (a short window right
+    after painting, then the rest of the interval) and both must stay
+    interruptible. A plain `asyncio.sleep` for the first slice made the panel's
+    Next-step button do nothing for four seconds — caught by the test suite."""
+    waiters = [asyncio.ensure_future(stop.wait()), asyncio.ensure_future(nudge.wait())]
+    try:
+        await asyncio.wait(waiters, timeout=timeout,
+                           return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for w in waiters:
+            w.cancel()
+    if stop.is_set():
+        return "stop"
+    if nudge.is_set():
+        return "nudge"
+    return "timeout"
+
+
+async def _lightshow_restore_off(room_name: str, cells: list[dict], painted):
+    """Put back the off we just overrode.
+
+    Detection means the user asked for this room off and our frame turned some of
+    it back on. Stopping the show is necessary but not sufficient — the lights we
+    lit are still lit. Restoring is bounded to exactly the cells THIS show
+    painted, which is the narrowest action that honors what was actually asked
+    for, and it is a no-op on anything already off."""
+    done_devices = set()
+    for c in cells:
+        if not (painted.get(c["key"]) or (0, 0, 0, 0.0))[3] > 0:
+            continue
+        try:
+            if c["kind"] == "hue":
+                await control_hue_light(HueLightStateRequest(
+                    light_id=c["light_id"], on=False))
+            elif c["device"] not in done_devices:
+                # A segmented device has no per-segment off; the whole device is
+                # the unit, so one command covers all of its cells.
+                done_devices.add(c["device"])
+                await control_govee(GoveeCommandRequest(
+                    ip=c["ip"], mac=c["mac"], on=False))
+        except Exception as e:
+            log.warning("Lightshow %r: could not restore off for %s: %s",
+                        room_name, c["key"], e)
 
 
 def _lightshow_disable(room_name: str) -> bool:
@@ -1961,16 +2023,42 @@ async def _lightshow_loop(room_name: str):
             publish_event("lightshow", room=room_name, running=True, step=step,
                           palette=pool_label, interval_s=interval,
                           next_at=int(rt["next_at"] * 1000))
+
             step += 1
             frames += 1
 
-            waiters = [asyncio.ensure_future(stop.wait()), asyncio.ensure_future(nudge.wait())]
-            try:
-                await asyncio.wait(waiters, timeout=interval,
-                                   return_when=asyncio.FIRST_COMPLETED)
-            finally:
-                for w in waiters:
-                    w.cancel()
+            # The wait is in TWO parts. The first is a short window right after
+            # painting, and it exists because the top-of-loop check can only see
+            # an off that arrived while the show was ASLEEP. An off landing in the
+            # half-second the show is *painting* gets overwritten, and our own
+            # writes then mask it for the rest of the interval — which is how a
+            # voice command produced "the globe came back on a few seconds later"
+            # and "the hex flashed on, then off again".
+            #
+            # Looking again a few seconds later is a STRONGER signal than the
+            # sleeping-case check: we set these lights on moments ago and nothing
+            # inside LightEmUp has touched them since, so a bridge that now reports
+            # them off can only mean something outside did it.
+            watch = min(LIGHTSHOW_POST_PAINT_CHECK_S, interval) if write else 0.0
+            woke = await _lightshow_wait(stop, nudge, watch) if watch else "timeout"
+            if watch and woke == "timeout":
+                # `write` is excluded: those cells were just set ON, so they can
+                # only tell us what we already know. The untouched ones are the
+                # witnesses. See _lightshow_external_off.
+                if await _lightshow_external_off(room_name, cells,
+                                                 rt.get("frame_map"), skip=write):
+                    log.info("Lightshow %r: the room was turned off while this frame "
+                             "was painting — putting it back off and stopping",
+                             room_name)
+                    # We overrode a command the user actually gave. Stopping is
+                    # necessary but not sufficient; the lights we lit are still lit.
+                    await _lightshow_restore_off(room_name, cells, rt.get("frame_map"))
+                    _lightshow_disable(room_name)
+                    publish_event("lightshow", room=room_name, running=False)
+                    return
+                woke = await _lightshow_wait(stop, nudge, max(0.0, interval - watch))
+            elif not watch:
+                woke = await _lightshow_wait(stop, nudge, interval)
             nudge.clear()
     except asyncio.CancelledError:
         raise

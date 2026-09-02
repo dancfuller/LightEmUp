@@ -999,9 +999,29 @@ Precision beats coverage, because a false positive stops a show the user wanted:
   never become "stop". Same rule as `_room_status`.
 - **Known gap:** a Govee-only room can't be checked. LAN devStatus is a blocking
   sequential read holding port 4002 — not something to do every frame of every show.
-- **Known window:** an off landing *during* a paint is missed, since we've already
-  re-lit the room before the next check. That's ~1s in every interval; closing it
-  would mean polling the bridge continuously.
+- **The mid-paint window is now covered too (v3.42.1).** The check above only ever
+  saw an off that arrived while the show was ASLEEP. One landing in the half-second
+  the show is *painting* got overwritten, and our own writes then masked it for the
+  rest of the interval — reported as "the globe came back on a few seconds later"
+  and "the hex flashed on, then off again" (that second one is the vendor's slower,
+  cloud-routed off for that device landing after our LAN command). So the loop now
+  waits in TWO parts: a short `LIGHTSHOW_POST_PAINT_CHECK_S` (4s) window right
+  after painting, then the rest of the interval. Both slices go through
+  `_lightshow_wait`, which wakes early for a stop or a nudge — an earlier cut used
+  a plain `asyncio.sleep` here and made the panel's Next-step button dead for four
+  seconds, which the suite caught.
+- **The post-paint check must EXCLUDE the cells that frame just wrote** (`skip=write`),
+  and this is the subtle part. A mid-paint off darkens the room, then our remaining
+  writes light some of it back up — so the cells written *after* the off report "on"
+  and the all-must-be-off rule can never fire. The cells we did NOT touch this frame
+  are clean witnesses: the show lit them on an earlier frame and nothing inside
+  LightEmUp has touched them since. A full repaint leaves no witnesses and simply
+  isn't judged.
+- **On detection it puts the off BACK** (`_lightshow_restore_off`). Stopping is
+  necessary but not sufficient — the lights the frame lit are still lit, and the
+  user asked for the room off. The restore is bounded to exactly the cells THIS show
+  painted at a level above 0, so a resting Alternate group is never touched, and a
+  segmented device is switched off once as a whole (there is no per-segment off).
 
 **Note this got worse before it got better.** With the v3.40.1 budget rule a cheap
 room repaints EVERY light every step, so an external off used to bring back two
@@ -1036,7 +1056,11 @@ lights and now brought back the whole room. The check is what makes that safe.
 - It is room-name-keyed, so it's in **both** `rename_room` and `delete_room` — and
   `rename_room` also **re-keys the running task**, which is keyed by name and would
   otherwise keep painting a room that no longer exists.
-- Covered by five scratch tests. `test_writes.py` (9 assertions) counts WRITES per step
+- Covered by seven scratch tests. `test_override.py` (9 assertions) fakes a voice
+  command landing mid-paint and proves the loop notices within seconds, restores the
+  off, stops, and leaves the room dark — plus that it restores only the cells the
+  show lit. `test_roles.py` (11 assertions) covers `color_order`. `test_writes.py`
+  (9 assertions) counts WRITES per step
   and guards the floor and the reported number — the unit the v3.40.1 model lacked.
   `test_external_off.py` (17 assertions) fakes a
   bridge and covers the detector's whole truth table (lit-only, unreachable, partial,
