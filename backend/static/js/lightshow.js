@@ -68,6 +68,28 @@ const LIGHTSHOW_AXES = {
 // pattern", so the chip we highlight has to resolve it the same way.
 const LIGHTSHOW_AXIS_DEFAULT = { alternate: "diag" };
 
+// Role-order helpers. `order` is a list of indices into the palette; index 0 is
+// the background. Kept pure and tiny so the editor stays declarative.
+function promoteColor(order, i) {
+  // Tapping a swatch makes it the background, bringing it back in if it was out.
+  return [i, ...order.filter(x => x !== i)];
+}
+
+function toggleColor(order, i) {
+  if (!order.includes(i)) return [...order, i];
+  // Never narrow below two: one color is a solid room, not a lightshow.
+  return order.length <= 2 ? order : order.filter(x => x !== i);
+}
+
+function shuffleOrder(order) {
+  const a = [...order];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
 function lightshowPattern(patterns, key) {
   return (patterns || []).find(p => p.key === key) || null;
 }
@@ -98,6 +120,13 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
   const [paletteFilter, setPaletteFilter] = useState("Featured");
   const [paletteSearch, setPaletteSearch] = useState("");
   const [showLights, setShowLights] = useState(false);
+  // ONE palette is the overwhelmingly normal case — you pick a look and run a
+  // pattern over it. The multi-select the panel shipped with put the rare case
+  // (draw a different one at random each run) in everyone's way, so it's now
+  // opt-in. Palette hop is the exception: drawing from a set IS the pattern.
+  const multiPalettes = pattern === "hop" || (s.palettes || []).length > 1;
+  const [multiOpen, setMultiOpen] = useState(false);
+  const multi = multiPalettes || multiOpen;
 
   // Sliders auto-save like every other setting in this app (no Save button
   // anywhere), but a drag fires dozens of changes — debounce so a 30-second
@@ -160,6 +189,16 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
   const axisChoices = LIGHTSHOW_AXES[pattern] || LIGHTSHOW_AXES._default;
   const axisValue = s.axis || LIGHTSHOW_AXIS_DEFAULT[pattern] || "x";
   const intervalIdx = nearestIntervalIndex(s.interval_s ?? 30);
+  // The role order, always as an explicit index list so the editor has one shape
+  // to reason about: an empty stored order means "the palette as it comes".
+  const paletteLen = (s.palette_colors || []).length;
+  const orderList = (s.color_order || []).length
+    ? s.color_order.filter(i => i >= 0 && i < paletteLen)
+    : Array.from({ length: paletteLen }, (_, i) => i);
+  // The catalog stores role names lowercase ("background", "accent"); the panel
+  // starts sentences with them.
+  const roleWords = (lightshowPattern(patterns, pattern)?.roles || ["background", "accent"])
+    .map(w => w.charAt(0).toUpperCase() + w.slice(1));
   const geometryLabel = isPlan ? "Floor plan"
     : geometry === "line" ? "Line layout" : "No layout";
 
@@ -377,9 +416,33 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
             <div style={{ fontSize: 11, color: "#64748b", marginBottom: 8, lineHeight: 1.5 }}>
               {pattern === "hop"
                 ? "Palette hop draws a different one of these every step — pick several."
-                : "One of these is drawn when the show starts and held for the run."}
-              {selected.length > 0 && <> <b style={{ color: "#c4b5fd" }}>{selected.length} selected.</b></>}
+                : multi
+                  ? "One of these is drawn at random when the show starts, and held for the run."
+                  : "Pick the palette this show runs on."}
+              {multi && selected.length > 0 && (
+                <> <b style={{ color: "#c4b5fd" }}>{selected.length} selected.</b></>
+              )}
             </div>
+            {/* The chosen palette stays on screen even while you browse a
+                different category. Without this, picking Galaxy and then tapping
+                "Featured" leaves nothing selected-looking anywhere — the list is
+                filtered, so the one row that would have shown the ✓ is gone. */}
+            {!multi && selected.length > 0 && (
+              <div style={{
+                display: "flex", alignItems: "center", gap: 8, marginBottom: 10,
+                padding: "7px 9px", borderRadius: 8,
+                background: "rgba(167,139,250,0.12)", border: "1px solid #a78bfa",
+              }}>
+                <span style={{ fontSize: 12, color: "#c4b5fd", fontWeight: 700 }}>✓</span>
+                <span style={{ flex: "1 1 auto", fontSize: 12, color: "#e2e8f0", minWidth: 0 }}>
+                  {selected[0]}
+                </span>
+                <span style={{ width: 84, flexShrink: 0 }}>
+                  <PaletteStrip colors={(s.palette_colors || []).map(
+                    c => ({ r: c[0], g: c[1], b: c[2] }))} height={10} />
+                </span>
+              </div>
+            )}
             <input value={paletteSearch} onChange={e => setPaletteSearch(e.target.value)}
               placeholder="Search palettes…"
               style={{
@@ -395,22 +458,26 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
                 }}>{f}</button>
               ))}
             </div>
-            {/* Bulk add/remove for the whole filter, the same gesture the
-                scheduler's palette editor uses — "Summer and Winter" and
-                "Summer minus three" should not be different kinds of work. */}
-            <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
-              <button onClick={() => onSave({
-                palettes: Array.from(new Set([...selected, ...filtered.map(p => p.name)])),
-              })} style={{ ...chip(false), padding: "4px 8px", fontSize: 10 }}>+ Add all shown</button>
-              <button onClick={() => onSave({
-                palettes: selected.filter(n => !filtered.some(p => p.name === n)),
-              })} style={{ ...chip(false), padding: "4px 8px", fontSize: 10 }}>− Remove shown</button>
-            </div>
+            {/* Bulk add/remove only exists in multi mode, where "Summer and
+                Winter" and "Summer minus three" should be the same gesture. In
+                single mode it would just be a way to break the selection. */}
+            {multi && (
+              <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
+                <button onClick={() => onSave({
+                  palettes: Array.from(new Set([...selected, ...filtered.map(p => p.name)])),
+                })} style={{ ...chip(false), padding: "4px 8px", fontSize: 10 }}>+ Add all shown</button>
+                <button onClick={() => onSave({
+                  palettes: selected.filter(n => !filtered.some(p => p.name === n)),
+                })} style={{ ...chip(false), padding: "4px 8px", fontSize: 10 }}>− Remove shown</button>
+              </div>
+            )}
             <div style={{ maxHeight: 260, overflowY: "auto", display: "grid", gap: 5 }}>
               {filtered.map(p => {
                 const on = selected.includes(p.name);
                 return (
-                  <button key={p.name} onClick={() => togglePalette(p.name)} style={{
+                  <button key={p.name}
+                    onClick={() => multi ? togglePalette(p.name) : onSave({ palettes: [p.name] })}
+                    style={{
                     display: "flex", alignItems: "center", gap: 8, padding: "6px 8px",
                     borderRadius: 8, cursor: "pointer", textAlign: "left",
                     border: `1px solid ${on ? "#a78bfa" : "#1e293b"}`,
@@ -429,6 +496,19 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
                 );
               })}
             </div>
+            {pattern !== "hop" && (
+              <button onClick={() => {
+                if (multi) onSave({ palettes: selected.slice(0, 1) });
+                setMultiOpen(!multi);
+              }} style={{
+                background: "none", border: "none", padding: "8px 0 0", cursor: "pointer",
+                color: "#64748b", fontSize: 11, textDecoration: "underline",
+              }}>
+                {multi
+                  ? "Just use one palette"
+                  : "Draw from several palettes instead (a different one each run)"}
+              </button>
+            )}
           </>
         )}
 
@@ -480,6 +560,74 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
           </div>
         )}
       </div>
+
+      {/* ── Which color does what ───────────────────────────────────────────
+          Accent, Comet and Sweep hold the room at ONE color and move a second
+          across it, so a six-color palette shows as two at any moment and the
+          rest are only reached over a long run. Which two you get was pure luck
+          until now. This makes the roles visible and assignable — the palette is
+          still the palette, you're just saying which end of it does what. */}
+      {s.has_roles && (s.palette_colors || []).length > 1 && (
+        <div style={card}>
+          <div style={heading}>Color roles</div>
+          <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10, lineHeight: 1.5 }}>
+            {roleWords[0]} is the color the room holds; {roleWords[1]} is the one that
+            travels. Tap a swatch to make it the {roleWords[0].toLowerCase()}, or turn one
+            off to keep it out of the show entirely.
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-start" }}>
+            {(s.palette_colors || []).map((c, i) => {
+              const slot = orderList.indexOf(i);
+              const inUse = slot >= 0;
+              const isBase = slot === 0;
+              return (
+                <div key={i} style={{ textAlign: "center", width: 62 }}>
+                  <button
+                    onClick={() => onSave({ color_order: promoteColor(orderList, i) })}
+                    title={inUse ? `Make this the ${roleWords[0].toLowerCase()}` : "Bring this color back in"}
+                    style={{
+                      width: 46, height: 46, borderRadius: 10, cursor: "pointer", padding: 0,
+                      background: `rgb(${c[0]},${c[1]},${c[2]})`,
+                      opacity: inUse ? 1 : 0.2,
+                      border: isBase ? "3px solid #f8fafc"
+                            : inUse ? "1px solid rgba(255,255,255,0.25)"
+                            : "1px dashed #475569",
+                      boxShadow: isBase ? "0 0 0 2px #a78bfa" : "none",
+                    }} />
+                  <div style={{
+                    fontSize: 9, marginTop: 4, fontWeight: 700, lineHeight: 1.2,
+                    color: isBase ? "#c4b5fd" : inUse ? "#64748b" : "#475569",
+                  }}>
+                    {isBase ? roleWords[0].toUpperCase()
+                     : inUse ? roleWords[1].toUpperCase() : "OFF"}
+                  </div>
+                  <button
+                    onClick={() => onSave({ color_order: toggleColor(orderList, i) })}
+                    disabled={inUse && orderList.length <= 2}
+                    style={{
+                      background: "none", border: "none", padding: "2px 0 0",
+                      fontSize: 9, color: "#475569",
+                      cursor: (inUse && orderList.length <= 2) ? "default" : "pointer",
+                      textDecoration: "underline",
+                    }}>{inUse ? "remove" : "add"}</button>
+                </div>
+              );
+            })}
+          </div>
+          <div style={{ display: "flex", gap: 6, marginTop: 12, flexWrap: "wrap" }}>
+            <button onClick={() => onSave({ color_order: shuffleOrder(orderList) })}
+              style={chip(false)}>Shuffle roles</button>
+            <button onClick={() => onSave({ color_order: [] })}
+              style={chip(false)}>Reset</button>
+          </div>
+          {orderList.length === 2 && (
+            <div style={{ fontSize: 11, color: "#64748b", marginTop: 10, lineHeight: 1.5 }}>
+              Two colors — so this is exactly the two-color look, with no rotation.
+              Add a third and the {roleWords[1].toLowerCase()} cycles through them.
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ── Which lights ────────────────────────────────────────────────── */}
       <div style={card}>
@@ -536,6 +684,32 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
           </div>
         )}
       </div>
+      {/* The primary action, repeated at the END of the panel. On a phone the
+          only Start button was at the very top, above patterns, colors, timing,
+          roles and lights — so committing meant scrolling all the way back. The
+          `sticky` is a bonus where it engages; the guarantee is that this button
+          is simply HERE, at the bottom, where you finish reading. */}
+      <div style={{
+        position: "sticky", bottom: 0, zIndex: 5, marginTop: 4, marginBottom: 4,
+        padding: "10px 0 4px",
+        background: "linear-gradient(180deg, rgba(10,15,30,0) 0%, #0a0f1e 32%)",
+      }}>
+        <button
+          onClick={() => onSave({ enabled: !s.enabled })}
+          disabled={!s.enabled && !ready}
+          style={{
+            width: "100%", padding: "12px 16px", borderRadius: 10, border: "none",
+            cursor: (!s.enabled && !ready) ? "default" : "pointer",
+            background: s.enabled ? "#a78bfa" : (ready ? "#4338ca" : "#1e293b"),
+            color: s.enabled ? "#1e1b4b" : (ready ? "#e0e7ff" : "#475569"),
+            fontSize: 14, fontWeight: 800,
+            boxShadow: "0 -2px 14px rgba(2,6,15,0.6)",
+          }}
+        >{s.enabled ? "Stop lightshow"
+          : ready ? `Start lightshow · ${humanInterval(s.effective_interval_s)}`
+          : "Pick some colors to start"}</button>
+      </div>
+
     </div>
   );
 }

@@ -353,7 +353,9 @@ All endpoints are under `/api/`. Key groups:
   (with its `geometry` and the patterns it may run) plus the full catalog; `POST` PATCHes
   one room's show (and starts/stops/restarts it); `POST /api/lightshow/step` advances a
   step now; `DELETE /api/lightshow/{room}` removes it. Config key `lightshows`,
-  room-name-keyed. It runs on the Pi and resumes after a restart. See
+  room-name-keyed. It runs on the Pi and resumes after a restart. `color_order`
+  (v3.42.0) picks which palette color is the BACKGROUND for the patterns that have
+  one (Accent / Comet / Sweep) and, by omission, narrows the palette. See
   `backend/CLAUDE.md` "Room lightshows"
 - `/api/govee/segment-*` — per-segment mode and count config (the `segment-mode` one is
   the **lightning** scene's switch, not the color tool's)

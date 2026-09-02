@@ -1377,6 +1377,11 @@ LIGHTSHOW_DEFAULTS = {
     "swaps": 2,                      # swap
     "tail": 3,                       # comet
     "band": 2,                       # sweep
+    # Indices into the resolved palette, picking which color plays which role and
+    # (by omission) which are used at all. Index 0 is the BACKGROUND for Accent /
+    # Comet / Sweep. Empty = use the palette as it comes. Reset whenever the
+    # palette selection changes, since the indices point into THAT palette.
+    "color_order": [],
 }
 
 _lightshow_tasks: "dict[str, asyncio.Task]" = {}
@@ -1628,7 +1633,21 @@ def _lightshow_pattern(show: dict, geometry: str) -> str:
 
 
 def _lightshow_pool(show: dict, rt: dict, rng=None) -> tuple:
-    """(colors, label) for this step.
+    """(colors, label) actually used this step — the palette AFTER the user's
+    role ordering (see lightshow.apply_color_order).
+
+    Palette hop is exempt: it draws a different palette every step, so an order
+    stored against one of them means nothing."""
+    raw, label = _lightshow_palette(show, rt, rng)
+    if show.get("pattern") == "hop":
+        return raw, label
+    return lightshow.apply_color_order(raw, show.get("color_order")), label
+
+
+def _lightshow_palette(show: dict, rt: dict, rng=None) -> tuple:
+    """(colors, label) as the palette itself defines them, before any ordering.
+    This is what the role editor shows you, so its swatches keep their original
+    index no matter how they have been rearranged.
 
     Palette hop redraws every step — that IS the pattern. Every other pattern
     draws ONCE per run and keeps it, so picking three palettes means "surprise me
@@ -6033,6 +6052,7 @@ class LightshowRequest(BaseModel):
     source: Optional[str] = None
     palettes: Optional[list] = None
     colors: Optional[list] = None
+    color_order: Optional[list] = None
     exclude: Optional[list] = None
     direction: Optional[str] = None
     axis: Optional[str] = None
@@ -6067,7 +6087,12 @@ def _lightshow_status(room_name: str) -> dict:
         "effective_pattern": _lightshow_pattern(show, geometry),
         "cells": len(cells),
         "segment_cells": sum(1 for c in cells if c["kind"] == "segment"),
-        "colors": [list(c) for c in colors],
+        # `pool` is what the show actually paints from, in role order; the
+        # panel labels pool[0] as the background. `palette_colors` is the same
+        # palette unordered, so the editor can offer the untouched set.
+        "pool": [list(c) for c in colors],
+        "palette_colors": [list(c) for c in _lightshow_palette(show, dict(rt))[0]],
+        "has_roles": lightshow.has_roles(_lightshow_pattern(show, geometry)),
         "palette": rt.get("palette") or label,
         "step": rt.get("step"),
         "step_seconds": round(cost, 1),
@@ -6124,6 +6149,15 @@ async def upsert_lightshow(req: LightshowRequest):
     if "colors" in patch:
         patch["colors"] = [[int(v) for v in c[:3]] for c in patch["colors"]
                            if isinstance(c, (list, tuple)) and len(c) >= 3]
+    if "color_order" in patch:
+        patch["color_order"] = [int(i) for i in patch["color_order"]
+                                if isinstance(i, int) and i >= 0]
+    # A role order is indices into a SPECIFIC palette, so changing which palette
+    # the show draws from invalidates it. Clearing here rather than trying to
+    # remap keeps the rule simple and the failure mode obvious.
+    if ("color_order" not in patch
+            and any(k in patch for k in ("palettes", "source", "colors"))):
+        show["color_order"] = []
     was_running = lightshow_running(req.room)
     show.update(patch)
     schedule_save()

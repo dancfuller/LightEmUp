@@ -716,6 +716,29 @@ by the `lightshow` SSE event the backend emits at the end of every frame.
 - **A running show is announced in the room HEADER** ("✨ Show running"), not only inside
   the panel — it's a state of the room, like a storm.
 
+### Polish pass (v3.42.0) — three things the first cut got wrong
+- **ONE palette is the normal case.** The panel shipped multi-select-first, which put the
+  rare intent (draw a different palette at random each run) in front of the common one
+  (pick a look, run a pattern on it). Selecting is now single-select and replaces; multi is
+  opt-in behind "Draw from several palettes instead", and is implied for **Palette hop**,
+  where drawing from a set IS the pattern. Bulk add/remove only renders in multi mode — in
+  single mode it could only break the selection. **The chosen palette is pinned above the
+  list**, because the list is filtered by category and browsing to "Featured" otherwise
+  leaves nothing on screen looking selected.
+- **The primary action is repeated at the BOTTOM.** The only Start button was above
+  patterns, colors, timing, roles and lights, so on a phone committing meant scrolling all
+  the way back. It's `position: sticky; bottom: 0` **at the end of the panel** — note that
+  placement matters: the same element near the TOP of the tall panel did not pin (verified
+  by screenshot; the bar simply sat in flow). At the end it both pins while you scroll and
+  is unmissable when you reach it.
+- **Color roles** (`s.has_roles`) render `palette_colors` at their original index, labelling
+  slot 0 BACKGROUND and the rest ACCENT, with excluded colors dimmed and dashed. Tap to
+  promote to background, "remove" to drop it from the show, plus Shuffle/Reset. The three
+  helpers (`promoteColor` / `toggleColor` / `shuffleOrder`) are pure and never narrow below
+  two colors — one color is a solid room, not a lightshow. The role NAMES come from the
+  catalog (`roles: ["background", "accent"]`), lowercase there and capitalized for display,
+  so Comet says "comet" and Sweep says "band" rather than all three saying "accent".
+
 ## "Changed since" + the "Set here" button (v3.16.0)
 Other controllers (Hue app, Govee app, Google Home routines) change these lights too, so
 the strip's record can be stale. `RoomLastApplied` takes a `status` from

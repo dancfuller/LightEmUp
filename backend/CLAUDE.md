@@ -869,6 +869,28 @@ back to its parent's spot.
   room is one color. A per-device switch here could only disagree with the Scenes panel's,
   which is the same reason there is no per-schedule segments flag.
 - **`exclude`** holds device keys left out entirely (a device takes its segments with it).
+
+### Color roles — which palette color is the background (v3.42.0)
+Accent, Comet and Sweep hold the room at `colors[0]` and move a second color across it, so
+a six-color palette shows as **two colors at any one moment** and the rest are only reached
+over a long run. Reported plainly: *"when choosing a palette, that's effectively a
+two-color setup despite palettes being 3+ colors"* — and which two you got was luck.
+
+`color_order` is a list of indices into the resolved palette. Index 0 is the background;
+leaving indices out narrows the pool, which is how you get a deliberate two-color Accent
+out of a six-color palette. `lightshow.apply_color_order` is pure and **forgiving by
+design**: an index that no longer resolves, or an order that would leave fewer than two
+colors, falls back to the palette rather than stopping a show.
+- **`_lightshow_palette` is the raw palette; `_lightshow_pool` is the ordered one.** The
+  status exposes both (`palette_colors` / `pool`) because the editor must show swatches at
+  their ORIGINAL index while the show paints from the reordered pool.
+- **Palette hop is exempt** — it draws a different palette every step, so an order stored
+  against one of them means nothing.
+- **Changing the palette clears the order** (`upsert_lightshow`), since the indices point
+  into a specific palette. Remapping would be guesswork; clearing fails obviously.
+- `lightshow.has_roles(pattern)` drives whether the editor appears at all, from the
+  catalog's `roles` field — so the patterns that use a whole palette (Walk, Shuffle,
+  Ripple…) don't get a control that would mean nothing to them.
 - **Three things make it affordable, and all three matter:**
   1. **Frames DIFF, and write one extra step's worth (v3.41.0).**
      `_lightshow_write_set` writes the cells that changed, PLUS the cells that changed on

@@ -97,6 +97,7 @@ PATTERNS = [
         "blurb": "The room holds one color while a single accent travels from light to light.",
         "opts": [],
         "layouts": ["line", "plan"],
+        "roles": ["background", "accent"],
     },
     # ── Line only ────────────────────────────────────────────────────────────
     {
@@ -113,6 +114,7 @@ PATTERNS = [
         "blurb": "A bright head travels the run with a fading tail behind it, over a dim base.",
         "opts": ["tail", "rest_pct"],
         "layouts": ["line"],
+        "roles": ["background", "comet"],
     },
     # ── Floor plan only ──────────────────────────────────────────────────────
     {
@@ -129,6 +131,7 @@ PATTERNS = [
                  "or on the diagonal.",
         "opts": ["axis", "band", "rest_pct"],
         "layouts": ["plan"],
+        "roles": ["background", "band"],
     },
 ]
 
@@ -186,6 +189,38 @@ class ColorDealer:
             self._refill()
         self.last = self.queue.pop(0)
         return self.last
+
+
+def has_roles(pattern: str) -> bool:
+    """Does this pattern treat colors[0] as a distinguished BACKGROUND?
+
+    Accent, Comet and Sweep all hold the room at one color and move a second one
+    across it. That makes them the patterns where "which color is which" is a
+    real question — and where a six-color palette can look like a two-color one,
+    because only colors[0] and the current traveller are ever on screen at once."""
+    return any(p["key"] == pattern and p.get("roles") for p in PATTERNS)
+
+
+def apply_color_order(colors: list, order) -> list:
+    """Reorder and/or narrow the pool to the roles the user picked.
+
+    `order` is a list of indices into `colors`. Index 0 becomes the pool's first
+    color, which is the BACKGROUND for every pattern that has one. Leaving
+    indices out narrows the palette — which is how you get a deliberate
+    two-color Accent out of a six-color palette instead of whichever two the
+    shuffle happened to land on.
+
+    Anything unusable is ignored rather than fatal: the palette behind an order
+    can change under it (a different palette chosen, a custom color deleted), and
+    a show must never stop because a stored index no longer resolves."""
+    if not order:
+        return colors
+    picked, seen = [], set()
+    for i in order:
+        if isinstance(i, int) and 0 <= i < len(colors) and i not in seen:
+            seen.add(i)
+            picked.append(colors[i])
+    return picked if len(picked) >= 2 else colors
 
 
 def deal(colors: list, n: int, rng=None) -> list:
