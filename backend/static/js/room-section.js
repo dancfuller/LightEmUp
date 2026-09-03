@@ -285,7 +285,7 @@ function ControlSurface({ view, views, onView, onClose, roomName, isMobile, chil
   );
 }
 
-function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGovee, onControlRoom, favorites, onFavoritesChange, nicknames, onNicknameChange, lightningActive, onLightningStart, onLightningStop, segmentInfo, segmentState, onSegmentStateRefresh, deviceModes, onDeviceModeChange, onDeviceModesBulkChange, sceneAddress, onSceneAddressChange, unassignedDevices, onAssignDevices, onNavigate, segmentFillModes, onSegmentFillModeChange, onSegmentCountChange, roomLayouts, onLayoutChange, fixtures, onFixtureUpsert, onFixtureDelete, minSatEnabled, minSatPct, savedColorState, ctCorrection, onScheduleLook, lastApplied, lastStatus, onReapply, onRecheck, lightshow, lightshowPatterns, onLightshowSave, onLightshowStep }) {
+function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGovee, onControlRoom, favorites, onFavoritesChange, nicknames, onNicknameChange, lightningActive, onLightningStart, onLightningStop, segmentInfo, segmentState, onSegmentStateRefresh, deviceModes, onDeviceModeChange, onDeviceModesBulkChange, sceneAddress, onSceneAddressChange, unassignedDevices, onAssignDevices, onNavigate, segmentFillModes, onSegmentFillModeChange, onSegmentCountChange, roomLayouts, onLayoutChange, fixtures, onFixtureUpsert, onFixtureDelete, minSatEnabled, minSatPct, savedColorState, ctCorrection, onScheduleLook, lastApplied, lastStatus, onReapply, onRecheck, onRoomWhite, lightshow, lightshowPatterns, onLightshowSave, onLightshowStep }) {
   const isMobile = useIsMobile();
   const [collapsed, setCollapsed] = useState(true);
   // Single overlay surface state — replaces the old per-panel show* booleans.
@@ -399,20 +399,21 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
   // Hue's `bri` is 1–254, Govee's is 0–100, so 100% is 254 vs 100 respectively.
   const SOFT_WHITE_K = 2700, COOL_WHITE_K = 6500;
   const setRoomWhite = (kelvin, label) => {
+    // ONE backend call for a real room (v3.43.0). This used to fan out from the
+    // browser — one PUT per light, all in the same tick — which skipped the
+    // sequential pacing, the Hue read-back-and-repair, the Govee power verify and
+    // the ct_rgb white calibration, and needed a separate /rooms/last-applied POST
+    // to keep the header honest. `POST /api/rooms/white` is the same
+    // `_apply_room_white` the scheduler uses, so the two can no longer disagree,
+    // and it records "Now showing" itself.
+    if (isRealRoom && onRoomWhite) {
+      onRoomWhite(name, kelvin);
+      return;
+    }
+    // "Unassigned" is not a backend room, so it keeps the client-side fan-out —
+    // there is no room endpoint that could take it.
     hueLights.forEach(l => onControlHue(l, { on: true, brightness: 254, color_temp: kelvinToMired(kelvin) }));
     goveeDevices.forEach(d => onControlGovee(d, { on: true, brightness: 100, color_temp_kelvin: kelvin }));
-    // This fan-out is CLIENT-side, so no room endpoint sees it — tell the backend
-    // what the room now shows, or the header would still advertise the old scene.
-    // Only for real rooms: "Unassigned" isn't a room the backend knows about.
-    if (isRealRoom) {
-      api("/rooms/last-applied", {
-        method: "POST",
-        body: JSON.stringify({
-          room_name: name, kind: "white",
-          label: `${label} · ${kelvin}K`, kelvin,
-        }),
-      }).catch(e => console.warn("[RoomSection] last-applied save failed:", e));
-    }
   };
   const whiteBtn = (label, kelvin, fg, bg, border) => (
     <button

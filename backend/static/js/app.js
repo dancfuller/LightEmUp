@@ -1078,9 +1078,43 @@ function App() {
   // Drive EVERY discovered light at once (the global All On / Off / Soft White
   // bar). Vendor commands differ: Hue takes color_temp in mireds, Govee takes
   // color_temp_kelvin — so pass each its own cmd. Fire-and-forget per device.
-  const controlAll = (hueCmd, goveeCmd) => {
-    hueLights.forEach(l => controlHueLight(l, hueCmd));
-    goveeDevices.forEach(d => controlGoveeDevice(d, goveeCmd));
+  // "All lights off" goes through ONE backend call (v3.43.0). It used to fan out
+  // from here, one request per device, all in the same tick — the biggest burst
+  // this app can aim at a bridge with a ~10 command/second ceiling, and with no
+  // verify behind any of it. The backend drives each room through control_room
+  // (pacing, "Now showing", Hue read-back, Govee power verify) and then the
+  // devices in no room, with the verifies coalesced into one pass for the house.
+  // The optimistic paint stays local and instant, exactly as before.
+  const controlAll = (on) => {
+    api("/all/control", { method: "POST", body: JSON.stringify({ on }) })
+      .catch(e => console.error("All-lights control error:", e));
+    setHueLights(prev => prev.map(l => ({ ...l, state: { ...l.state, on } })));
+    setGoveeDevices(prev => prev.map(d => ({ ...d, state: { ...d.state, on } })));
+  };
+
+  // Soft White / Cool White for one room. Same reasoning: the room header used to
+  // issue one PUT per light from the browser, bypassing the staggering, the
+  // verify, the ct_rgb white calibration and the "Now showing" record (which it
+  // then had to POST separately to make up for). `_apply_room_white` on the Pi
+  // already did all of that for the scheduler — this just points the buttons at it,
+  // so a scheduled 2700K and pressing Soft White are finally the same code path.
+  const roomWhite = async (roomName, kelvin) => {
+    api("/rooms/white", {
+      method: "POST",
+      body: JSON.stringify({ room_name: roomName, kelvin, brightness: 100 }),
+    }).catch(e => console.error("Room white error:", e));
+
+    const room = rooms[roomName] || {};
+    const hueIds = new Set(room.hue_light_ids || []);
+    const goveeSlugs = new Set(room.govee_devices || []);
+    if (hueIds.size > 0) {
+      setHueLights(prev => prev.map(l => hueIds.has(l.id)
+        ? { ...l, state: { ...l.state, on: true, brightness: 254 } } : l));
+    }
+    if (goveeSlugs.size > 0) {
+      setGoveeDevices(prev => prev.map(d => goveeSlugs.has(goveeSlug(d))
+        ? { ...d, state: { ...d.state, on: true, brightness: 100 } } : d));
+    }
   };
 
   const controlRoom = async (roomName, cmd) => {
@@ -1439,7 +1473,7 @@ function App() {
           Live
         </span>
         <button
-          onClick={() => controlAll({ on: false }, { on: false })}
+          onClick={() => controlAll(false)}
           title="Turn every light in the house off"
           style={{ padding: isMobile ? "6px 12px" : "7px 16px", borderRadius: 8, border: "1px solid #334155", background: "transparent", color: "#e2e8f0", fontSize: isMobile ? 12 : 13, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}
         >All lights off</button>
@@ -1555,6 +1589,7 @@ function App() {
                   ctCorrection={ctCalibrated}
                   onRecheck={recheckDevice}
                   onScheduleLook={handleScheduleLook}
+                  onRoomWhite={roomWhite}
                   lightshow={lightshows[roomName]}
                   lightshowPatterns={lightshowPatterns}
                   onLightshowSave={saveLightshow}

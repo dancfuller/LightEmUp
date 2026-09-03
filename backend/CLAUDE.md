@@ -1120,6 +1120,43 @@ lights and now brought back the whole room. The check is what makes that safe.
   **When writing a pattern test, don't let the ring/stripe index alias against the palette
   length** (a distance of 3 against a 3-color palette passes for the wrong reason).
 
+## Whole-room actions belong on the backend (v3.43.0)
+Three controls used to fan out **from the browser** — one HTTP request per light,
+all issued in the same tick, fire-and-forget: **Soft White**, **Cool White**, and
+**All lights off**. That bypassed every reliability mechanism this file describes:
+sequential pacing, the `_in_bulk_hue` guard, Hue read-back-and-repair, the Govee
+power verify, the `ct_rgb` white calibration, and the "Now showing" record (which
+the frontend then had to POST separately to make up for).
+
+It also produced the largest burst the app can aim at a bridge with a **~10
+command/second ceiling** — nine simultaneous PUTs for one room, and for "All off"
+one per light in the house at once. The log shows the difference plainly: a
+client-side fan-out lands out of order (`16, 17, 13, 10, 18…`) because the requests
+are concurrent, while a backend path lands in order.
+
+- **`POST /api/rooms/white`** → `_apply_room_white`, which already existed for the
+  scheduler. The buttons now point at it, so a scheduled 2700K and pressing Soft
+  White are the same code path and can't drift. It records "Now showing" itself,
+  which is why `setRoomWhite`'s separate `/api/rooms/last-applied` POST is gone.
+- **`POST /api/all/control`** drives every room through `control_room` — so each
+  gets the pacing, the record and both verifies for free — then the devices in **no
+  room**. "All lights" has to mean all of them, and the unassigned ones are exactly
+  the lights nobody is watching. A room that raises is logged and skipped: a panic
+  button that gives up halfway is worse than useless (same rule as zone control).
+- **Verify coalescing is what makes this cheap.** Every room registers its
+  expectations into the same `_hue_verify_pending` map, so the whole house still
+  costs **one** bridge read.
+- **`_apply_room_white` / `_apply_room_color` now register the Govee power verify
+  too.** They had skipped it purely because they were written for the scheduler; a
+  white preset is just as capable of not landing.
+- **"Unassigned" keeps the client-side fan-out**, because it isn't a backend room
+  and there is no endpoint that could take it. That's the one remaining `forEach`
+  in `room-section.js`, and it's deliberate.
+- Covered by `test_bulk.py` (17 assertions): the bulk guard is set, both verifies
+  are registered, "Now showing" is recorded server-side, rooms and unassigned
+  devices are each reached exactly once, and one failing room doesn't abandon the
+  rest.
+
 ## Zones + safe room rename + Power action (v3.9.0, live control v3.15.0)
 **Zones** (`config["zones"]`, additive `{ zoneName: { rooms: [name,…] } }`, name-keyed
 like `rooms`; a room may be in several) are **both a live-control surface and a scheduling

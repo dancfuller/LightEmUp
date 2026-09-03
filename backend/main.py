@@ -1038,12 +1038,18 @@ async def _apply_room_white(room_name: str, kelvin: int, brightness_pct: int,
     finally:
         _in_bulk_hue.set(False)
     schedule_hue_verify(sent)
+    govee_sent = {}
     for slug in room.get("govee_devices", []):
         ip = gv_ip_for_slug(slug)
         if ip:
             await control_govee(GoveeCommandRequest(
                 ip=ip, mac=slug, on=True, brightness=brightness_pct,
                 color_temp_kelvin=kelvin))
+            govee_sent[ip] = (True, room_name)
+    # Power-only read-back, the same one control_room registers. This path used to
+    # skip it purely because it was written for the scheduler; a white preset is
+    # just as capable of not landing.
+    schedule_govee_verify(govee_sent)
     # No swatch: the frontend renders the chip from `kelvin` via kelvinToRGB, so
     # the backend doesn't need discovery's color math just for a label.
     record_room_applied(room_name, "white", _white_label(kelvin), kelvin=kelvin,
@@ -1072,11 +1078,14 @@ async def _apply_room_color(room_name: str, r: int, g: int, b: int, brightness_p
     finally:
         _in_bulk_hue.set(False)
     schedule_hue_verify(sent)
+    govee_sent = {}
     for slug in room.get("govee_devices", []):
         ip = gv_ip_for_slug(slug)
         if ip:
             await control_govee(GoveeCommandRequest(
                 ip=ip, mac=slug, on=True, brightness=brightness_pct, r=r, g=g, b=b))
+            govee_sent[ip] = (True, room_name)
+    schedule_govee_verify(govee_sent)
     record_room_applied(room_name, "color", "Solid color", swatches=[[r, g, b]],
                         source=source, source_detail=source_detail, expect=sent)
     if source == "schedule":
@@ -3784,6 +3793,109 @@ def _rgb_to_hue_sat(r: int, g: int, b: int) -> tuple[int, int]:
 
 
 # ─── Lightning Scene Endpoints ─────────────────────────────────────────────
+
+class RoomWhiteRequest(BaseModel):
+    room_name: str
+    kelvin: int = 2700
+    brightness: int = 100
+
+
+@app.post("/api/rooms/white")
+async def room_white(req: RoomWhiteRequest):
+    """Set a whole room to a white temperature — the Soft White / Cool White
+    shortcuts in the room header.
+
+    This existed only as `_apply_room_white` for the SCHEDULER; the buttons fanned
+    the same thing out from the browser as one PUT per light, all issued in the
+    same tick. That bypassed every reliability mechanism the backend has: the
+    sequential pacing, the `_in_bulk_hue` guard, the Hue read-back-and-repair, the
+    Govee power verify, the ct_rgb white calibration, and the "Now showing"
+    record — which the frontend then had to POST separately to make up for.
+    Nine simultaneous PUTs is also the largest burst the app can aim at a bridge
+    with a ~10 command/second ceiling.
+
+    One endpoint, one code path, and a scheduled 2700K now does exactly what
+    pressing Soft White does."""
+    if req.room_name not in config.get("rooms", {}):
+        raise HTTPException(404, f"Room '{req.room_name}' not found")
+    await _apply_room_white(req.room_name, int(req.kelvin), int(req.brightness))
+    return {"success": True, "room": req.room_name, "kelvin": int(req.kelvin)}
+
+
+class AllControlRequest(BaseModel):
+    on: bool
+
+
+@app.post("/api/all/control")
+async def control_all(req: AllControlRequest):
+    """Every light in the house — the Live bar's "All lights off".
+
+    The browser used to fan this out over every device it knew about, in one tick.
+    For "off" that is the single biggest burst the app can produce, and it had no
+    verify behind it at all — which is precisely the shape of the failure that
+    keeps getting reported (2026-08-13 patio bulbs, 2026-09-02 front door).
+
+    Rooms go through `control_room`, so each one gets the pacing, the record and
+    both verifies for free, and the verify coalescing means the whole house still
+    costs ONE bridge read. Devices in no room are driven afterwards and folded into
+    the same verify batches — "all lights" has to mean all of them, and the
+    unassigned ones are exactly the lights nobody is watching."""
+    ip, username = config.get("hue_bridge_ip"), config.get("hue_username")
+    rooms = config.get("rooms", {}) or {}
+    touched = {"rooms": [], "loose_hue": [], "loose_govee": []}
+
+    for room_name in list(rooms):
+        try:
+            await control_room(RoomStateRequest(room_name=room_name, on=req.on))
+            touched["rooms"].append(room_name)
+        except Exception as e:
+            # One room failing must never abandon the rest — this is a panic
+            # button, and a panic button that gives up halfway is worse than none.
+            log.warning("All-control: room %r failed: %s", room_name, e)
+
+    in_a_room_hue = {str(lid) for r in rooms.values() for lid in r.get("hue_light_ids", [])}
+    in_a_room_gv = {slug for r in rooms.values() for slug in r.get("govee_devices", [])}
+
+    hue_sent = {}
+    if ip and username:
+        _in_bulk_hue.set(True)
+        try:
+            for light in (await get_hue_lights(ip, username)) or []:
+                lid = str(light.get("id"))
+                if lid in in_a_room_hue:
+                    continue
+                res = await control_hue_light(HueLightStateRequest(light_id=lid, on=req.on))
+                if res.get("success") and res.get("state"):
+                    hue_sent[lid] = res["state"]
+                    touched["loose_hue"].append(lid)
+        except Exception:
+            log.exception("All-control: unassigned Hue pass failed")
+        finally:
+            _in_bulk_hue.set(False)
+    schedule_hue_verify(hue_sent)
+
+    govee_sent = {}
+    for mac in list(_known_govee()):
+        slug = gv_slug(mac)
+        if slug in in_a_room_gv:
+            continue
+        device_ip = gv_ip_for_slug(slug)
+        if not device_ip:
+            continue
+        try:
+            await control_govee(GoveeCommandRequest(ip=device_ip, mac=slug, on=req.on))
+            govee_sent[device_ip] = (bool(req.on), "Unassigned")
+            touched["loose_govee"].append(slug)
+        except Exception as e:
+            log.warning("All-control: govee %s failed: %s", slug, e)
+    schedule_govee_verify(govee_sent)
+
+    log.info("All lights %s: %d room(s), %d loose Hue, %d loose Govee",
+             "on" if req.on else "off", len(touched["rooms"]),
+             len(touched["loose_hue"]), len(touched["loose_govee"]))
+    publish_event("config")
+    return {"success": True, **touched}
+
 
 @app.post("/api/scenes/lightning/start")
 async def start_lightning(req: LightningStartRequest):

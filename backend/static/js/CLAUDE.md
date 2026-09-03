@@ -823,10 +823,14 @@ set to?").
 - `describeLook()` in **color-mode.js** names the look and is returned as `label` from
   `buildScenePlan()` (so Apply and "Schedule this look" can't disagree). Mode display names
   live in `MODE_LOOK_NAMES` — never render the internal mode keys.
-- **The "Set room to" white shortcuts fan out CLIENT-side**, so no room endpoint sees them;
-  `setRoomWhite` POSTs `/api/rooms/last-applied` explicitly, guarded on `isRealRoom` because
-  "Unassigned" isn't a room the backend knows. **Any new client-side whole-room fan-out
-  must do the same, or the header will keep advertising the previous look.**
+- **The white shortcuts go through the BACKEND now (v3.43.0).** `setRoomWhite` POSTs
+  `/api/rooms/white` for a real room, which records "Now showing" itself — the old
+  explicit `/api/rooms/last-applied` POST is gone along with the fan-out it existed
+  to compensate for. "Unassigned" still fans out client-side (it is not a backend
+  room), and **that** is why the rule survives: **any client-side whole-room fan-out
+  must POST `/api/rooms/last-applied` itself, or the header keeps advertising the
+  previous look.** Better still, do not add one — see `backend/CLAUDE.md`
+  "Whole-room actions belong on the backend".
 
 ## backup-restore.js — Settings → Backup & Restore (v3.11.0)
 `BackupRestoreCard` renders in the Settings tab (below `LocationCard`), with
@@ -1050,11 +1054,13 @@ seamless (no flash). Previously the navy `<body>` sat empty during that window.
 the POST body, so passing CT keys (`color_temp` mireds / `color_temp_kelvin`) works
 without new endpoints. Opens the EventSource on mount and coalesces incoming SSE into a
 debounced `loadAll`. `ctCalibrated = {...ctCorrection, ...ctRgb}` drives the badges.
-- **Global master control (v3.4.0):** a bar under the nav (visible on every tab) with
-  **just "All Off"**, driving `controlAll(hueCmd, goveeCmd)` — which fans out per device
-  (Hue/Govee each get their own cmd) client-side, fire-and-forget. The old global "All On"
-  / "All On · Soft White" were **removed**: you rarely want to light every outside light +
-  every empty room at once. The useful *on* shortcuts are now **per-room** (below).
+- **Global master control (v3.4.0, backend-driven v3.43.0):** a bar under the nav
+  (visible on every tab) with **just "All Off"**. `controlAll(on)` now makes ONE
+  `POST /api/all/control` and paints the optimistic state locally; it used to issue
+  a request per device in a single tick, which was the largest burst this app could
+  aim at the bridge and had no verify behind it. The old global "All On" / "All On ·
+  Soft White" were **removed**: you rarely want to light every outside light + every
+  empty room at once. The useful *on* shortcuts are **per-room** (below).
 - **Per-room white quick-actions (room-section.js, v3.4.0, relabeled v3.4.2):** each
   `RoomSection` header has a **"Whole-room shortcuts"** labeled group *on its own line*
   below the panel openers (not inline with them), with **Soft White (2700K)** +
@@ -1063,10 +1069,12 @@ debounced `loadAll`. `ctCalibrated = {...ctCorrection, ...ctRgb}` drives the bad
   buttons stay short and carry **no icons** (a ❄ snowflake read as literal "cold", fighting
   the warm/cool-white metaphor). Cool White is an "emergency / brightest" mode; **both force
   full brightness**. `setRoomWhite(kelvin)` fans out over *that room's* `hueLights`/
-  `goveeDevices` via `onControlHue`/`onControlGovee` — Hue gets `{on:true, brightness:254,
-  color_temp: mireds}`, Govee gets `{on:true, brightness:100, color_temp_kelvin}` (note the
-  vendor brightness scales differ: Hue 1–254, Govee 0–100; Govee CT → server-side `ct_rgb`
-  calibration). Buttons keep warm-amber / cool-blue tint. **Heading is "Set room to"
+  `goveeDevices`. **As of v3.43.0 a real room calls `onRoomWhite` → one
+  `POST /api/rooms/white`**, and the per-vendor split (Hue mireds + bri 1–254, Govee
+  kelvin + bri 0–100, `ct_rgb` calibration) happens server-side in
+  `_apply_room_white` — the same function the scheduler uses, so a scheduled 2700K
+  and a button press can no longer disagree. Only "Unassigned" still fans out per
+  device. Buttons keep warm-amber / cool-blue tint. **Heading is "Set room to"
   (v3.4.3)** — it deliberately holds *only* the specific looks (no on/off/resume), because
   the master power toggle owns that. This split fixes the "two zones both do whole-room
   power" clunk: toggle = power/resume, this group = looks. On the pseudo-"Unassigned" group

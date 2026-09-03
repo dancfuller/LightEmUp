@@ -296,6 +296,14 @@ All endpoints are under `/api/`. Key groups:
   refreshes with the live `/api/discover/govee` in the background)
 - `/api/hue/light`, `/api/govee/control` — individual device control
 - `/api/rooms`, `/api/rooms/control` — room CRUD and bulk control
+- `/api/rooms/white` — set a whole room to a white temperature (the Soft White /
+  Cool White header buttons). Same `_apply_room_white` the scheduler uses, so a
+  scheduled 2700K and a button press are one code path (v3.43.0)
+- `/api/all/control` — every light in the house, the Live bar's "All lights off".
+  Drives each room through `control_room`, then the devices in no room. Both
+  replaced browser-side fan-outs that issued one request per light in a single
+  tick with no verify — see `backend/CLAUDE.md` "Whole-room actions belong on the
+  backend"
 - `/api/rooms/last-applied` — record what a room is "Now showing" (the strip in each room
   header). The backend records this itself on every whole-room path incl. schedule fires;
   this endpoint is only for looks the frontend fans out client-side. Config key
