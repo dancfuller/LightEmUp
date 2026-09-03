@@ -168,6 +168,44 @@ looking for one next time.
   `room_last_applied[room]`** — stored ON the entry so it dies the moment a new look is
   recorded. A stale "didn't take" outliving the problem would be its own lie.
 
+### The fast verify is BLIND to a silent Zigbee drop (v3.42.2)
+`GET /lights` is answered from the **bridge's own state model**, and the bridge
+updates that model the moment it accepts a command for a light it believes is
+`reachable` — it does not read the bulb back. So a read 0.6s later sincerely
+reports `on: true` whether or not the frame ever reached the bulb. The fast verify
+catches the bridge **disagreeing** with us (the "bri won't change while off" case
+that produced v3.10.0); it cannot catch the mesh **losing** a command.
+
+**2026-09-02, and this is the worked example to keep.** The sunset palette fired at
+19:32:02 and PUT `{on, bri:254, xy}` to light 28. Verify passes at 19:32:03 (+0.6s)
+and 19:32:14 both found nothing to repair. Nothing else wrote to that light all
+evening — and it was dark, with the bridge still holding `bri: 254,
+reachable: true`. Light 29 took the same command and sat at `bri: 2`.
+
+**`schedule_hue_late_verify(expectations, reason)`** adds a SECOND pass
+`HUE_LATE_VERIFY_S` (150s) later, by which time the bridge has converged on what
+the bulbs actually report. It reuses `_hue_verify_repair` unchanged, so the
+comparison rules and the unreachable-skip are identical.
+- **Scheduled applies ONLY.** A late repair re-asserts a look minutes after the
+  fact, so if someone had deliberately switched one light off in the meantime it
+  would fight them. On a schedule, the firing happened while nobody was in the
+  room — exactly when this failure goes unnoticed for hours and when a manual
+  change in the window is least likely. Armed from `_run_scene_apply` (covers
+  scheduled scenes AND palette fires), `_apply_room_white`, `_apply_room_color`,
+  and `_apply_room_power` (which reads the expectation `control_room` just
+  recorded, so the sunrise OFF is covered too).
+- `_reconcile_expectations` is bounded to `EXPECT_RECONCILE_WINDOW_S` (45s), so at
+  150s the late pass repairs without rewriting the stored expectation. That's the
+  right split and it falls out for free.
+- **Both front-door bulbs are `AE 282 C` — third-party Zigbee, not Philips.** They
+  are the two lights that keep producing these reports. Software can recover a
+  dropped command; it cannot make a flaky bulb reliable.
+- Covered by `test_late_verify.py` (9 assertions), whose fake bridge lies
+  optimistically and then tells the truth. **Its state dicts use `brightness`, not
+  `bri`** — `get_hue_lights` normalizes the raw v1 shape and the repair reads the
+  normalized one, so a fake using the raw key reads brightness as 0 and "repairs" a
+  perfectly healthy room. The first draft of that test did exactly that.
+
 ### Coalescing + what gets verified (v3.10.1)
 Callers never invoke `_hue_verify_repair` directly — they call **`schedule_hue_verify(
 {light_id: state_as_sent})`**, which is synchronous and cheap: it merges into a module-level

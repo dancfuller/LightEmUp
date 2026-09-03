@@ -1048,6 +1048,8 @@ async def _apply_room_white(room_name: str, kelvin: int, brightness_pct: int,
     # the backend doesn't need discovery's color math just for a label.
     record_room_applied(room_name, "white", _white_label(kelvin), kelvin=kelvin,
                         source=source, source_detail=source_detail, expect=sent)
+    if source == "schedule":
+        schedule_hue_late_verify(sent, source_detail or "a schedule")
 
 
 async def _apply_room_color(room_name: str, r: int, g: int, b: int, brightness_pct: int,
@@ -1077,6 +1079,8 @@ async def _apply_room_color(room_name: str, r: int, g: int, b: int, brightness_p
                 ip=ip, mac=slug, on=True, brightness=brightness_pct, r=r, g=g, b=b))
     record_room_applied(room_name, "color", "Solid color", swatches=[[r, g, b]],
                         source=source, source_detail=source_detail, expect=sent)
+    if source == "schedule":
+        schedule_hue_late_verify(sent, source_detail or "a schedule")
 
 
 # ─── Palette actions (v3.17.0) ───────────────────────────────────────────────
@@ -1288,6 +1292,14 @@ async def _apply_room_power(room_name: str, on: bool,
             record_room_applied(room_name, "power",
                                 "Resumed last lighting" if on else "Turned off",
                                 source=source, source_detail=source_detail)
+        if source == "schedule":
+            # control_room already recorded what it sent each Hue light; reuse it
+            # rather than rebuilding the expectation here. This is the path the
+            # sunrise OFF takes, and an off that silently fails is the one that
+            # leaves lights burning all day.
+            entry = (config.get("room_last_applied") or {}).get(room_name) or {}
+            schedule_hue_late_verify(entry.get("expect_hue") or {},
+                                     source_detail or "a schedule")
     except HTTPException:
         log.warning("Scheduler: power action — room %r not found", room_name)
 
@@ -3166,6 +3178,9 @@ async def control_hue_light(req: HueLightStateRequest):
 # count), then re-send only to the lights that didn't take.
 HUE_VERIFY_SETTLE_S = 0.6      # let the mesh apply before reading back
 HUE_VERIFY_BRI_TOLERANCE = 3   # bridge rounds brightness; don't chase 1-2 off
+# A SECOND look, minutes later. See schedule_hue_late_verify for why 0.6s can't
+# see a silent Zigbee drop.
+HUE_LATE_VERIFY_S = 150
 
 # Verification is COALESCED: callers register expectations here rather than each
 # spawning its own read-back, and a single drain task services them. Without this,
@@ -3188,6 +3203,49 @@ def schedule_hue_verify(expectations: dict):
     _hue_verify_pending.update({str(k): v for k, v in expectations.items()})
     if _hue_verify_task is None or _hue_verify_task.done():
         _hue_verify_task = asyncio.create_task(_hue_verify_drain())
+
+
+def schedule_hue_late_verify(expectations: dict, reason: str = ""):
+    """A SECOND verify pass, ~2.5 minutes after the first. For applies nobody is
+    watching — i.e. schedules.
+
+    **Why the 0.6s pass cannot catch a silent Zigbee drop.** `GET /lights` is
+    answered from the BRIDGE's own state model, and the bridge updates that model
+    the moment it accepts a command for a `reachable` light — it does not read the
+    bulb back. So the fast verify sincerely reports `on: true` whether or not the
+    frame ever reached the bulb. It catches the bridge disagreeing with us (the
+    "bri won't change while off" case that produced v3.10.0); it is structurally
+    blind to the mesh losing a command.
+
+    Worked example, 2026-09-02: the sunset palette fired at 19:32:02 and PUT
+    `{on, bri:254, xy}` to light 28. Verify passes at 19:32:03 and 19:32:14 both
+    found nothing to repair. Nothing else wrote to that light all evening, and it
+    was dark — with the bridge still holding `bri: 254, reachable: true`. Given
+    time the bridge does converge on the truth, so a later look would have seen
+    `on: false` and re-sent.
+
+    **Scheduled applies only, on purpose.** A late repair re-asserts a look
+    minutes after the fact, so if someone had deliberately switched one light off
+    in the meantime it would fight them. On a schedule that firing happened while
+    nobody was in the room — which is exactly when this failure goes unnoticed for
+    hours, and exactly when a manual change in the window is least likely."""
+    if not expectations:
+        return
+    if not config.get("hue_bridge_ip") or not config.get("hue_username"):
+        return
+
+    async def _later():
+        try:
+            await asyncio.sleep(HUE_LATE_VERIFY_S)
+            log.info("Hue late verify: re-checking %d light(s) from %s",
+                     len(expectations), reason or "a scheduled apply")
+            await _hue_verify_repair({str(k): v for k, v in expectations.items()})
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            log.exception("Hue late verify failed")
+
+    asyncio.create_task(_later(), name="hue-late-verify")
 
 
 async def _hue_verify_drain(settle_s: float = HUE_VERIFY_SETTLE_S):
@@ -4660,6 +4718,10 @@ async def _run_scene_apply(req: SceneApplyRequest):
         # that the expectation is stored, which pins each color to whatever the
         # bridge settled on (and re-checks the lights while it's there).
         schedule_hue_verify(hue_expect)
+        # Scheduled looks fire with nobody watching, and the fast verify above is
+        # blind to a silent mesh drop — see schedule_hue_late_verify.
+        if req.source == "schedule":
+            schedule_hue_late_verify(hue_expect, req.source_detail or "a schedule")
         _scene_emit(scope, room, phase="done", total=apply_total, done=apply_total, label="", active=False)
     except asyncio.CancelledError:
         _scene_emit(scope, room, phase="canceled", active=False, label="")
