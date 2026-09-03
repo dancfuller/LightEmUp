@@ -10,7 +10,7 @@ rules that apply to every UI change. **Keep this file current when behavior chan
 utils → audio → components-shared → light-card → favorite-lights → lightning-panel →
 room-map → palette-data → palette-library → color-mode → light-scene → location-data →
 schedules → lightshow → segment-reset-debug → room-section → zones → room-assignment →
-setup-wizard → server-logs → ct-calibration → backup-restore → app
+setup-wizard → server-logs → ct-calibration → delivery-health → backup-restore → app
 
 A new file must be added to index.html in the correct slot (after its dependencies).
 
@@ -831,6 +831,40 @@ set to?").
   must POST `/api/rooms/last-applied` itself, or the header keeps advertising the
   previous look.** Better still, do not add one — see `backend/CLAUDE.md`
   "Whole-room actions belong on the backend".
+
+## delivery-health.js — Settings → Delivery health (v3.46.0)
+
+A Settings card over `GET /api/health/delivery`. It answers one question — *are my
+lights actually receiving what I send them?* — which until now could only be answered by
+reading the log on the Pi. See `backend/CLAUDE.md` "Delivery health" for why the
+underlying failure is invisible without it.
+
+**It reports a rate, not a feed.** The big number is re-sends in the last 24 hours,
+color-toned by threshold (≥10 red, ≥3 amber, else green) with a plain-English verdict
+next to it. The thresholds are deliberately loose: the card is for spotting a *shape*,
+not for adjudicating a single dropped packet.
+
+**The Zigbee channel sits inside the card, not in a separate one.** The number and the
+channel are only useful together — a climbing count almost always means a WiFi network
+has moved onto the Zigbee channel — and two cards would let a reader see one without
+the other.
+
+**The 14-day chart is dense.** Zero-count days render as a flat stub rather than being
+omitted, because a gap in a sparse chart reads as "no data" when it means "nothing went
+wrong that day". Bar heights are normalized against the peak, floored at 2px.
+
+**`by_kind` is summed by PHRASE, not by key.** A Hue light that wouldn't switch (`on`)
+and a Govee one that wouldn't (`power`) are the same fact to a reader and share a
+phrase, so tallying the raw keys printed *"7 wouldn't switch · 1 wouldn't switch"*.
+`kindWords` folds the counts by their rendered word first. Caught in a screenshot pass —
+it is not visible in the code.
+
+It loads **after `room-section.js`** and reuses that file's `relativeTime`. That
+function used to treat only `Z` or a `+` offset as zone-bearing, so a negative offset
+got a `Z` appended and became an invalid `Date`, rendering as an empty string.
+Everything the backend writes is UTC (`_now_iso`), so nothing was broken in practice —
+but the trap was one edit away from being sprung, and it is now a proper
+`/(?:Z|[+-]\d{2}:?\d{2})$/` test.
 
 ## backup-restore.js — Settings → Backup & Restore (v3.11.0)
 `BackupRestoreCard` renders in the Settings tab (below `LocationCard`), with

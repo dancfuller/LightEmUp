@@ -294,6 +294,57 @@ then cleared.
   is sent while off, the level lands on the next on for Hue, Govee and a whole
   room, an on light still dims live, and an explicit level wins.
 
+## Delivery health — a rolling count of commands that didn't take (v3.46.0)
+
+The failure this app fights hardest is **invisible by construction**. The Hue bridge
+returns `200` when it *queues* a command; whether the Zigbee mesh delivered it is not
+something the HTTP layer knows. `GET /lights` doesn't help either — the bridge answers
+from its own optimistic state model rather than reading the bulb back. So a lost
+command leaves the light wrong and **nothing in the app disagrees**.
+
+The verify-and-repair passes have caught these since v3.13.0, but they only said so in
+the log. Noticing a *trend* therefore meant sshing to the Pi and reading `journalctl`,
+which nobody does until something is already annoying. This surfaces the same
+information in Settings.
+
+**`record_repair(key, label, kind)`** is called from the two places that already know a
+command didn't land:
+
+- `_hue_verify_repair` — kinds `on`, `brightness`, `color`. These used to append a bare
+  `light_id` to `repaired`; the list now carries `(light_id, why)` so the reason
+  survives to the log line and the record.
+- `_govee_verify_repair` — kinds `unreachable` (the device never answered) and `power`
+  (it answered, and provably hadn't applied the power command).
+
+It is **best-effort on purpose** — the whole body is wrapped, because a diagnostic that
+can break a light command is worse than no diagnostic. It uses `schedule_save()`, so a
+burst of repairs during one bad apply costs a single debounced write.
+
+### Why it's a rate, not an incident list
+
+One dropped command is ordinary 2.4 GHz behavior and means nothing. A dozen a day means
+something changed — a new access point, a moved router, a bulb that's drifted to the
+edge of the mesh. Only the *rate* distinguishes those, so `GET /api/health/delivery`
+reports counts (24h, 7d) and a **dense** 14-day series: a day with nothing wrong is an
+explicit zero, because a gap in a sparse chart reads as "no data" when it means the
+opposite.
+
+The endpoint also reads the bridge's `zigbeechannel` and returns it beside the count.
+That pairing is the point: the usual cause of a rising count is a WiFi network moving
+onto the Zigbee channel, and neither number diagnoses anything alone. A bridge that
+can't be read just omits the field — a diagnostic that fails is not an error worth
+surfacing.
+
+### The config key
+
+`repair_log` is a list of `{at, key, label, kind}`, bounded **twice**: `REPAIR_LOG_MAX`
+(400) entries and `REPAIR_LOG_DAYS` (14) of age, trimmed on every write. A mesh that is
+genuinely struggling hits the count cap first, which is itself a signal.
+
+It is declared in `DEFAULT_CONFIG` and listed in **`_SETTING_INTERNAL`** — it is
+diagnostic history, not a setting, so the restore preview doesn't offer to put
+last fortnight's radio problems back.
+
 ## Detecting that something ELSE changed a room (v3.16.0)
 **LightEmUp is not the only thing driving these lights**, and can't be. The Hue app, the
 Govee app and Google Home routines all touch them — and must: Govee's on-device engine is

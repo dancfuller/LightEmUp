@@ -169,6 +169,11 @@ DEFAULT_CONFIG = {
     "govee_segment_mode": {},    # govee slug → bool: per-segment LIGHTNING. NOT scene
                                  # addressing (that's govee_scene_address above).
     "room_presets": {},          # room name → saved preset list (GET/POST /api/room-presets)
+    "repair_log": [],            # rolling record of commands that DIDN'T TAKE and had
+                                 # to be re-sent (v3.46.0). Each: {at, key, label, kind}.
+                                 # Bounded by REPAIR_LOG_MAX / REPAIR_LOG_DAYS. This is
+                                 # the only way to see radio trouble WITHOUT reading
+                                 # journalctl — see Settings → Delivery health.
     "pending_brightness": {},    # device key → level (%) chosen while the device was
                                  # OFF, applied the next time it is turned on and
                                  # then cleared (v3.45.0). Dragging a level must
@@ -502,6 +507,42 @@ def flush_save_now():
         _save_handle = None
     if _save_pending:
         _flush_save()
+
+
+# How much delivery history to keep. Repairs are supposed to be RARE, so this is
+# sized to cover a fortnight of them and still stay small on an SD card; a mesh
+# that is genuinely struggling hits the count cap first, which is itself the signal.
+REPAIR_LOG_MAX = 400
+REPAIR_LOG_DAYS = 14
+
+
+def record_repair(key: str, label: str, kind: str):
+    """Note that one command had to be re-sent, or couldn't be.
+
+    A dropped Zigbee command used to leave no trace anywhere — the bridge returns
+    200, the light stays wrong, and nothing in the app disagrees. The verify passes
+    now catch these, but they only said so in the log, which means noticing drift
+    required someone to go and read journalctl. This is the same information kept
+    where it can be looked at.
+
+    Best-effort by construction: a diagnostic that can break a light command is
+    worse than no diagnostic."""
+    from datetime import datetime, timedelta
+    try:
+        log_ = config.setdefault("repair_log", [])
+        log_.append({"at": _now_iso(), "key": key, "label": label, "kind": kind})
+        cutoff = (datetime.now().astimezone() - timedelta(days=REPAIR_LOG_DAYS))
+        kept = []
+        for e in log_[-REPAIR_LOG_MAX:]:
+            try:
+                if datetime.fromisoformat(e["at"]) >= cutoff:
+                    kept.append(e)
+            except (ValueError, TypeError, KeyError):
+                continue
+        config["repair_log"] = kept
+        schedule_save()      # debounced; a burst of repairs costs one write
+    except Exception:
+        log.exception("Could not record a repair (continuing)")
 
 
 def pending_brightness(key: str) -> Optional[int]:
@@ -3446,13 +3487,13 @@ async def _hue_verify_repair(expectations: dict, compare_color: bool = False):
                 continue   # unreachable/unknown: a re-send won't land either
             want_on = sent.get("on")
             if want_on is not None and bool(cur.get("on")) != bool(want_on):
-                repaired.append(light_id)
+                repaired.append((light_id, "on"))
                 continue
             # Brightness only matters while the light is on.
             want_bri = sent.get("bri")
             if want_bri is not None and cur.get("on") and want_on is not False:
                 if abs(int(cur.get("brightness") or 0) - int(want_bri)) > HUE_VERIFY_BRI_TOLERANCE:
-                    repaired.append(light_id)
+                    repaired.append((light_id, "brightness"))
                     continue
             # COLOR, but only for a LATE pass and only at a distance no clamp
             # reaches (HUE_XY_REPAIR_TOL). The fast 0.6s pass must never do this:
@@ -3474,12 +3515,14 @@ async def _hue_verify_repair(expectations: dict, compare_color: bool = False):
                     try:
                         if math.dist([float(v) for v in want_xy],
                                      [float(v) for v in cur_xy]) > HUE_XY_REPAIR_TOL:
-                            repaired.append(light_id)
+                            repaired.append((light_id, "color"))
                     except (TypeError, ValueError):
                         pass
 
-        for light_id in repaired:
-            log.info("Hue verify: light %s didn't take — re-sending", light_id)
+        for light_id, why in repaired:
+            log.info("Hue verify: light %s didn't take (%s) — re-sending", light_id, why)
+            record_repair(f"hue:{light_id}",
+                          _device_label(f"hue:{light_id}", f"Light {light_id}"), why)
             try:
                 await set_hue_light_state(ip, username, str(light_id), expectations[light_id])
             except Exception as e:
@@ -3588,6 +3631,7 @@ async def _govee_verify_repair(expectations: dict):
             log.warning("Govee verify: %s (%s) didn't answer — can't confirm it "
                         "turned %s", label, ip, want_word)
             tally["unreachable"] += 1
+            record_repair(gv_key_for_ip(ip), label, "unreachable")
             failed.setdefault(room_name, []).append(label)
             continue
         if bool(state.get("on")) == bool(want_on):
@@ -3605,6 +3649,7 @@ async def _govee_verify_repair(expectations: dict):
         if again is not None and bool(again.get("on")) == bool(want_on):
             log.info("Govee verify: %s repaired", label)
             tally["repaired"] += 1
+            record_repair(gv_key_for_ip(ip), label, "power")
             continue
         log.warning("Govee verify: %s is still not %s after a re-send", label, want_word)
         tally["stuck"] += 1
@@ -4315,6 +4360,78 @@ def _days_since(iso: Optional[str]) -> Optional[int]:
     except (ValueError, TypeError):
         return None
     return max(0, (date.today() - d).days)
+
+
+@app.get("/api/health/delivery")
+async def delivery_health():
+    """How often commands have had to be re-sent lately, and on which lights.
+
+    Exists because the failure this app fights hardest is invisible by nature: the
+    Hue bridge returns 200 for a command the mesh then loses, so nothing disagrees
+    and the only evidence was a log line. Radio trouble shows up here as a RATE
+    rather than as one anecdote — which is what makes 2.4 GHz interference
+    diagnosable at all.
+
+    The Zigbee channel rides along deliberately: the usual cause of a rising count
+    is a WiFi access point wandering onto it, and correlating the two is the whole
+    point. A bridge that can't be read just omits it."""
+    from collections import Counter
+    from datetime import datetime, timedelta
+    import httpx
+    events = list(config.get("repair_log") or [])
+    now = datetime.now().astimezone()
+
+    def age_h(e):
+        try:
+            return (now - datetime.fromisoformat(e["at"])).total_seconds() / 3600
+        except (ValueError, TypeError, KeyError):
+            return None
+
+    aged = [(e, age_h(e)) for e in events]
+    aged = [(e, a) for e, a in aged if a is not None and a >= 0]
+
+    by_device, by_day, kinds = {}, Counter(), Counter()
+    for e, a in aged:
+        kinds[e.get("kind") or "?"] += 1
+        if a <= 24 * 7:
+            d = by_device.setdefault(e["key"], {"key": e["key"], "label": e.get("label"),
+                                                "count": 0, "last_at": e["at"]})
+            d["count"] += 1
+            if e["at"] > d["last_at"]:
+                d["last_at"] = e["at"]
+        try:
+            by_day[datetime.fromisoformat(e["at"]).date().isoformat()] += 1
+        except (ValueError, TypeError, KeyError):
+            pass
+
+    # A dense 14-day series, zeros included — a gap in a sparse list reads as
+    # "no data" when it actually means "nothing went wrong that day".
+    days = [{"date": (now.date() - timedelta(days=i)).isoformat(),
+             "count": by_day.get((now.date() - timedelta(days=i)).isoformat(), 0)}
+            for i in range(REPAIR_LOG_DAYS - 1, -1, -1)]
+
+    zigbee = None
+    ip, username = config.get("hue_bridge_ip"), config.get("hue_username")
+    if ip and username:
+        try:
+            async with httpx.AsyncClient(timeout=3.0, verify=False) as client:
+                r = await client.get(f"http://{ip}/api/{username}/config")
+                if r.status_code == 200:
+                    zigbee = r.json().get("zigbeechannel")
+        except Exception:
+            pass      # a diagnostic that fails is not an error worth surfacing
+
+    return {
+        "last_24h": sum(1 for _, a in aged if a <= 24),
+        "last_7d": sum(1 for _, a in aged if a <= 24 * 7),
+        "kept": len(aged),
+        "window_days": REPAIR_LOG_DAYS,
+        "by_kind": dict(kinds),
+        "by_device": sorted(by_device.values(), key=lambda d: -d["count"])[:12],
+        "by_day": days,
+        "recent": list(reversed(events[-12:])),
+        "zigbee_channel": zigbee,
+    }
 
 
 @app.get("/api/devices/stale")
@@ -5663,6 +5780,7 @@ def _export_envelope(include_credentials: bool = True) -> dict:
 # to "it's invisible".
 
 _SETTING_INTERNAL = {
+    "repair_log",         # diagnostic history, not a setting; noise in a restore
     "pending_brightness", # a level waiting for the next power-on; consumed in
                           # minutes and meaningless in a year-old backup
     "device_state",       # last state we sent each device — rebuilt by use

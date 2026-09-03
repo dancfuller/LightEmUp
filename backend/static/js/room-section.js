@@ -9,7 +9,10 @@
 // the old room_color_state couldn't answer.
 function relativeTime(iso) {
   if (!iso) return "";
-  const then = new Date(iso.endsWith("Z") || iso.includes("+") ? iso : iso + "Z");
+  // A trailing Z or a +/-HH:MM offset means the string already says which zone
+  // it is in. Only a bare timestamp gets assumed to be UTC.
+  const zoned = /(?:Z|[+-]\d{2}:?\d{2})$/.test(iso);
+  const then = new Date(zoned ? iso : iso + "Z");
   const secs = Math.floor((Date.now() - then.getTime()) / 1000);
   if (!isFinite(secs)) return "";
   if (secs < 45) return "just now";

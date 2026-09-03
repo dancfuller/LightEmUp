@@ -1895,6 +1895,7 @@ function App() {
               </div>
             </div>
 
+            <DeliveryHealthCard isMobile={isMobile} />
             <PowerRecoveryCard settings={powerRecovery} onChange={updatePowerRecovery} isMobile={isMobile} />
 
             <LocationCard location={location} onChange={updateLocation} isMobile={isMobile} />

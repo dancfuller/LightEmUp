@@ -190,6 +190,10 @@ backend/
       setup-wizard.js     # SetupWizard — Hue Bridge discovery and pairing
       server-logs.js      # ServerLogs — live server log viewer
       ct-calibration.js   # CTCalibrationPanel — RGB-space white calibration UI
+      delivery-health.js  # DeliveryHealthCard — Settings card showing how often commands
+                          # had to be RE-SENT (v3.46.0). The one place radio trouble is
+                          # visible without reading journalctl on the Pi. Loads after
+                          # room-section.js: reuses its relativeTime
       backup-restore.js   # BackupRestoreCard — Settings export/import of every setting
                           # (downloads to the browser; import previews then replaces)
       app.js              # App component — state, routing, SSE client, API orchestration
@@ -288,6 +292,12 @@ All endpoints are under `/api/`. Key groups:
   purges one from every room/layout/nickname/record. **Both refuse if the bridge can't be
   read or returns no lights** — that would look like "everything is a phantom". Detection
   is automatic, removal is always an explicit click. See `backend/CLAUDE.md` "Phantom Hue lights"
+- `/api/health/delivery` — how often commands had to be re-sent lately, and on which
+  lights (v3.46.0). Counts over 24h/7d, a dense 14-day series, worst offenders, and the
+  Hue **Zigbee channel** alongside — because the usual cause of a rising count is a WiFi
+  AP wandering onto it, and the two facts are only useful together. Config key
+  `repair_log` (internal — diagnostic history, not a setting). See `backend/CLAUDE.md`
+  "Delivery health"
 - `/api/devices/stale` — Hue + Govee devices missing 5+ days (config key `hue_missing_since`
   for Hue; Govee reuses `last_seen`). Drives the header's third badge, which is a
   deliberately different claim from "not responding" — see `backend/CLAUDE.md` "Gone N days"
