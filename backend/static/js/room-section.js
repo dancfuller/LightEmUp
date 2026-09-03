@@ -381,7 +381,16 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
 
   const applyRoomBrightness = (val) => {
     setRoomBrightness(val);
-    onControlRoom(name, { on: true, brightness: val });
+    // Dragging a level must never be what switches a room ON (v3.45.0). This used
+    // to send `on: true` alongside the level — so reaching for the slider to set
+    // up a room before lighting it lit it instead. With the room off, `defer`
+    // tells the backend to remember the level for the next power-on rather than
+    // sending anything at all.
+    if (!anyOn) {
+      onControlRoom(name, { brightness: val, defer: true });
+      return;
+    }
+    onControlRoom(name, { brightness: val });
   };
 
   const applyRoomColor = (r, g, b) => {

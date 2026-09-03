@@ -260,6 +260,40 @@ coroutine gets its own context copy) and normal concurrent UI requests are unaff
 **When you add a new bulk Hue path, collect `res["state"]`, set `_in_bulk_hue`, and hand the
 batch to `schedule_hue_verify`.**
 
+## Setting a level on an OFF light must not turn it on (v3.45.0)
+"Before turning a room on I wanted to set its brightness, so it comes on at that
+level. Moving the slider turned the light on instead."
+
+Two different causes wearing one symptom:
+- **The ROOM slider sent `on: true` alongside the level.** The app itself switched
+  the room on. That was ours, and it is simply gone.
+- **The per-light slider sent level only** — but a Govee LAN brightness command
+  wakes most devices, so at the wire level there is no "brightness while off" to
+  be had. Hue is gentler (this repo's own live test found most bulbs refuse a
+  level change while off), which also means the level would not have stuck anyway.
+
+So the only honest fix is to **send nothing at all**. `defer` on the three control
+requests means "the caller is showing this device as OFF": the level is stored in
+`config["pending_brightness"]` (device-keyed) and applied on the next power-on,
+then cleared.
+- **The caller reports the state; the backend owns the policy.** Deliberately not
+  inferred from `device_state` — that is recorded INTENT and can be stale, so a
+  light someone else switched on would get its dim silently swallowed. The client
+  renders live bridge/discovery state, so its view is the fresher one.
+- **An explicit level always supersedes a pending one** and clears it, so a scene
+  or a white preset can never be undone by a level chosen hours earlier.
+- **`control_room` needed the consume logic separately**, because it drives
+  `set_hue_light_state` / `govee_lan_*` directly instead of going through
+  `control_hue_light` / `control_govee`. Without that, "set the level, then turn
+  the room on" silently lost the level — caught by `test_defer.py`, not by reading.
+- Config-key checklist: declared in `DEFAULT_CONFIG`, listed in `_SETTING_INTERNAL`
+  (it is consumed within minutes and would be noise in a restore preview), not
+  room-keyed so `rename_room`/`delete_room` are unaffected, and added to
+  `_purge_hue_light` so a removed phantom leaves no orphan level.
+- Covered by `test_defer.py` (18 assertions), which asserts on the WIRE: nothing
+  is sent while off, the level lands on the next on for Hue, Govee and a whole
+  room, an on light still dims live, and an explicit level wins.
+
 ## Detecting that something ELSE changed a room (v3.16.0)
 **LightEmUp is not the only thing driving these lights**, and can't be. The Hue app, the
 Govee app and Google Home routines all touch them — and must: Govee's on-device engine is

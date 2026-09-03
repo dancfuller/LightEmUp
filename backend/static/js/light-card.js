@@ -313,7 +313,10 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
             onChange={(v) => {
               setBrightness(v);
               if (light.type === "hue") {
-                onControl(light, { brightness: Math.round(v * 254 / 100) });
+                // With the light off, remember the level for its next power-on
+                // instead of sending it — see room-section's applyRoomBrightness.
+                onControl(light, { brightness: Math.round(v * 254 / 100),
+                                   ...(light.state?.on ? {} : { defer: true }) });
               } else if (effectiveMode === "segments" && supportsSegments) {
                 // Segment mode: scale segment colors via the segments
                 // brightness endpoint so per-segment colors are preserved.
@@ -328,7 +331,8 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
               } else {
                 // Whole-light mode: standard LAN brightness. This clears
                 // server segment state via the control endpoint.
-                onControl(light, { brightness: v });
+                onControl(light, { brightness: v,
+                                   ...(light.state?.on ? {} : { defer: true }) });
               }
             }}
             color="#fbbf24" unit="%"

@@ -169,6 +169,10 @@ DEFAULT_CONFIG = {
     "govee_segment_mode": {},    # govee slug → bool: per-segment LIGHTNING. NOT scene
                                  # addressing (that's govee_scene_address above).
     "room_presets": {},          # room name → saved preset list (GET/POST /api/room-presets)
+    "pending_brightness": {},    # device key → level (%) chosen while the device was
+                                 # OFF, applied the next time it is turned on and
+                                 # then cleared (v3.45.0). Dragging a level must
+                                 # never be what switches a light on.
     "lightshows": {},            # room name → the room's ambient lightshow (v3.39.0):
                                  #   { enabled, pattern, interval_s, brightness, segments,
                                  #     source, palettes, colors, exclude, + per-pattern opts }
@@ -498,6 +502,31 @@ def flush_save_now():
         _save_handle = None
     if _save_pending:
         _flush_save()
+
+
+def pending_brightness(key: str) -> Optional[int]:
+    """A level the user set while this device was OFF, waiting for its next on."""
+    try:
+        v = (config.get("pending_brightness") or {}).get(key)
+        return int(v) if v is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def set_pending_brightness(key: str, pct: Optional[int]):
+    """Remember (or clear) a level for the next power-on.
+
+    Cleared whenever a real brightness reaches the device, so it can never
+    resurrect an old level after a scene or a preset has set a new one."""
+    store = config.setdefault("pending_brightness", {})
+    if pct is None:
+        if store.pop(key, None) is None:
+            return
+    else:
+        if store.get(key) == int(pct):
+            return
+        store[key] = int(pct)
+    schedule_save()
 
 
 def record_govee_state(ip: str, mac: str = None, **fields):
@@ -2733,6 +2762,12 @@ class HueLightStateRequest(BaseModel):
     light_id: str
     on: Optional[bool] = None
     brightness: Optional[int] = None  # 1-254
+    # "The caller is showing this device as OFF." A brightness-only command then
+    # STORES the level for the next power-on instead of sending it, because
+    # dragging a level must never be what switches a light on (v3.45.0). The
+    # caller reports the state and the backend owns the policy; the client's view
+    # is the fresher one, which is why this is reported rather than inferred.
+    defer: Optional[bool] = None
     hue: Optional[int] = None  # 0-65535
     saturation: Optional[int] = None  # 0-254
     color_temp: Optional[int] = None  # 153-500 (mirek)
@@ -2752,6 +2787,7 @@ class GoveeCommandRequest(BaseModel):
     color_temp_kelvin: Optional[int] = None
     raw_ct: Optional[bool] = None  # skip per-device CT calibration (used by the
                                    # calibration panel so it previews native output)
+    defer: Optional[bool] = None   # see HueLightStateRequest.defer
 
 class FlashRequest(BaseModel):
     """Identify a single device by flashing it. Exactly one of light_id (Hue)
@@ -2768,6 +2804,7 @@ class RoomConfig(BaseModel):
 class RoomStateRequest(BaseModel):
     room_name: str
     on: Optional[bool] = None
+    defer: Optional[bool] = None   # see HueLightStateRequest.defer
     brightness: Optional[int] = None
     r: Optional[int] = None
     g: Optional[int] = None
@@ -3132,11 +3169,25 @@ async def control_hue_light(req: HueLightStateRequest):
     if not ip or not username:
         raise HTTPException(400, "Hue Bridge not paired")
 
+    key = f"hue:{req.light_id}"
+    # Level-only, on a light the caller says is off: remember it, send nothing.
+    if req.defer and req.brightness is not None and req.on is None:
+        set_pending_brightness(key, round(req.brightness * 100 / 254))
+        return {"success": True, "deferred": True, "state": {}}
+
     state = {}
     if req.on is not None:
         state["on"] = req.on
     if req.brightness is not None:
         state["bri"] = max(1, min(254, req.brightness))
+        set_pending_brightness(key, None)     # a real level supersedes any pending one
+    elif req.on is True:
+        # Turning on with no level of its own: this is where a level chosen while
+        # the light was off finally lands.
+        want = pending_brightness(key)
+        if want is not None:
+            state["bri"] = max(1, min(254, round(want * 254 / 100)))
+            set_pending_brightness(key, None)
     if req.hue is not None:
         state["hue"] = req.hue
     if req.saturation is not None:
@@ -3604,6 +3655,21 @@ def _mark_room_not_applied(failed: dict):
 
 @app.post("/api/govee/control")
 async def control_govee(req: GoveeCommandRequest):
+    _key = gv_key_for_ip(req.ip, req.mac)
+    # Level-only, on a device the caller says is off: remember it, send nothing.
+    # This one matters more than Hue's — a Govee LAN brightness command wakes most
+    # devices, so there is no "brightness while off" to be had at the wire level.
+    if req.defer and req.brightness is not None and req.on is None:
+        set_pending_brightness(_key, max(0, min(100, int(req.brightness))))
+        return {"deferred": True, "results": {}}
+    if req.brightness is not None:
+        set_pending_brightness(_key, None)    # a real level supersedes any pending one
+    elif req.on is True:
+        want = pending_brightness(_key)
+        if want is not None:
+            req = req.model_copy(update={"brightness": want})
+            set_pending_brightness(_key, None)
+
     # Whole-device command on this IP overrides any razer segment state we
     # were keeping refreshed — cancel before sending so a stale refresh
     # doesn't fight the user's new command 45s from now. Also clear the
@@ -3740,6 +3806,15 @@ async def control_room(req: RoomStateRequest):
     room = rooms.get(req.room_name)
     if not room:
         raise HTTPException(404, f"Room '{req.room_name}' not found")
+    # A level dragged on a room the caller says is off is remembered for every
+    # member, not sent. Deliberately BEFORE stop_lightshow: nothing is being
+    # driven, so there is no show to retire.
+    if req.defer and req.brightness is not None and req.on is None:
+        for light_id in room.get("hue_light_ids", []):
+            set_pending_brightness(f"hue:{light_id}", int(req.brightness))
+        for slug in room.get("govee_devices", []):
+            set_pending_brightness(f"govee:{slug}", int(req.brightness))
+        return {"success": True, "deferred": True, "room": req.room_name}
     await stop_lightshow(req.room_name, "room controlled directly")
 
     ip = config.get("hue_bridge_ip")
@@ -3755,6 +3830,16 @@ async def control_room(req: RoomStateRequest):
                 state["on"] = req.on
             if req.brightness is not None:
                 state["bri"] = max(1, min(254, int(req.brightness * 254 / 100)))
+                set_pending_brightness(f"hue:{light_id}", None)
+            elif req.on is True:
+                # control_room drives the bridge DIRECTLY rather than through
+                # control_hue_light, so the pending level has to be consumed here
+                # too — otherwise "set the level, then turn the room on" silently
+                # loses the level. Caught by test_defer.
+                _want = pending_brightness(f"hue:{light_id}")
+                if _want is not None:
+                    state["bri"] = max(1, min(254, round(_want * 254 / 100)))
+                    set_pending_brightness(f"hue:{light_id}", None)
             if req.r is not None and req.g is not None and req.b is not None:
                 # Convert RGB to Hue's hue/sat (simplified)
                 h, s = _rgb_to_hue_sat(req.r, req.g, req.b)
@@ -3781,8 +3866,15 @@ async def control_room(req: RoomStateRequest):
         if req.on is not None:
             await govee_lan_turn(device_ip, req.on)
             govee_sent[device_ip] = (bool(req.on), req.room_name)
-        if req.brightness is not None:
-            await govee_lan_brightness(device_ip, req.brightness)
+        _bri = req.brightness
+        if _bri is not None:
+            set_pending_brightness(f"govee:{slug}", None)
+        elif req.on is True:
+            _bri = pending_brightness(f"govee:{slug}")
+            if _bri is not None:
+                set_pending_brightness(f"govee:{slug}", None)
+        if _bri is not None:
+            await govee_lan_brightness(device_ip, _bri)
         if req.r is not None and req.g is not None and req.b is not None:
             await govee_lan_color(device_ip, req.r, req.g, req.b)
         # Records INTENT, not outcome — deliberately. This is what power recovery
@@ -4135,7 +4227,8 @@ def _purge_hue_light(light_id: str) -> list[str]:
             room["hue_light_ids"] = kept
             touched.append(f"room:{room_name}")
 
-    for store in ("nicknames", "device_modes", "ct_correction", "ct_rgb"):
+    for store in ("nicknames", "device_modes", "ct_correction", "ct_rgb",
+                  "pending_brightness"):
         if (config.get(store) or {}).pop(key, None) is not None:
             touched.append(store)
     if (config.get("hue_missing_since") or {}).pop(lid, None) is not None:
@@ -5570,6 +5663,8 @@ def _export_envelope(include_credentials: bool = True) -> dict:
 # to "it's invisible".
 
 _SETTING_INTERNAL = {
+    "pending_brightness", # a level waiting for the next power-on; consumed in
+                          # minutes and meaningless in a year-old backup
     "device_state",       # last state we sent each device — rebuilt by use
     "segment_state",      # mirror of the in-memory segment store
     "hue_missing_since",  # a clock, reset the moment a light returns
