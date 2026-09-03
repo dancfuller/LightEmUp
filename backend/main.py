@@ -4727,15 +4727,30 @@ async def _run_scene_apply(req: SceneApplyRequest):
 
     has_cloud = any(d.groups for d in req.cloud)
     cloud_group_count = sum(len(d.groups) for d in req.cloud)
-    apply_total = len(req.hue) + len(req.govee_whole) + len(req.razer) + cloud_group_count
+    # The base seeds are counted in the SAME total now: they no longer run as a
+    # separate phase in front of everything else, so a separate counter would make
+    # the progress bar jump between two totals.
+    apply_total = (len(req.hue) + len(req.govee_whole) + len(req.razer)
+                   + cloud_group_count + len(req.base_seeds))
+    # Do any whole-device targets collide with a base seed? They shouldn't — a
+    # device is either painted per segment (seed + cloud groups) or as one color
+    # (govee_whole) — but if a payload ever says both, the two must not race, so
+    # that device's whole-command stays behind the seeds where it always was.
+    _seed_ips = {s.ip for s in req.base_seeds}
+    whole_collides = any(t.ip in _seed_ips for t in req.govee_whole)
 
     # Wall-clock estimate so the browser can show a countdown.
     cloud_time = (max(0, cloud_group_count - 1) * SCENE_SEG_STAGGER_S + 0.1) if cloud_group_count else 0
     govee_time = (max(0, len(req.govee_whole) - 1) * SCENE_GOVEE_STAGGER_S + 0.2) if req.govee_whole else 0
-    apply_time = max(cloud_time, govee_time, 0.05 if req.hue else 0)
     base_time = 0.6 if req.base_seeds else 0.0
     hold = SCENE_HOLD_S if has_cloud else 0.0
-    end_at_ms = int((time.time() + base_time + hold + apply_time) * 1000)
+    # Hue and whole-device Govee start IMMEDIATELY (v3.44.0), so the finish is the
+    # longest of the independent paths, not the sum of the phases. Only the segment
+    # work sits behind the seeds and the settle hold.
+    end_at_ms = int((time.time() + max(base_time + hold + cloud_time,
+                                       govee_time if not whole_collides
+                                       else base_time + hold + govee_time,
+                                       0.05 if req.hue else 0.0)) * 1000)
 
     done = 0
     prog_lock = asyncio.Lock()
@@ -4758,11 +4773,23 @@ async def _run_scene_apply(req: SceneApplyRequest):
                         label=label, device=device, active=True, end_at=end_at_ms)
 
     try:
-        # ── Phase 1: fast whole-device base color (parallel LAN) ──
-        if req.base_seeds:
-            done = 0
-            _scene_emit(scope, room, phase="resetting", total=len(req.base_seeds), done=0,
-                        label="Setting base color…", active=True, end_at=end_at_ms)
+        done = 0
+        hue_expect = {}   # filled by do_hue; recorded for later divergence checks
+        _scene_emit(scope, room, phase="applying", total=apply_total, done=0,
+                    active=True, end_at=end_at_ms)
+
+        async def do_seeds():
+            """Whole-device base color for the cloud_v2 strips, then the settle hold.
+
+            This used to run as a blocking PHASE in front of everything, which meant
+            a room with any segmented device sat visibly dead for ~2.6s before its
+            Hue lights moved — even though a Hue bulb owes a Govee strip nothing.
+            The seed exists so a strip reads as the scene immediately instead of
+            flashing white while the rate-limited segment calls trickle in, and the
+            hold exists to let that base color settle. **Only the segment work
+            depends on either.**"""
+            if not req.base_seeds:
+                return
 
             async def seed(s: SceneBaseSeed):
                 try:
@@ -4771,17 +4798,12 @@ async def _run_scene_apply(req: SceneApplyRequest):
                         color_temp_kelvin=s.color_temp_kelvin, brightness=s.brightness))
                 except Exception as e:
                     log.warning("scene base seed failed %s: %s", s.ip, e)
-                await tick("resetting", len(req.base_seeds), "Setting base color…",
+                await tick("applying", apply_total, "Setting base color…",
                            device=gv_key_for_ip(s.ip, s.mac))
 
             await asyncio.gather(*(seed(s) for s in req.base_seeds))
             if has_cloud:
                 await asyncio.sleep(hold)
-
-        # ── Phase 2: hue + govee whole + razer + cloud segments ──
-        done = 0
-        hue_expect = {}   # filled by do_hue; recorded for later divergence checks
-        _scene_emit(scope, room, phase="applying", total=apply_total, done=0, active=True, end_at=end_at_ms)
 
         async def do_hue():
             sent = {}
@@ -4850,7 +4872,25 @@ async def _run_scene_apply(req: SceneApplyRequest):
                     await tick("applying", apply_total, label,
                               device=gv_key_for_ip(d.ip, d.device_mac))
 
-        await asyncio.gather(do_hue(), do_govee_whole(), do_razer(), do_cloud())
+        # THE ORDERING THAT MATTERS. The three transports are independent — a Hue
+        # command is Zigbee, a whole-device Govee command is a LAN datagram, and a
+        # segment change is a rate-limited cloud call — and phase 2 already ran all
+        # of them concurrently. What did NOT was the seed phase in front of them:
+        # everything waited on Govee work that only the segments needed.
+        #
+        # So the fast, independent paths start NOW, and only razer + cloud wait for
+        # the seeds and the hold. For the Living Room that is ~2.6s off the time to
+        # first light, and the same 2.6s off the Hue read-back — `schedule_hue_verify`
+        # fires from inside do_hue, so verification moves earlier by exactly as much.
+        early = [asyncio.ensure_future(do_hue())]
+        if not whole_collides:
+            early.append(asyncio.ensure_future(do_govee_whole()))
+        deferred = [do_razer(), do_cloud()]
+        if whole_collides:
+            deferred.append(do_govee_whole())
+
+        await do_seeds()
+        await asyncio.gather(*early, *deferred)
 
         # A device-scoped apply records NOTHING (v3.34.0). "Now showing" is a
         # whole-room claim, and one hexa going rainbow doesn't make the room

@@ -539,6 +539,46 @@ not in the browser (v2.14.0):
   refresh is emitted at the end. One task per room (`_scene_tasks`); a new apply
   cancels the previous. `POST /api/scenes/room-apply/cancel` cancels by room.
 
+### Three transports, one critical path (v3.44.0)
+A room apply drives **three independent transports**, and they are not remotely
+alike: a Hue command is Zigbee via the bridge (milliseconds), a whole-device Govee
+command is a LAN datagram (milliseconds, fire-and-forget), and a segment change is
+a rate-limited cloud call (~1.8s each, per-ACCOUNT limit). None of the three gates
+either of the others.
+
+Phase 2 already ran all of them under one `asyncio.gather`. **The base-seed phase
+in front of them did not.** Seeds are whole-device Govee commands that exist only
+so a segmented strip reads as the scene while its rate-limited segment calls
+trickle in, followed by `SCENE_HOLD_S` (2s) to let that settle — and **every Hue
+light in the room waited behind both**, for work none of them depend on. A palette
+on the Living Room did nothing visible for ~2.6s and then moved all at once.
+
+Now `do_hue()` and `do_govee_whole()` start at t=0 as tasks, `do_seeds()` runs as a
+coroutine, and only razer + cloud wait for it. Measured in `test_parallel.py`:
+first Hue write `t+0.000s`, first segment call `t+0.423s` (with the hold scaled to
+0.4 for the test).
+
+- **Verification moves earlier by exactly the same amount, for free.**
+  `schedule_hue_verify` fires from inside `do_hue`, so the Hue read-back now lands
+  ~2.6s sooner — before the first segment call, rather than after the whole
+  13-second segment run. That was the point of the exercise.
+- **The progress counter had to merge.** Seeds counted into their own `done` under
+  a `"resetting"` phase; once the phases overlap, two counters make the bar jump
+  between totals. There is one phase (`"applying"`) and one total that includes the
+  seeds. `"resetting"` no longer appears — `color-mode.js` only ever displayed it.
+- **`end_at_ms` is a max, not a sum.** The finish is the longest independent path
+  (`base + hold + cloud_time`, `govee_time`, Hue), which is also a more honest
+  countdown than the old sum.
+- **The one collision guard:** a device should never be in `base_seeds` AND
+  `govee_whole` — it is either painted per segment or as one color — but if a
+  payload ever says both, `whole_collides` keeps that whole-device command behind
+  the hold where it always was, so the two can't race. Covered by a test.
+
+**The wider point, worth keeping:** when work fans out over transports with
+order-of-magnitude different latencies, the slow one must not set the pace for the
+fast ones. Check for a sequential preamble before assuming a `gather` means
+parallel.
+
 ### `scope` — the same apply, narrowed to one device (v3.34.0)
 The endpoint was never really room-scoped: the payload is fully resolved per device and
 `room` is only a label plus a task key. `SceneApplyRequest.scope` makes that explicit so
