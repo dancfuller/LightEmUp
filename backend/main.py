@@ -1054,8 +1054,9 @@ async def _apply_room_white(room_name: str, kelvin: int, brightness_pct: int,
     # the backend doesn't need discovery's color math just for a label.
     record_room_applied(room_name, "white", _white_label(kelvin), kelvin=kelvin,
                         source=source, source_detail=source_detail, expect=sent)
-    if source == "schedule":
-        schedule_hue_late_verify(sent, source_detail or "a schedule")
+    schedule_hue_late_verify(
+        sent, source_detail or ("a schedule" if source == "schedule" else "a room preset"),
+        delay=HUE_LATE_VERIFY_S if source == "schedule" else HUE_APPLY_VERIFY_S)
 
 
 async def _apply_room_color(room_name: str, r: int, g: int, b: int, brightness_pct: int,
@@ -1088,8 +1089,9 @@ async def _apply_room_color(room_name: str, r: int, g: int, b: int, brightness_p
     schedule_govee_verify(govee_sent)
     record_room_applied(room_name, "color", "Solid color", swatches=[[r, g, b]],
                         source=source, source_detail=source_detail, expect=sent)
-    if source == "schedule":
-        schedule_hue_late_verify(sent, source_detail or "a schedule")
+    schedule_hue_late_verify(
+        sent, source_detail or ("a schedule" if source == "schedule" else "a room preset"),
+        delay=HUE_LATE_VERIFY_S if source == "schedule" else HUE_APPLY_VERIFY_S)
 
 
 # ─── Palette actions (v3.17.0) ───────────────────────────────────────────────
@@ -3190,6 +3192,16 @@ HUE_VERIFY_BRI_TOLERANCE = 3   # bridge rounds brightness; don't chase 1-2 off
 # A SECOND look, minutes later. See schedule_hue_late_verify for why 0.6s can't
 # see a silent Zigbee drop.
 HUE_LATE_VERIFY_S = 150
+# A manual apply gets a SHORTER second look: you are standing there watching, so
+# a light that missed should be fixed in seconds, and a short window barely
+# overlaps "actually, I wanted that lamp off".
+HUE_APPLY_VERIFY_S = 25
+# How far the reported color may sit from what we asked before the late pass calls
+# it a MISS rather than gamut clamping. Observed clamps on this bridge run to
+# ~0.08 (Front Door: asked [0.6128,0.3524], settled [0.6768,0.3094]); the miss
+# that prompted this was 0.43. 0.15 separates them with room to spare, and the
+# same ceiling stops _reconcile_expectations absorbing a miss as if it were a clamp.
+HUE_XY_REPAIR_TOL = 0.15
 
 # Verification is COALESCED: callers register expectations here rather than each
 # spawning its own read-back, and a single drain task services them. Without this,
@@ -3214,7 +3226,8 @@ def schedule_hue_verify(expectations: dict):
         _hue_verify_task = asyncio.create_task(_hue_verify_drain())
 
 
-def schedule_hue_late_verify(expectations: dict, reason: str = ""):
+def schedule_hue_late_verify(expectations: dict, reason: str = "",
+                             delay: Optional[float] = None):
     """A SECOND verify pass, ~2.5 minutes after the first. For applies nobody is
     watching — i.e. schedules.
 
@@ -3245,10 +3258,14 @@ def schedule_hue_late_verify(expectations: dict, reason: str = ""):
 
     async def _later():
         try:
-            await asyncio.sleep(HUE_LATE_VERIFY_S)
+            # Resolved HERE, not as a default argument: a default binds the
+            # constant at def time, so anything that overrides HUE_LATE_VERIFY_S
+            # later — a test, a future setting — would be silently ignored.
+            await asyncio.sleep(HUE_LATE_VERIFY_S if delay is None else delay)
             log.info("Hue late verify: re-checking %d light(s) from %s",
                      len(expectations), reason or "a scheduled apply")
-            await _hue_verify_repair({str(k): v for k, v in expectations.items()})
+            await _hue_verify_repair({str(k): v for k, v in expectations.items()},
+                                     compare_color=True)
         except asyncio.CancelledError:
             pass
         except Exception:
@@ -3325,6 +3342,16 @@ def _reconcile_expectations(actual: dict) -> bool:
             cxy = cur.get("xy")
             if "xy" in sent and mode == "xy" and isinstance(cxy, (list, tuple)) and len(cxy) == 2:
                 settled = [round(float(cxy[0]), 4), round(float(cxy[1]), 4)]
+                # Reconciliation exists for CLAMPING, which is small. A large gap
+                # is not a clamp, it is a command that never landed — and baking it
+                # in would erase the only evidence of the miss, leaving both the
+                # repair and "Changed since" blind. The brightness guard above
+                # catches most of these; this catches the rest.
+                try:
+                    if math.dist([float(v) for v in sent["xy"]], settled) > HUE_XY_REPAIR_TOL:
+                        continue
+                except (TypeError, ValueError):
+                    continue
                 if settled != list(sent["xy"]):
                     log.info("Expectation reconciled: light %s asked xy %s, bridge settled %s",
                              light_id, sent["xy"], settled)
@@ -3337,7 +3364,7 @@ def _reconcile_expectations(actual: dict) -> bool:
     return changed
 
 
-async def _hue_verify_repair(expectations: dict):
+async def _hue_verify_repair(expectations: dict, compare_color: bool = False):
     """expectations: {light_id: state_dict_as_sent}. Re-sends to any light whose
     reported state disagrees with what we asked for. Assumes the caller has
     already waited for the mesh to settle.
@@ -3375,6 +3402,30 @@ async def _hue_verify_repair(expectations: dict):
             if want_bri is not None and cur.get("on") and want_on is not False:
                 if abs(int(cur.get("brightness") or 0) - int(want_bri)) > HUE_VERIFY_BRI_TOLERANCE:
                     repaired.append(light_id)
+                    continue
+            # COLOR, but only for a LATE pass and only at a distance no clamp
+            # reaches (HUE_XY_REPAIR_TOL). The fast 0.6s pass must never do this:
+            # the bridge answers from its own optimistic model that early, so the
+            # comparison would be against our own echo and prove nothing — and a
+            # tight color check there is exactly the re-send-forever trap that kept
+            # color out of this function in the first place.
+            #
+            # A dropped command leaves the light on the PREVIOUS scene's color,
+            # which is nowhere near what we asked. Front Door Light, 2026-09-03:
+            # asked [0.1597, 0.2084], still showing [0.5172, 0.4457] from the
+            # previous apply — 0.43 away, while every light that took the command
+            # reported its color back to four decimal places exactly.
+            if compare_color and cur.get("on") and want_on is not False:
+                want_xy, cur_xy = sent.get("xy"), cur.get("xy")
+                if (isinstance(want_xy, (list, tuple)) and len(want_xy) == 2
+                        and isinstance(cur_xy, (list, tuple)) and len(cur_xy) == 2
+                        and cur.get("color_mode") == "xy"):
+                    try:
+                        if math.dist([float(v) for v in want_xy],
+                                     [float(v) for v in cur_xy]) > HUE_XY_REPAIR_TOL:
+                            repaired.append(light_id)
+                    except (TypeError, ValueError):
+                        pass
 
         for light_id in repaired:
             log.info("Hue verify: light %s didn't take — re-sending", light_id)
@@ -4830,10 +4881,15 @@ async def _run_scene_apply(req: SceneApplyRequest):
         # that the expectation is stored, which pins each color to whatever the
         # bridge settled on (and re-checks the lights while it's there).
         schedule_hue_verify(hue_expect)
-        # Scheduled looks fire with nobody watching, and the fast verify above is
-        # blind to a silent mesh drop — see schedule_hue_late_verify.
-        if req.source == "schedule":
-            schedule_hue_late_verify(hue_expect, req.source_detail or "a schedule")
+        # The fast verify above is blind to a silent mesh drop, so take a second
+        # look — for EVERY whole-room apply, not just scheduled ones. A palette
+        # applied by hand can lose a light just as easily; that is what happened on
+        # 2026-09-03, and the user was standing right there watching it not happen.
+        # A manual apply gets the short window; a schedule gets the long one.
+        schedule_hue_late_verify(
+            hue_expect, req.source_detail or ("a schedule" if req.source == "schedule"
+                                              else "an apply"),
+            delay=HUE_LATE_VERIFY_S if req.source == "schedule" else HUE_APPLY_VERIFY_S)
         _scene_emit(scope, room, phase="done", total=apply_total, done=apply_total, label="", active=False)
     except asyncio.CancelledError:
         _scene_emit(scope, room, phase="canceled", active=False, label="")

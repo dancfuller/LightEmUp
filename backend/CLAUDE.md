@@ -200,6 +200,30 @@ comparison rules and the unreachable-skip are identical.
 - **Both front-door bulbs are `AE 282 C` — third-party Zigbee, not Philips.** They
   are the two lights that keep producing these reports. Software can recover a
   dropped command; it cannot make a flaky bulb reliable.
+- **EVERY whole-room apply arms it now, not just scheduled ones (v3.42.3).** A
+  manual palette lost a light on 2026-09-03 with the user watching. Manual applies
+  get `HUE_APPLY_VERIFY_S` (25s) — long enough for the bridge to stop echoing us,
+  short enough not to fight someone who changed their mind — and schedules keep the
+  150s window.
+- **The late pass compares COLOR; the fast one still must not (v3.42.3).** That
+  case had the light ON at a plausible brightness and simply wearing the PREVIOUS
+  scene's color: asked `[0.1597, 0.2084]`, still showing `[0.5172, 0.4457]` from the
+  apply before it. `on`/`bri` alone can miss that entirely. `compare_color=True`
+  uses `HUE_XY_REPAIR_TOL` (0.15), chosen from measurements on this bridge: every
+  light that TOOK the command reported its color back to four decimals **exactly**,
+  the worst observed gamut clamp is ~0.08, and this miss was 0.43. The fast 0.6s
+  pass stays color-blind on purpose — the bridge is still echoing our own command
+  back at that point, so the comparison would prove nothing, and a tight color check
+  there is the re-send-forever trap that kept color out of this function originally.
+- **`_reconcile_expectations` now refuses to absorb a miss** (same tolerance). It
+  exists for CLAMPING, which is small; rewriting the expectation to a wildly
+  different color would erase the only evidence of the drop and leave both the
+  repair and "Changed since" blind. The brightness guard catches most of these —
+  it is what saved the evidence on 2026-09-03 — and the distance guard catches a
+  miss that happens to land on the right brightness.
+- **`delay` is resolved at CALL time, not as a default argument.** A default binds
+  the constant at import, so overriding `HUE_LATE_VERIFY_S` afterwards is silently
+  ignored. The test caught exactly that.
 - Covered by `test_late_verify.py` (9 assertions), whose fake bridge lies
   optimistically and then tells the truth. **Its state dicts use `brightness`, not
   `bri`** — `get_hue_lights` normalizes the raw v1 shape and the repair reads the
