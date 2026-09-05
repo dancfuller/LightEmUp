@@ -3507,17 +3507,44 @@ async def _hue_verify_repair(expectations: dict, compare_color: bool = False):
             # asked [0.1597, 0.2084], still showing [0.5172, 0.4457] from the
             # previous apply — 0.43 away, while every light that took the command
             # reported its color back to four decimal places exactly.
+            #
+            # This check used to require `color_mode == "xy"`, which silently
+            # excused the single most important failure: a light that dropped
+            # back to WHITE. 2026-09-04, Living Room — a palette went to nine
+            # lights, and the five AE 280 C bulbs (16/17/18/19/22) all landed on
+            # colormode `ct` at 370 mired (2700K) while the four Philips and
+            # AE 282 C bulbs took their colors to four decimal places. All five
+            # reported the identical xy [0.4576, 0.41]; a lost command leaves each
+            # bulb on its own previous color, so identical values across five
+            # bulbs is a fallback, not radio loss. The verify read all nine, hit
+            # the mode guard, and passed over exactly the five that were wrong.
+            #
+            # `_hue_state_matches` — which drives the "diverged" badge — has always
+            # called this case out correctly ("our color scene replaced by a
+            # white — the common case"). The two now agree: the function that
+            # DETECTS the problem and the one that can FIX it must not reach
+            # opposite conclusions from the same two states.
             if compare_color and cur.get("on") and want_on is not False:
                 want_xy, cur_xy = sent.get("xy"), cur.get("xy")
-                if (isinstance(want_xy, (list, tuple)) and len(want_xy) == 2
-                        and isinstance(cur_xy, (list, tuple)) and len(cur_xy) == 2
-                        and cur.get("color_mode") == "xy"):
-                    try:
-                        if math.dist([float(v) for v in want_xy],
-                                     [float(v) for v in cur_xy]) > HUE_XY_REPAIR_TOL:
-                            repaired.append((light_id, "color"))
-                    except (TypeError, ValueError):
-                        pass
+                mode = cur.get("color_mode")
+                if isinstance(want_xy, (list, tuple)) and len(want_xy) == 2:
+                    if mode == "ct":
+                        # We asked for a color and it is showing a white. No
+                        # tolerance applies — the bulb is not in color mode at all.
+                        repaired.append((light_id, "white"))
+                    elif (mode == "xy" and isinstance(cur_xy, (list, tuple))
+                            and len(cur_xy) == 2):
+                        try:
+                            if math.dist([float(v) for v in want_xy],
+                                         [float(v) for v in cur_xy]) > HUE_XY_REPAIR_TOL:
+                                repaired.append((light_id, "color"))
+                        except (TypeError, ValueError):
+                            pass
+                    # Any other mode (hs, or no xy reported) stays unjudged: there
+                    # is nothing to compare against, and guessing would re-send
+                    # forever. Only `compare_color` callers reach here, and only
+                    # the LATE pass sets it — so a stubborn light costs one extra
+                    # re-send per apply, never a loop.
 
         for light_id, why in repaired:
             log.info("Hue verify: light %s didn't take (%s) — re-sending", light_id, why)

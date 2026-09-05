@@ -294,6 +294,59 @@ then cleared.
   is sent while off, the level lands on the next on for Hue, Govee and a whole
   room, an on light still dims live, and an explicit level wins.
 
+### A light that fell back to WHITE (v3.46.1)
+
+The color check in `_hue_verify_repair` used to require `color_mode == "xy"`,
+which quietly excused the single most important failure there is: a bulb that
+dropped out of color mode altogether.
+
+**2026-09-04, Living Room.** A palette went to nine lights. The four Philips
+LCT014 / AE 282 C bulbs took their colors back to four decimal places. The five
+**AE 280 C** bulbs (16/17/18/19/22) all landed on `colormode: ct` at 370 mired —
+2700K — and all reported the *identical* xy `[0.4576, 0.41]`. That identity is
+the tell: a lost command leaves each bulb on its own previous color, so five
+bulbs agreeing exactly is a **fallback**, not radio loss. The late verify read
+all nine lights, hit the mode guard, and passed over exactly the five that were
+wrong. `/api/rooms/status` had it right the whole time — *diverged, 5 changed /
+4 matched* — because `_hue_state_matches` has always judged this case correctly
+and even labels it "the common case".
+
+Two functions in this file compare an expectation against bridge state. They
+must not reach opposite conclusions:
+
+| state | `_hue_state_matches` (detects) | `_hue_verify_repair` (fixes) |
+|---|---|---|
+| asked xy, mode `ct` | changed | **now repairs** (was: skipped) |
+| asked xy, mode `xy`, far | changed | repairs |
+| asked xy, mode `hs` | can't tell | leaves alone |
+
+The fallback is recorded as its own kind, **`white`**, rather than as `color`.
+The distinction is diagnostic: a wrong color suggests a lost command and points
+at the radio, while a fallback to white points at the *bulb* — third-party
+firmware that won't hold an xy. Keeping them apart is what lets the delivery
+health card tell those two stories apart.
+
+**This cannot loop.** Only `compare_color=True` reaches the check and only the
+LATE pass sets it, so a stubborn bulb costs one extra re-send per apply.
+
+### A 200 from the bridge is not a yes (v3.46.1)
+
+`set_hue_light_state` returned `resp.status_code == 200`. But the Hue v1 API
+answers 200 and reports per-**parameter** outcomes in the body, one entry per key
+sent:
+
+```json
+[{"success": {"/lights/16/state/on": true}},
+ {"error": {"type": 6, "address": "/lights/16/state/xy",
+            "description": "parameter, xy, not available"}}]
+```
+
+So a bulb refusing the one parameter we care about looked like a clean success,
+and the refusal was invisible to the verify, to "Now showing", and to the
+delivery-health count. It now reads the body, prints what was rejected, and
+returns False. An unparseable or unexpected body falls back to the status code
+alone — never worse than the old behavior.
+
 ## Delivery health — a rolling count of commands that didn't take (v3.46.0)
 
 The failure this app fights hardest is **invisible by construction**. The Hue bridge

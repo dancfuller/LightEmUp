@@ -52,6 +52,10 @@ function DeliveryHealthCard({ isMobile }) {
   const KIND_WORDS = {
     on: "wouldn't switch", power: "wouldn't switch",
     brightness: "wrong level", color: "wrong color",
+    // Distinct from "wrong color" on purpose: a bulb that dropped to white
+    // asked for a color and isn't in color mode at all, which points at the
+    // bulb (third-party firmware) rather than at the radio.
+    white: "fell back to white",
     unreachable: "off the network",
   };
   const kindWords = Object.entries(

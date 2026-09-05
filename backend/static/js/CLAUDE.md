@@ -853,6 +853,12 @@ the other.
 omitted, because a gap in a sparse chart reads as "no data" when it means "nothing went
 wrong that day". Bar heights are normalized against the peak, floored at 2px.
 
+The kinds it renders are `on` / `power` (wouldn't switch), `brightness` (wrong
+level), `color` (wrong color), `white` (**fell back to white** — v3.46.1, a bulb
+that left color mode entirely, which points at the bulb rather than the radio)
+and `unreachable`. A kind with no word falls through as its raw key, so a new
+backend kind degrades rather than breaking.
+
 **`by_kind` is summed by PHRASE, not by key.** A Hue light that wouldn't switch (`on`)
 and a Govee one that wouldn't (`power`) are the same fact to a reader and share a
 phrase, so tallying the raw keys printed *"7 wouldn't switch · 1 wouldn't switch"*.

@@ -184,13 +184,43 @@ async def get_hue_groups(ip: str, username: str) -> list[dict]:
 
 
 async def set_hue_light_state(ip: str, username: str, light_id: str, state: dict) -> bool:
-    """Set the state of a Hue light. state can include on, bri, hue, sat, ct, etc."""
+    """Set the state of a Hue light. state can include on, bri, hue, sat, ct, etc.
+
+    **The status code is not the answer.** The Hue v1 API answers 200 and then
+    reports per-PARAMETER outcomes in the body, one entry per key sent:
+
+        [{"success": {"/lights/16/state/on": true}},
+         {"error": {"type": 6, "address": "/lights/16/state/xy",
+                    "description": "parameter, xy, not available"}}]
+
+    So a bulb that refuses the very parameter we care about looked like a clean
+    success for the life of this function, and the refusal was invisible
+    everywhere downstream. Read the body, log what was rejected, and report it.
+
+    Falls back to the status code alone if the body isn't the shape we expect —
+    never worse than the old behavior."""
     async with httpx.AsyncClient(timeout=5.0, verify=False) as client:
         resp = await client.put(
             f"http://{ip}/api/{username}/lights/{light_id}/state",
             json=state
         )
-        return resp.status_code == 200
+        if resp.status_code != 200:
+            return False
+        try:
+            body = resp.json()
+        except Exception:
+            return True          # unparseable body, but the bridge said 200
+        if not isinstance(body, list):
+            return True
+        errors = [item["error"] for item in body
+                  if isinstance(item, dict) and isinstance(item.get("error"), dict)]
+        for err in errors:
+            # print, not a logger: this module has no logging setup and every
+            # other diagnostic here is a print. systemd captures stdout, so it
+            # still lands in journalctl next to everything else.
+            print(f"[Hue] light {light_id} rejected "
+                  f"{err.get('address') or '?'}: {err.get('description') or err}")
+        return not errors
 
 
 # ─── Govee LAN Discovery ────────────────────────────────────────────────────
