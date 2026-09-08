@@ -294,6 +294,63 @@ then cleared.
   is sent while off, the level lands on the next on for Hue, Govee and a whole
   room, an on light still dims live, and an explicit level wins.
 
+## The color check rides with the Hue writes, not the whole apply (v3.47.0)
+
+Reported: *"some lights didn't change today"* — followed by a household
+explanation that they "fix themselves if you wait long enough", and a re-apply
+that was interrupted by the repair finally firing.
+
+Since v3.44.0 the three transports have been APPLIED concurrently — a Hue command
+is Zigbee, a whole-device Govee command is a LAN datagram, a segment change is a
+rate-limited cloud call. But only the *fast* on/bri verify moved with them. The
+**color-aware** pass was still scheduled after `gather(early, deferred)`, so it
+waited out every segment call before looking at bulbs that had finished in under
+a second.
+
+Living Room, 2026-09-04:
+
+```
+21:10:17  Hue writes complete (9 lights, <1s)
+21:10:19  ── cloud_v2 segment calls begin ──
+21:10:43  ── segments complete (26s) ──
+21:10:43  apply ends → schedule_hue_late_verify(delay=25)
+21:11:08  color check finally runs
+```
+
+**51 seconds, fifty of them waiting on strips a Zigbee bulb owes nothing.** For a
+schedule it was worse: 26 + 150 = ~176s.
+
+The fix is one line in the right place — `do_hue()` now schedules the color check
+itself, next to the `schedule_hue_verify` that was already there. The delay is
+`HUE_COLOR_VERIFY_S` (8s) and it is timed from the Hue writes, so it is
+**independent of how slow the Govee half of the room is**. `_apply_room_white`
+and `_apply_room_color` got the same treatment; they have no slow phase, so their
+25s was simply an arbitrary wait.
+
+**Why 8s.** Comfortably past the ~0.6s window where the bridge still answers from
+its own optimistic model (the reason the fast pass must never judge color), and
+well inside the span over which a bridge read has been observed to reflect the
+truth — the 2026-09-04 miss was already visible at 27s. Short enough that it
+cannot plausibly fight a deliberate change: nobody applies a scene and then
+switches one lamp off within eight seconds meaning it to stick.
+
+**The old passes remain as backstops**, not as the primary mechanism: 25s after a
+manual apply, 150s after a schedule. They also carry `_reconcile_expectations`,
+which needs the `room_last_applied` record that only exists once the apply
+finishes. If 8s ever proves too eager, the symptom is visible for free — the
+delivery-health count will show color repairs that the backstop then finds were
+never wrong.
+
+### The evening hole in the delivery chart (v3.47.0)
+
+`by_day` bucketed each event by the date in *its own* timezone while the axis was
+built from LOCAL dates. Since `_now_iso()` writes UTC, every repair after 20:00
+EDT — when UTC has already rolled over — got a key one day ahead of anything the
+axis rendered, and **vanished from the chart** while still counting toward the
+24h/7d totals. The number and the picture disagreed, in the evening, which is
+when the lights are actually used. Events are now converted with `.astimezone()`
+before bucketing, so both sides of the comparison are in the same frame.
+
 ### A light that fell back to WHITE (v3.46.1)
 
 The color check in `_hue_verify_repair` used to require `color_mode == "xy"`,

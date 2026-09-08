@@ -1124,6 +1124,13 @@ async def _apply_room_white(room_name: str, kelvin: int, brightness_pct: int,
     # the backend doesn't need discovery's color math just for a label.
     record_room_applied(room_name, "white", _white_label(kelvin), kelvin=kelvin,
                         source=source, source_detail=source_detail, expect=sent)
+    # Govee here is a LAN datagram, not a rate-limited cloud call, so nothing
+    # above delayed this — but there is still no reason to wait 25s to look at a
+    # bulb that was written a second ago. See HUE_COLOR_VERIFY_S.
+    schedule_hue_late_verify(
+        sent, source_detail or ("a schedule" if source == "schedule" else "a room preset"),
+        delay=HUE_COLOR_VERIFY_S)
+    # ...and a longer backstop, for a light that takes the command and then drifts.
     schedule_hue_late_verify(
         sent, source_detail or ("a schedule" if source == "schedule" else "a room preset"),
         delay=HUE_LATE_VERIFY_S if source == "schedule" else HUE_APPLY_VERIFY_S)
@@ -1159,6 +1166,13 @@ async def _apply_room_color(room_name: str, r: int, g: int, b: int, brightness_p
     schedule_govee_verify(govee_sent)
     record_room_applied(room_name, "color", "Solid color", swatches=[[r, g, b]],
                         source=source, source_detail=source_detail, expect=sent)
+    # Govee here is a LAN datagram, not a rate-limited cloud call, so nothing
+    # above delayed this — but there is still no reason to wait 25s to look at a
+    # bulb that was written a second ago. See HUE_COLOR_VERIFY_S.
+    schedule_hue_late_verify(
+        sent, source_detail or ("a schedule" if source == "schedule" else "a room preset"),
+        delay=HUE_COLOR_VERIFY_S)
+    # ...and a longer backstop, for a light that takes the command and then drifts.
     schedule_hue_late_verify(
         sent, source_detail or ("a schedule" if source == "schedule" else "a room preset"),
         delay=HUE_LATE_VERIFY_S if source == "schedule" else HUE_APPLY_VERIFY_S)
@@ -3288,6 +3302,27 @@ HUE_LATE_VERIFY_S = 150
 # a light that missed should be fixed in seconds, and a short window barely
 # overlaps "actually, I wanted that lamp off".
 HUE_APPLY_VERIFY_S = 25
+# The FIRST color-aware look, timed from the end of the HUE WRITES rather than
+# from the end of the whole apply (v3.47.0).
+#
+# This is the number that actually mattered. The three transports are
+# independent and have been applied concurrently since v3.44.0, but the
+# color-aware verify was still scheduled after `gather(early, deferred)` — so it
+# waited on the rate-limited Govee segment calls, which a Zigbee bulb owes
+# nothing. Living Room, 2026-09-04: Hue writes finished at 21:10:17, the cloud
+# segment calls ran to 21:10:43, and the color check landed at 21:11:08. Fifty-one
+# seconds, of which fifty were spent waiting on strips. Long enough that the
+# household explanation for a missed light had become "wait, it'll fix itself".
+#
+# 8s is comfortably past the ~0.6s window where the bridge still answers from its
+# own optimistic model (which is why the fast pass must never judge color), and
+# well inside the span over which a bridge read has been observed to reflect the
+# truth — the 2026-09-04 miss was already visible at 27s. It is also short enough
+# that it cannot plausibly fight a deliberate change: nobody applies a scene and
+# then switches one lamp off within eight seconds meaning it to stick.
+#
+# The later passes remain as BACKSTOPS, not as the primary mechanism.
+HUE_COLOR_VERIFY_S = 8
 # How far the reported color may sit from what we asked before the late pass calls
 # it a MISS rather than gamut clamping. Observed clamps on this bridge run to
 # ~0.08 (Front Door: asked [0.6128,0.3524], settled [0.6768,0.3094]); the miss
@@ -4427,7 +4462,15 @@ async def delivery_health():
             if e["at"] > d["last_at"]:
                 d["last_at"] = e["at"]
         try:
-            by_day[datetime.fromisoformat(e["at"]).date().isoformat()] += 1
+            # `.astimezone()` FIRST. Events are written in UTC (`_now_iso`) but the
+            # axis below is built from LOCAL dates, so bucketing by the event's own
+            # date put every repair after 20:00 EDT — when UTC has already rolled
+            # over — onto a key one day ahead of anything the axis renders. Those
+            # repairs vanished from the chart entirely while still counting toward
+            # the 24h/7d totals, which is the worst kind of wrong: the number and
+            # the picture disagreed, in the evening, which is when the lights are
+            # actually used.
+            by_day[datetime.fromisoformat(e["at"]).astimezone().date().isoformat()] += 1
         except (ValueError, TypeError, KeyError):
             pass
 
@@ -5062,6 +5105,14 @@ async def _run_scene_apply(req: SceneApplyRequest):
             finally:
                 _in_bulk_hue.set(False)
             schedule_hue_verify(sent)
+            # The color-aware look rides HERE, with the Hue writes it belongs to —
+            # NOT at the end of the apply, where it used to wait out every
+            # rate-limited segment call before checking bulbs that had finished
+            # in under a second. See HUE_COLOR_VERIFY_S.
+            schedule_hue_late_verify(
+                sent, (req.source_detail or ("a schedule" if req.source == "schedule"
+                                             else "an apply")) + " (first color check)",
+                delay=HUE_COLOR_VERIFY_S)
             hue_expect.update(sent)   # kept so a refresh can detect external changes
 
         async def do_govee_whole():
