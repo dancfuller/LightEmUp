@@ -5355,6 +5355,10 @@ class RoomColorStateRequest(BaseModel):
     selected_team: Optional[str] = None
     selected_ncaa: Optional[str] = None
     selected_flag: Optional[str] = None
+    # Colors left out of a Teams/NCAA/Flags scene (v3.48.0):
+    # {kind: {name, idx: [indices into the preset's colors]}}. Keyed by the name
+    # it was made against, so it can't leak onto a different team or flag.
+    preset_excluded: Optional[dict] = None
     # Per-mode settings so every scene mode (not just palette) rehydrates.
     custom_colors: Optional[list] = None
     custom_shade_mode: Optional[str] = None

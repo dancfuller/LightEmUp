@@ -352,6 +352,27 @@ Assigns colors/temperatures across a room's devices and applies them.
   (`customShadeMode`: exact colors, or tonal shades per color). These modes are
   color-only: they ignore the Color/White space (the toggle is hidden via
   `isPresetMode`). Selection persists as `selected_team`/`selected_ncaa`/`selected_flag`.
+  - **Colors can be left out (v3.48.0).** Reported: *"I can remove colors from a palette
+    but I can't remove colors from a team or flag scene."* Palette removes by editing its
+    own working copy; a preset's hex list is fixed data, so here removal is an
+    **exclusion** — `presetExcluded = {kind: {name, idx}}`, indices into
+    `presetColors()`. It is **keyed by the name it was made against** (`presetExclusion`),
+    so an exclusion made on France can't leak onto Italy, and switching back to France
+    finds it again. `keepPresetColors` never returns an empty set, and the picker disables
+    the last remaining swatch — a scene needs one color. The cycle's seed key ignores the
+    exclusion on purpose, so dropping a color keeps the room's phase instead of
+    re-rolling the layout.
+  - **The UI is `PresetPicker`'s selected-item swatches**, grown to the Palette block's
+    32px swatch + corner × so the two read as one gesture. A left-out color stays on
+    screen, faded and dashed (the lightshow's OFF style), because unlike a palette there's
+    no + stepper to get it back; tapping it restores, and "Use all colors" resets.
+    `PresetPicker` only becomes editable when `onToggleColor` is passed —
+    `light-scene.js` doesn't pass it, so the per-light panel is unchanged.
+  - Persisted as `preset_excluded` through the usual three places (snapshot in
+    `applyColors`, `RoomColorStateRequest`, the `seededRoom` hydration). With that, every
+    room-panel mode that holds a color LIST can drop one: Palette, My Colors, Teams, NCAA,
+    Flags. Gradient, Tonal and Beacon are built from a single base color, so there is
+    nothing to remove.
 - **Custom mode assignment is a positional cycle, not an adjacency graph.**
   `computeCustom` sorts devices spatially (linear → left-to-right; floor plan →
   row-major) and colors them `A,B,C,A,B,C…` along that order, shifting each row by one

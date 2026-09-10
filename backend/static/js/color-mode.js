@@ -28,6 +28,25 @@ function presetColors(hexes) {
   return kept.length ? kept : rgb;
 }
 
+// Colors left OUT of a preset scene (v3.48.0). Palette can drop a color by
+// editing its own working copy, but a team's or a flag's hex list is fixed data —
+// so "remove" here is an EXCLUSION of indices into presetColors(), stored per
+// mode together with the name it was made against. An exclusion made for the
+// Bears therefore never leaks onto the Packers: switching teams just stops it
+// applying, and switching back finds it again. Indices, not colors, because two
+// entries can share a hex and the user removed one specific swatch.
+function presetExclusion(excluded, kind, name) {
+  const e = excluded?.[kind];
+  return e && e.name === name && Array.isArray(e.idx) ? e.idx : [];
+}
+// Never returns an empty set — the picker already refuses to leave the last
+// color out, and this holds the line if a stored exclusion ever disagrees.
+function keepPresetColors(colors, idx) {
+  if (!idx?.length) return colors;
+  const kept = colors.filter((_, i) => !idx.includes(i));
+  return kept.length ? kept : colors;
+}
+
 // ─── Palette extension ────────────────────────────────────────────────────
 // Extend a palette of N colors to targetLen (up to 24) by generating variations
 // (lighter, darker, hue-shifted) of the first 8 colors. Deterministic so repeated
@@ -471,24 +490,90 @@ function ShadeToggle({ value, onChange }) {
 // Searchable single-select picker for the preset modes (Teams / NCAA / Flags).
 // Filters items by name, previews the selected item's swatches, and lists each
 // option with its color chips. Controlled: parent owns `value` (an item name).
-function PresetPicker({ items, value, onChange, placeholder, isMobile }) {
+//
+// Pass `onToggleColor` and the selected item's swatches become the control for
+// leaving colors out (v3.48.0): tap one to drop it, tap a faded one to bring it
+// back. `excluded` is the list of indices currently out. Without it the picker
+// renders exactly as before — light-scene.js uses it that way.
+function PresetPicker({ items, value, onChange, placeholder, isMobile,
+                        excluded, onToggleColor, onResetColors }) {
   const [q, setQ] = useState("");
   const needle = q.trim().toLowerCase();
   const filtered = needle ? items.filter(it => it.name.toLowerCase().includes(needle)) : items;
   const selected = items.find(it => it.name === value);
+  const selColors = selected ? presetColors(selected.colors) : [];
+  const out = (excluded || []).filter(i => i < selColors.length);
+  const editable = !!onToggleColor && selColors.length > 1;
+  const keptCount = selColors.length - out.length;
   return (
     <div>
       {selected && (
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
           <span style={{ fontSize: isMobile ? 13 : 14, fontWeight: 700, color: "#e2e8f0" }}>{selected.name}</span>
           {selected.group && <span style={{ fontSize: 10, color: "#64748b" }}>{selected.group}</span>}
-          <div style={{ display: "flex", gap: 4, marginLeft: "auto" }}>
-            {presetColors(selected.colors).map((c, i) => (
-              <div key={i} style={{
-                width: 22, height: 22, borderRadius: 5,
-                background: `rgb(${c.r},${c.g},${c.b})`, border: "1px solid rgba(255,255,255,0.25)",
-              }} />
-            ))}
+          {!editable && (
+            <div style={{ display: "flex", gap: 4, marginLeft: "auto" }}>
+              {selColors.map((c, i) => (
+                <div key={i} style={{
+                  width: 22, height: 22, borderRadius: 5,
+                  background: `rgb(${c.r},${c.g},${c.b})`, border: "1px solid rgba(255,255,255,0.25)",
+                }} />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+      {selected && editable && (
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 6, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 11, color: "#64748b" }}>
+              {out.length
+                ? `Using ${keptCount} of ${selColors.length} colors · tap a faded one to bring it back`
+                : "Tap a color to leave it out"}
+            </span>
+            {out.length > 0 && onResetColors && (
+              <button onClick={onResetColors} style={{
+                background: "none", border: "none", padding: 0, cursor: "pointer",
+                color: "#a5b4fc", fontSize: 11, textDecoration: "underline",
+              }}>Use all colors</button>
+            )}
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {selColors.map((c, i) => {
+              const isOut = out.includes(i);
+              // The last color in can't be taken out: a scene needs one.
+              const last = !isOut && keptCount <= 1;
+              const toggle = () => { if (!last) onToggleColor(i); };
+              return (
+                <div key={i} style={{ position: "relative" }}>
+                  {/* Same 32px swatch + corner × as the Palette block, so the
+                      two read as one gesture. A left-out color stays visible —
+                      faded and dashed, like the lightshow's OFF swatches —
+                      because unlike a palette there's no + to get it back. */}
+                  <button onClick={toggle} disabled={last}
+                    title={isOut ? "Bring this color back"
+                         : last ? "A scene needs at least one color"
+                         : "Leave this color out"}
+                    style={{
+                      width: 32, height: 32, borderRadius: 6, padding: 0,
+                      cursor: last ? "default" : "pointer",
+                      background: `rgb(${c.r},${c.g},${c.b})`,
+                      opacity: isOut ? 0.22 : 1,
+                      border: isOut ? "2px dashed #64748b" : "2px solid rgba(255,255,255,0.15)",
+                    }} />
+                  {!isOut && !last && (
+                    <button onClick={toggle} aria-label="Leave this color out"
+                      style={{
+                        position: "absolute", top: -6, right: -6,
+                        width: 14, height: 14, borderRadius: "50%", border: "none",
+                        background: "#475569", color: "#e2e8f0", fontSize: 9,
+                        cursor: "pointer", display: "flex", alignItems: "center",
+                        justifyContent: "center", lineHeight: 1, padding: 0,
+                      }}>&times;</button>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
@@ -607,6 +692,10 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
   const [selectedTeam, setSelectedTeam] = useState(PRESET_TEAMS[0]?.name || null);
   const [selectedNcaa, setSelectedNcaa] = useState(PRESET_NCAA[0]?.name || null);
   const [selectedFlag, setSelectedFlag] = useState(PRESET_FLAGS[0]?.name || null);
+  // Colors left out of each preset scene — see presetExclusion. Shape:
+  // { teams: {name, idx:[…]}, ncaa: {…}, flags: {…} }, persisted with the rest
+  // of the recipe in room_color_state so a second session opens onto the same set.
+  const [presetExcluded, setPresetExcluded] = useState({});
 
   // Restore the last-applied selection for this room (display-only — pre-selects
   // the same mode/palette/brightness a previous LightEmUp session set, so a
@@ -634,6 +723,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     if (s.selected_team) setSelectedTeam(s.selected_team);
     if (s.selected_ncaa) setSelectedNcaa(s.selected_ncaa);
     if (s.selected_flag) setSelectedFlag(s.selected_flag);
+    if (s.preset_excluded && typeof s.preset_excluded === "object") setPresetExcluded(s.preset_excluded);
     if (Array.isArray(s.custom_colors) && s.custom_colors.length) setCustomColors(s.custom_colors);
     if (s.custom_shade_mode) setCustomShadeMode(s.custom_shade_mode);
     if (s.beacon_source_key) setBeaconSourceKey(s.beacon_source_key);
@@ -1379,18 +1469,22 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     return result;
   }, [placedColorLights, roomName, shuffleSeed, isLinear]);
 
+  // The seed key deliberately ignores which colors are left out, so trimming a
+  // color keeps the room's cycle phase instead of re-rolling the whole layout.
+  const presetFor = (kind, entry, name) =>
+    keepPresetColors(presetColors(entry.colors), presetExclusion(presetExcluded, kind, name));
   const computeTeams = useCallback(() => {
     const t = PRESET_TEAMS.find(x => x.name === selectedTeam);
-    return t ? cycleAssign(presetColors(t.colors), `teams|${selectedTeam}`, customShadeMode) : null;
-  }, [cycleAssign, selectedTeam, customShadeMode]);
+    return t ? cycleAssign(presetFor("teams", t, selectedTeam), `teams|${selectedTeam}`, customShadeMode) : null;
+  }, [cycleAssign, selectedTeam, customShadeMode, presetExcluded]);
   const computeNcaa = useCallback(() => {
     const t = PRESET_NCAA.find(x => x.name === selectedNcaa);
-    return t ? cycleAssign(presetColors(t.colors), `ncaa|${selectedNcaa}`, customShadeMode) : null;
-  }, [cycleAssign, selectedNcaa, customShadeMode]);
+    return t ? cycleAssign(presetFor("ncaa", t, selectedNcaa), `ncaa|${selectedNcaa}`, customShadeMode) : null;
+  }, [cycleAssign, selectedNcaa, customShadeMode, presetExcluded]);
   const computeFlags = useCallback(() => {
     const t = PRESET_FLAGS.find(x => x.name === selectedFlag);
-    return t ? cycleAssign(presetColors(t.colors), `flags|${selectedFlag}`, customShadeMode) : null;
-  }, [cycleAssign, selectedFlag, customShadeMode]);
+    return t ? cycleAssign(presetFor("flags", t, selectedFlag), `flags|${selectedFlag}`, customShadeMode) : null;
+  }, [cycleAssign, selectedFlag, customShadeMode, presetExcluded]);
 
   // ─── White (color-temperature) compute variants ─────────────────────
   // Entries carry { r, g, b, kelvin } — r/g/b is the display approximation
@@ -1543,7 +1637,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
   useEffect(() => {
     if (!hasLayout) return;
     setPreview(pipeline(computeForMode()));
-  }, [mode, colorSpace, ctPreset, maxKelvin, baseColor, direction, paletteColors, customColors, customShadeMode, hasLayout, layout, fixtures, beaconSourceKey, brightness, sceneAddress, minSatEnabled, minSatPct, segmentFillModes, shuffleSeed, targetVendor, selectedTeam, selectedNcaa, selectedFlag]);
+  }, [mode, colorSpace, ctPreset, maxKelvin, baseColor, direction, paletteColors, customColors, customShadeMode, hasLayout, layout, fixtures, beaconSourceKey, brightness, sceneAddress, minSatEnabled, minSatPct, segmentFillModes, shuffleSeed, targetVendor, selectedTeam, selectedNcaa, selectedFlag, presetExcluded]);
 
   // Human-readable name for a preview key ("hue:5", "govee:ip", "govee:ip:seg3")
   // used in the live apply-progress label.
@@ -1792,6 +1886,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
       selected_team: selectedTeam,
       selected_ncaa: selectedNcaa,
       selected_flag: selectedFlag,
+      preset_excluded: presetExcluded,
       // Per-mode settings so custom/beacon/white/shade toggle rehydrate too.
       custom_colors: customColors,
       custom_shade_mode: customShadeMode,
@@ -1840,6 +1935,25 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     setPaletteColors(prev => prev.map((c, i) => i === idx ? { r, g, b } : c));
     setPaletteSource(prev => prev.map((c, i) => i === idx ? { r, g, b } : c));
   };
+
+  // ─── Preset color exclusion (Teams / NCAA / Flags, v3.48.0) ─────────
+  // Keyed by the name it was made against — see presetExclusion.
+  const presetSelected = { teams: selectedTeam, ncaa: selectedNcaa, flags: selectedFlag };
+  const togglePresetColor = (kind, i) => {
+    const name = presetSelected[kind];
+    setPresetExcluded(prev => {
+      const cur = presetExclusion(prev, kind, name);
+      const idx = cur.includes(i) ? cur.filter(x => x !== i) : [...cur, i];
+      return { ...prev, [kind]: { name, idx } };
+    });
+  };
+  const resetPresetColors = (kind) =>
+    setPresetExcluded(prev => { const next = { ...prev }; delete next[kind]; return next; });
+  const presetEditProps = (kind) => ({
+    excluded: presetExclusion(presetExcluded, kind, presetSelected[kind]),
+    onToggleColor: (i) => togglePresetColor(kind, i),
+    onResetColors: () => resetPresetColors(kind),
+  });
 
   // ─── Curated palette library ────────────────────────────────────────────────
   // The 160 palettes live in backend/palette_library.json and reach the browser
@@ -2609,7 +2723,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
                 Pick a pro team (NFL · NBA · MLB · NHL); its colors fill the room in a repeating pattern. Shuffle rotates the pattern.
               </div>
               <ShadeToggle value={customShadeMode} onChange={setCustomShadeMode} />
-              <PresetPicker items={PRESET_TEAMS} value={selectedTeam} onChange={setSelectedTeam} placeholder="Search teams…" isMobile={isMobile} />
+              <PresetPicker items={PRESET_TEAMS} value={selectedTeam} onChange={setSelectedTeam} placeholder="Search teams…" isMobile={isMobile} {...presetEditProps("teams")} />
             </div>
           )}
 
@@ -2620,7 +2734,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
                 Pick a Power 5 program (SEC · Big Ten · Big 12 · ACC · Pac-12); its colors fill the room in a repeating pattern.
               </div>
               <ShadeToggle value={customShadeMode} onChange={setCustomShadeMode} />
-              <PresetPicker items={PRESET_NCAA} value={selectedNcaa} onChange={setSelectedNcaa} placeholder="Search schools…" isMobile={isMobile} />
+              <PresetPicker items={PRESET_NCAA} value={selectedNcaa} onChange={setSelectedNcaa} placeholder="Search schools…" isMobile={isMobile} {...presetEditProps("ncaa")} />
             </div>
           )}
 
@@ -2631,7 +2745,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
                 Pick a country; its flag colors fill the room in a repeating pattern (black is skipped).
               </div>
               <ShadeToggle value={customShadeMode} onChange={setCustomShadeMode} />
-              <PresetPicker items={PRESET_FLAGS} value={selectedFlag} onChange={setSelectedFlag} placeholder="Search countries…" isMobile={isMobile} />
+              <PresetPicker items={PRESET_FLAGS} value={selectedFlag} onChange={setSelectedFlag} placeholder="Search countries…" isMobile={isMobile} {...presetEditProps("flags")} />
             </div>
           )}
 
