@@ -487,6 +487,70 @@ function ShadeToggle({ value, onChange }) {
   );
 }
 
+// The "leave a color out" row (v3.48.0), shared by the room Scenes panel's preset
+// modes (via PresetPicker) and every list mode of the per-light scene panel.
+// `colors` is the FULL list; `excluded` holds indices currently out. A left-out
+// color stays on screen, faded and dashed, because there is no + to get it back.
+// Renders nothing for a single color — there's nothing to choose between.
+function RemovableSwatches({ colors, excluded, onToggle, onReset }) {
+  const list = colors || [];
+  if (list.length < 2) return null;
+  const out = (excluded || []).filter(i => i < list.length);
+  const keptCount = list.length - out.length;
+  return (
+    <div style={{ marginBottom: 10 }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 6, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 11, color: "#64748b" }}>
+          {out.length
+            ? `Using ${keptCount} of ${list.length} colors · tap a faded one to bring it back`
+            : "Tap a color to leave it out"}
+        </span>
+        {out.length > 0 && onReset && (
+          <button onClick={onReset} style={{
+            background: "none", border: "none", padding: 0, cursor: "pointer",
+            color: "#a5b4fc", fontSize: 11, textDecoration: "underline",
+          }}>Use all colors</button>
+        )}
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        {list.map((c, i) => {
+          const isOut = out.includes(i);
+          // The last color in can't be taken out: a scene needs one.
+          const last = !isOut && keptCount <= 1;
+          const toggle = () => { if (!last) onToggle(i); };
+          return (
+            <div key={i} style={{ position: "relative" }}>
+              {/* Same 32px swatch + corner × as the Palette block, so the two
+                  read as one gesture; faded + dashed is the lightshow's OFF. */}
+              <button onClick={toggle} disabled={last}
+                title={isOut ? "Bring this color back"
+                     : last ? "A scene needs at least one color"
+                     : "Leave this color out"}
+                style={{
+                  width: 32, height: 32, borderRadius: 6, padding: 0,
+                  cursor: last ? "default" : "pointer",
+                  background: `rgb(${c.r},${c.g},${c.b})`,
+                  opacity: isOut ? 0.22 : 1,
+                  border: isOut ? "2px dashed #64748b" : "2px solid rgba(255,255,255,0.15)",
+                }} />
+              {!isOut && !last && (
+                <button onClick={toggle} aria-label="Leave this color out"
+                  style={{
+                    position: "absolute", top: -6, right: -6,
+                    width: 14, height: 14, borderRadius: "50%", border: "none",
+                    background: "#475569", color: "#e2e8f0", fontSize: 9,
+                    cursor: "pointer", display: "flex", alignItems: "center",
+                    justifyContent: "center", lineHeight: 1, padding: 0,
+                  }}>&times;</button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // Searchable single-select picker for the preset modes (Teams / NCAA / Flags).
 // Filters items by name, previews the selected item's swatches, and lists each
 // option with its color chips. Controlled: parent owns `value` (an item name).
@@ -494,7 +558,7 @@ function ShadeToggle({ value, onChange }) {
 // Pass `onToggleColor` and the selected item's swatches become the control for
 // leaving colors out (v3.48.0): tap one to drop it, tap a faded one to bring it
 // back. `excluded` is the list of indices currently out. Without it the picker
-// renders exactly as before — light-scene.js uses it that way.
+// renders its plain read-only swatches.
 function PresetPicker({ items, value, onChange, placeholder, isMobile,
                         excluded, onToggleColor, onResetColors }) {
   const [q, setQ] = useState("");
@@ -504,7 +568,6 @@ function PresetPicker({ items, value, onChange, placeholder, isMobile,
   const selColors = selected ? presetColors(selected.colors) : [];
   const out = (excluded || []).filter(i => i < selColors.length);
   const editable = !!onToggleColor && selColors.length > 1;
-  const keptCount = selColors.length - out.length;
   return (
     <div>
       {selected && (
@@ -524,58 +587,8 @@ function PresetPicker({ items, value, onChange, placeholder, isMobile,
         </div>
       )}
       {selected && editable && (
-        <div style={{ marginBottom: 10 }}>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 6, flexWrap: "wrap" }}>
-            <span style={{ fontSize: 11, color: "#64748b" }}>
-              {out.length
-                ? `Using ${keptCount} of ${selColors.length} colors · tap a faded one to bring it back`
-                : "Tap a color to leave it out"}
-            </span>
-            {out.length > 0 && onResetColors && (
-              <button onClick={onResetColors} style={{
-                background: "none", border: "none", padding: 0, cursor: "pointer",
-                color: "#a5b4fc", fontSize: 11, textDecoration: "underline",
-              }}>Use all colors</button>
-            )}
-          </div>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            {selColors.map((c, i) => {
-              const isOut = out.includes(i);
-              // The last color in can't be taken out: a scene needs one.
-              const last = !isOut && keptCount <= 1;
-              const toggle = () => { if (!last) onToggleColor(i); };
-              return (
-                <div key={i} style={{ position: "relative" }}>
-                  {/* Same 32px swatch + corner × as the Palette block, so the
-                      two read as one gesture. A left-out color stays visible —
-                      faded and dashed, like the lightshow's OFF swatches —
-                      because unlike a palette there's no + to get it back. */}
-                  <button onClick={toggle} disabled={last}
-                    title={isOut ? "Bring this color back"
-                         : last ? "A scene needs at least one color"
-                         : "Leave this color out"}
-                    style={{
-                      width: 32, height: 32, borderRadius: 6, padding: 0,
-                      cursor: last ? "default" : "pointer",
-                      background: `rgb(${c.r},${c.g},${c.b})`,
-                      opacity: isOut ? 0.22 : 1,
-                      border: isOut ? "2px dashed #64748b" : "2px solid rgba(255,255,255,0.15)",
-                    }} />
-                  {!isOut && !last && (
-                    <button onClick={toggle} aria-label="Leave this color out"
-                      style={{
-                        position: "absolute", top: -6, right: -6,
-                        width: 14, height: 14, borderRadius: "50%", border: "none",
-                        background: "#475569", color: "#e2e8f0", fontSize: 9,
-                        cursor: "pointer", display: "flex", alignItems: "center",
-                        justifyContent: "center", lineHeight: 1, padding: 0,
-                      }}>&times;</button>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </div>
+        <RemovableSwatches colors={selColors} excluded={out}
+          onToggle={onToggleColor} onReset={onResetColors} />
       )}
       <input
         type="text" value={q} onChange={(e) => setQ(e.target.value)}

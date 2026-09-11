@@ -362,12 +362,12 @@ Assigns colors/temperatures across a room's devices and applies them.
     the last remaining swatch — a scene needs one color. The cycle's seed key ignores the
     exclusion on purpose, so dropping a color keeps the room's phase instead of
     re-rolling the layout.
-  - **The UI is `PresetPicker`'s selected-item swatches**, grown to the Palette block's
-    32px swatch + corner × so the two read as one gesture. A left-out color stays on
-    screen, faded and dashed (the lightshow's OFF style), because unlike a palette there's
-    no + stepper to get it back; tapping it restores, and "Use all colors" resets.
-    `PresetPicker` only becomes editable when `onToggleColor` is passed —
-    `light-scene.js` doesn't pass it, so the per-light panel is unchanged.
+  - **The UI is `RemovableSwatches`** (color-mode.js), which `PresetPicker` renders under
+    the selected name when given `onToggleColor`: the Palette block's 32px swatch + corner
+    × so the two read as one gesture. A left-out color stays on screen, faded and dashed
+    (the lightshow's OFF style), because unlike a palette there's no + stepper to get it
+    back; tapping it restores, and "Use all colors" resets. It's a standalone component
+    because the per-light panel uses it for modes that have no `PresetPicker` at all.
   - Persisted as `preset_excluded` through the usual three places (snapshot in
     `applyColors`, `RoomColorStateRequest`, the `seededRoom` hydration). With that, every
     room-panel mode that holds a color LIST can drop one: Palette, My Colors, Teams, NCAA,
@@ -548,6 +548,17 @@ Teams / College / Flags / Last colors across that device's segments.
   ~13s. **Don't remove the estimate**; a user who isn't told assumes it hung. The LAN
   razer protocol would be instant and is deliberately not used (it reverts after 60s
   without keepalives).
+- **Every list mode can leave colors out (v3.48.1)** — Rainbow, Palette, My colors,
+  Teams, College, Flags — with the same `RemovableSwatches` row and the same
+  `presetExclusion` / `keepPresetColors` helpers as the room panel, so there is one
+  rule, not two. `listSource` is the single place a mode says which list it draws from
+  and what that list is called; the exclusion is `{[mode]: {name, idx}}` keyed by that
+  name — the palette's name, the team's, and for My colors a **fingerprint of the saved
+  colors**, so editing favorites can't point stale indices at different colors. Rainbow
+  keeps its sequence with a band left out (`preserveOrder` still applies). Unlike the
+  room panel nothing here persists, matching the rest of this panel's choices — the
+  applied look is what's remembered. One color, Shades and Beacon are built from one
+  base color and Last colors replays what's stored, so none of them has a row.
 - "Last colors" re-sends the stored `segment_state`, which survives restarts — the
   useful case being a device that was power-cycled, clearing its segments while the hub
   still remembers them.

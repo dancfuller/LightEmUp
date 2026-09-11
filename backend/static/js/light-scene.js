@@ -149,6 +149,12 @@ function LightScenePanel({ light, segCount, segmentColors, segmentInfo, nickname
   const [brightness, setBrightness] = useState(
     segmentBrightness != null ? segmentBrightness : (light.state?.brightness ?? 100));
   const [justDone, setJustDone] = useState(false);
+  // Colors left out, per mode (v3.48.1): { [mode]: {name, idx} } — the same shape
+  // and helpers (presetExclusion / keepPresetColors) the room Scenes panel uses,
+  // keyed by the name of what it was made against, so leaving indigo out of the
+  // rainbow can't reach into a palette. Local like the rest of this panel's
+  // choices: nothing here is persisted, the applied look is.
+  const [excluded, setExcluded] = useState({});
 
   // Progress rides the same SSE stream a room scene uses, filtered by SCOPE so
   // this panel hears its own device and nothing else. Shared with the light
@@ -156,26 +162,53 @@ function LightScenePanel({ light, segCount, segmentColors, segmentInfo, nickname
   const [progress, beginProgress, clearProgress] = useSceneProgress(deviceKey);
   const applying = progress.active;
 
+  // ─── The color LIST a mode draws from, and what it was made against ──────
+  // Every mode that holds a list can have colors left out. `name` keys the
+  // exclusion: the palette's name, the team's, a fingerprint of your saved
+  // colors (so editing favorites can't point stale indices at new colors).
+  const isPreset = mode === "teams" || mode === "ncaa" || mode === "flags";
+  const favColors = (favorites || []).map(f =>
+    Array.isArray(f) ? { r: f[0], g: f[1], b: f[2] } : { r: f.r, g: f.g, b: f.b });
+  const listSource = (() => {
+    if (mode === "rainbow") return { name: "rainbow", colors: ROYGBIV };
+    if (mode === "palette") {
+      const p = PALETTE_LIBRARY.find(x => x.name === paletteName);
+      return p ? { name: p.name, colors: p.colors } : null;
+    }
+    if (mode === "mine") {
+      return favColors.length
+        ? { name: favColors.map(c => `${c.r},${c.g},${c.b}`).join("|"), colors: favColors }
+        : null;
+    }
+    if (isPreset) {
+      const src = mode === "teams" ? PRESET_TEAMS : mode === "ncaa" ? PRESET_NCAA : PRESET_FLAGS;
+      const sel = mode === "teams" ? selectedTeam : mode === "ncaa" ? selectedNcaa : selectedFlag;
+      const entry = src.find(x => x.name === sel);
+      return entry ? { name: entry.name, colors: presetColors(entry.colors) } : null;
+    }
+    return null;
+  })();
+  const listOut = listSource ? presetExclusion(excluded, mode, listSource.name) : [];
+  const listKept = listSource ? keepPresetColors(listSource.colors, listOut) : null;
+  const toggleListColor = (i) => {
+    if (!listSource) return;
+    const name = listSource.name;
+    setExcluded(prev => {
+      const cur = presetExclusion(prev, mode, name);
+      const idx = cur.includes(i) ? cur.filter(x => x !== i) : [...cur, i];
+      return { ...prev, [mode]: { name, idx } };
+    });
+  };
+  const resetListColors = () =>
+    setExcluded(prev => { const next = { ...prev }; delete next[mode]; return next; });
+
   // ─── Compute the look ────────────────────────────────────────────────────
   const colors = (() => {
     const n = segCount;
     if (n <= 0) return null;
-    if (mode === "rainbow") return cycleDownStrip(ROYGBIV, n, 0, true);
-    if (mode === "palette") {
-      const p = PALETTE_LIBRARY.find(x => x.name === paletteName);
-      return cycleDownStrip(p?.colors, n);
-    }
-    if (mode === "mine") {
-      const favs = (favorites || []).map(f =>
-        Array.isArray(f) ? { r: f[0], g: f[1], b: f[2] } : { r: f.r, g: f.g, b: f.b });
-      return cycleDownStrip(favs, n);
-    }
-    if (mode === "teams" || mode === "ncaa" || mode === "flags") {
-      const src = mode === "teams" ? PRESET_TEAMS : mode === "ncaa" ? PRESET_NCAA : PRESET_FLAGS;
-      const sel = mode === "teams" ? selectedTeam : mode === "ncaa" ? selectedNcaa : selectedFlag;
-      const entry = src.find(x => x.name === sel);
-      return cycleDownStrip(presetColors(entry?.colors), n);
-    }
+    // Rainbow keeps its sequence even with bands left out — see preserveOrder.
+    if (mode === "rainbow") return cycleDownStrip(listKept, n, 0, true);
+    if (mode === "palette" || mode === "mine" || isPreset) return cycleDownStrip(listKept, n);
     if (mode === "solid") return Array.from({ length: n }, () => ({ ...baseColor }));
     if (mode === "gradient") {
       const shades = generateTonalShades(baseColor.r, baseColor.g, baseColor.b, n);
@@ -432,6 +465,7 @@ function LightScenePanel({ light, segCount, segmentColors, segmentInfo, nickname
             onChange={mode === "teams" ? setSelectedTeam : mode === "ncaa" ? setSelectedNcaa : setSelectedFlag}
             placeholder={mode === "teams" ? "Search teams…" : mode === "ncaa" ? "Search colleges…" : "Search countries…"}
             isMobile={isMobile}
+            excluded={listOut} onToggleColor={toggleListColor} onResetColors={resetListColors}
           />
         </div>
       )}
@@ -440,6 +474,13 @@ function LightScenePanel({ light, segCount, segmentColors, segmentInfo, nickname
         <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10 }}>
           No saved colors yet — star a few from any color picker and they'll appear here.
         </div>
+      )}
+
+      {/* Rainbow, Palette and My colors show their list here; the preset modes
+          show theirs inside PresetPicker, under the name they belong to. */}
+      {listSource && !isPreset && (
+        <RemovableSwatches colors={listSource.colors} excluded={listOut}
+          onToggle={toggleListColor} onReset={resetListColors} />
       )}
 
       {mode === "restore" && !colors && (
