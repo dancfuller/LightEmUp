@@ -343,6 +343,21 @@ Assigns colors/temperatures across a room's devices and applies them.
     change of priority — don't "fix" it by folding strips back into the graph.
   - Per-device seeded phase, so Shuffle still re-rolls which color a strip opens on and
     two strips in a room don't lock-step.
+  - **FLOOR PLANS ONLY (v3.48.2) — a LINE is one walk, end to end.** v3.21.0 applied the
+    split to lines too, reasoning that "a lamp interleaved by x shifts everything after
+    it". On a line that shift is exactly right — position IS the order — and splitting
+    produced the one thing a line must never show: neighbors the same color wherever a
+    strip met a loose light. Reported on Exterior Front with the LA Rams (two colors):
+    Lampost blue → Outdoor A blue, Outdoor D gold → Garage gold. Every strip alternated
+    within itself and the loose lights alternated among themselves; nothing alternated
+    across the seam. `lineOrder(placed, devices)` now orders every whole device AND
+    every segment by its own position (a synthetic segment collapses to its parent's
+    spot, ties by device then segment) and Palette / My Colors / Teams / NCAA / Flags
+    each walk that list once on a line. **It is the preview swatches' own sort, on
+    purpose** — the order colors are dealt in and the order they're shown in must be one
+    order, or the preview displays repeats the dealer never meant. Verified against the
+    old code on the live data: Exterior Front went from 2 repeats (Rams) and 1 (France)
+    to 0, and Living Room, a floor plan, rendered identically in all four modes.
 - **Teams / NCAA / Flags modes** are preset-color modes backed by `palette-data.js`
   (`PRESET_TEAMS` NFL/NBA/MLB/NHL, `PRESET_NCAA` Power 5, `PRESET_FLAGS` ~195
   countries). A searchable `PresetPicker` selects one entity by name; its hex colors

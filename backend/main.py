@@ -1287,26 +1287,77 @@ def _build_palette_scene(room_name: str, palette: dict, brightness: int = 100,
 
     hue, govee_whole, razer, cloud, base_seeds = [], [], [], [], []
 
+    # Resolve every device first — what it is, and how many colors it takes —
+    # so the DEALING below can happen in whatever order the room's shape calls
+    # for, separately from building the payload.
+    plan = []   # (key, kind, details) in device order; kind: hue | whole | segments
     for key in ordered:
         if key.startswith("hue:"):
-            r, g, b = dealer.next()
-            hue.append(SceneHueTarget(light_id=key[4:], on=True, r=r, g=g, b=b,
-                                      brightness=bri254,
-                                      label=_device_label(key, f"Light {key[4:]}")))
+            plan.append((key, "hue", None))
             continue
-
         slug = key[6:]
         mac, info = _gv_info_for_slug(slug)
         ip = (info or {}).get("ip") or gv_ip_for_slug(slug)
         if not ip:
             continue                      # never seen / gone — nothing to address
         sku = (info or {}).get("sku")
-        label = _device_label(key, (info or {}).get("name") or slug)
         count = gv_segment_count(slug, sku)
         protocol = (GOVEE_SEGMENT_INFO.get(sku) or {}).get("protocol")
+        segmented = gv_scene_address(slug, sku) == "segments" and count > 0 and protocol
+        plan.append((key, "segments" if segmented else "whole", {
+            "slug": slug, "mac": mac, "ip": ip, "sku": sku, "count": count,
+            "protocol": protocol,
+            "label": _device_label(key, (info or {}).get("name") or slug)}))
 
-        if gv_scene_address(slug, sku) == "segments" and count > 0 and protocol:
-            seg_colors = [dealer.next() for _ in range(count)]
+    # The units colors are dealt to: a Hue light, a whole Govee device, or ONE
+    # segment. `_ColorDealer` never repeats consecutively — but only in the order
+    # it is DEALT, so that order has to be the order the lights physically sit.
+    #
+    # On a LINE it wasn't (v3.48.2). Devices were sorted by their layout node and
+    # a strip's colors dealt in one block at that spot, while on the real Exterior
+    # Front line one strip's node sits at x=33 and the two segments it owns are
+    # laid out at x=2 and x=3. Replaying this function against that room, a
+    # two-color palette put the same color on x=1/x=2 and again on x=3/x=4 —
+    # the nightly "Exterior On" palette paints exactly this room. The browser had
+    # the same bug by a different route (see lineOrder in color-mode.js); both
+    # now walk a line end to end, strips included, by each unit's OWN position.
+    #
+    # A floor plan keeps the device-order deal exactly as before: a strip stays
+    # one run there, the same choice the Scenes panel makes (splitStrips).
+    units = []
+    for key, kind, d in plan:
+        if kind == "segments":
+            units.extend((key, i) for i in range(d["count"]))
+        else:
+            units.append((key, None))
+    if _lightshow_geometry(room_name) == "line":
+        dev_pos, seg_pos = _lightshow_positions(room_name)
+
+        def at(key, idx):
+            p = (seg_pos.get((key, idx)) if idx is not None else None) or dev_pos.get(key)
+            try:
+                return (float(p["x"]), float(p["y"])) if p else None
+            except (TypeError, ValueError, KeyError):
+                return None
+        cells = [{"key": k, "idx": i, "pos": at(k, i)} for k, i in units]
+        units = [(c["key"], c["idx"]) for c in _lightshow_order(cells, "line")]
+    dealt = {}
+    for unit in units:                    # one next() per unit, in THIS order
+        dealt[unit] = dealer.next()
+
+    for key, kind, d in plan:
+        if kind == "hue":
+            r, g, b = dealt[(key, None)]
+            hue.append(SceneHueTarget(light_id=key[4:], on=True, r=r, g=g, b=b,
+                                      brightness=bri254,
+                                      label=_device_label(key, f"Light {key[4:]}")))
+            continue
+
+        slug, mac, ip, sku = d["slug"], d["mac"], d["ip"], d["sku"]
+        label, count, protocol = d["label"], d["count"], d["protocol"]
+
+        if kind == "segments":
+            seg_colors = [dealt[(key, i)] for i in range(count)]
             if protocol == "razer":
                 razer.append(SceneRazer(ip=ip, mac=mac or slug, sku=sku,
                                         colors=[list(c) for c in seg_colors],
@@ -1330,7 +1381,7 @@ def _build_palette_scene(room_name: str, palette: dict, brightness: int = 100,
                                                 r=seed[0], g=seed[1], b=seed[2],
                                                 brightness=brightness))
         else:
-            r, g, b = dealer.next()
+            r, g, b = dealt[(key, None)]
             govee_whole.append(SceneGoveeWhole(ip=ip, mac=mac or slug, on=True,
                                                r=r, g=g, b=b,
                                                brightness=brightness, label=label))

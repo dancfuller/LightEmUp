@@ -94,11 +94,9 @@ function extendPalette(baseColors, targetLen) {
 // It didn't. Segments were just more entries in the room's positional walk, so
 // any OTHER light landing in the same row band stole a column index and flipped
 // the parity part-way along: a Triple Lamp at y=7, between hexa panels at y=8,
-// turned ABABABA into ABBABAB — one panel matching its neighbour, mid-run. Same
-// flaw in the linear branch, where a lamp interleaved by x shifts everything
-// after it. Holding each strip out of the walk and cycling it on its own
-// segIndex makes the pattern a property of the LIGHT rather than of its
-// neighbours.
+// turned ABABABA into ABBABAB — one panel matching its neighbour, mid-run.
+// Holding each strip out of the walk and cycling it on its own segIndex makes
+// the pattern a property of the LIGHT rather than of its neighbours.
 //
 // DISCRETE-COLOR MODES ONLY (palette / custom / teams / ncaa / flags). Gradient,
 // Tonal and Beacon are spatial by design — a gradient sweeping across a laid-out
@@ -107,6 +105,15 @@ function extendPalette(baseColors, targetLen) {
 // The trade: a strip's cycle now wins over harmony with its neighbours, so a
 // panel can match the lamp beside it. For a run that reads as one object that's
 // the right call, but it IS a change of priority, not a free win.
+//
+// FLOOR PLANS ONLY (v3.48.2). v3.21.0 applied this to LINES too, reasoning that
+// "a lamp interleaved by x shifts everything after it". On a line that shift is
+// exactly right — position IS the order — and splitting produced the one thing
+// a line must never show: two neighbors the same color wherever a strip met a
+// loose light. Exterior Front, LA Rams (two colors): Lampost blue → Outdoor A
+// blue, Outdoor D gold → Garage gold. Every strip alternated within itself and
+// the loose lights alternated among themselves; nothing alternated ACROSS the
+// seam. A line is walked once, end to end, by lineOrder below.
 function splitStrips(placed) {
   const loose = [], strips = {};
   (placed || []).forEach(d => {
@@ -136,6 +143,29 @@ function assignStrips(strips, N, seedKey, pick) {
     });
   });
   return out;
+}
+
+// ONE left-to-right walk down a LINE (v3.48.2) — every whole device AND every
+// segment, in the order they physically sit, so a two-color scene is ABABABA
+// from end to end regardless of which entries happen to be segments. This is
+// the same key the preview swatches sort by, on purpose: the order the colors
+// are DEALT in and the order they're SHOWN in must be one order, or the preview
+// displays repeats the dealer never meant.
+//   - a laid-out entry (every whole device, every dragged-out segment) sits at
+//     its OWN position, so segments interleave with lamps exactly as on the map;
+//   - a SYNTHETIC segment (a strip never dragged out) collapses to its parent's
+//     spot, so the strip stays contiguous and in index order;
+//   - ties break by device, then segment index.
+function lineOrder(placed, devices) {
+  const posOf = (d) => (d.synthetic && devices?.[d.parentKey]) ? devices[d.parentKey] : d;
+  return [...(placed || [])].sort((a, b) => {
+    const pa = posOf(a), pb = posOf(b);
+    if (pa.x !== pb.x) return pa.x - pb.x;
+    if (pa.y !== pb.y) return pa.y - pb.y;
+    const ka = a.parentKey ?? a.key, kb = b.parentKey ?? b.key;
+    if (ka !== kb) return ka < kb ? -1 : 1;
+    return (a.segIndex ?? -1) - (b.segIndex ?? -1);
+  });
 }
 
 // Order palette-color indices so consecutive positions in a repeating cycle
@@ -1061,20 +1091,20 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     // starting phase, so short strips still re-roll which colors appear.
     const cycleOrder = orderPaletteForCycle(colors);
     const seedKey = `${roomName}|palette|${shuffleSeed}`;
-    // Each segmented device cycles on its own segIndex — see splitStrips. In BOTH
-    // branches: a lamp interleaved among the panels used to steal a position and
-    // shift everything after it.
-    const { loose, strips } = splitStrips(placedColorLights);
-    const stripColors = assignStrips(strips, N, seedKey, (pos) => colors[cycleOrder[pos]]);
-
+    // A LINE is one walk, strips included — see lineOrder / splitStrips.
     if (isLinear) {
-      const ordered = [...loose].sort((a, b) =>
-        (a.x !== b.x) ? a.x - b.x : a.y - b.y);
       const offset = Math.floor(seededRng(seedKey)() * N);
-      const result = { ...stripColors };
-      ordered.forEach((d, i) => { result[d.key] = colors[cycleOrder[(i + offset) % N]]; });
+      const result = {};
+      lineOrder(placedColorLights, devices).forEach((d, i) => {
+        result[d.key] = colors[cycleOrder[(i + offset) % N]];
+      });
       return result;
     }
+
+    // On a floor plan each segmented device cycles on its own segIndex, out of
+    // the graph — see splitStrips.
+    const { loose, strips } = splitStrips(placedColorLights);
+    const stripColors = assignStrips(strips, N, seedKey, (pos) => colors[cycleOrder[pos]]);
 
     // EVERY segmented device is held out of the graph, laid out or not (v3.21.0
     // — it used to be only the un-laid-out ones). Two reasons, and both are
@@ -1402,9 +1432,18 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     const pick = (seedIdx, phase) =>
       shadesBySeed[seedIdx][exact ? 0 : Math.floor(phase / M) % SHADES_PER_SEED];
 
-    // Segmented devices cycle on their own segIndex and sit OUT of the walk
-    // below — otherwise a lamp that happens to share their row band steals a
-    // column and flips the run's parity part-way along (see splitStrips).
+    // A LINE is one walk, strips included (lineOrder). Color 1 → the leftmost
+    // light or segment with no rotation, as it has been since v2.19.7 — Shuffle
+    // doesn't reorder a line.
+    if (isLinear) {
+      const result = {};
+      lineOrder(placedColorLights, devices).forEach((d, i) => { result[d.key] = pick(i % M, i); });
+      return result;
+    }
+
+    // On a floor plan, segmented devices cycle on their own segIndex and sit OUT
+    // of the walk below — otherwise a lamp that happens to share their row band
+    // steals a column and flips the run's parity part-way along (see splitStrips).
     const { loose, strips } = splitStrips(placedColorLights);
     const result = assignStrips(strips, M, `${roomName}|custom|${shuffleSeed}`, pick);
 
@@ -1456,8 +1495,20 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     const pick = (seedIdx, phase) =>
       ({ ...shadesBySeed[seedIdx][exact ? 0 : Math.floor(phase / M) % SHADES_PER_SEED] });
 
-    // Same strip rule as Palette and Custom: a segmented device is one run and
-    // cycles on its own segIndex, out of the room's walk.
+    // Same rules as Palette and Custom: a LINE is one walk, strips included
+    // (lineOrder)...
+    if (isLinear) {
+      const offset = Math.floor(seededRng(`${roomName}|${seedKey}|${shuffleSeed}`)() * M);
+      const result = {};
+      lineOrder(placedColorLights, devices).forEach((d, i) => {
+        const phase = i + offset;
+        result[d.key] = pick(((phase % M) + M) % M, phase);
+      });
+      return result;
+    }
+
+    // ...and on a floor plan a segmented device is one run and cycles on its own
+    // segIndex, out of the room's walk.
     const { loose, strips } = splitStrips(placedColorLights);
     const result = assignStrips(strips, M, `${roomName}|${seedKey}|${shuffleSeed}`, pick);
 

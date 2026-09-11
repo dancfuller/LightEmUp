@@ -1023,6 +1023,20 @@ so "Try it now" exercises the identical path.
   re-rolls every fire. It emits a normal `SceneApplyRequest`, so **all the existing
   timing, staggering, cloud_v2 color batching, progress SSE and "Now showing" recording
   come for free** (incl. `expect_hue`, so divergence detection works on palette fires).
+- **On a LINE, colors are dealt in physical order (v3.48.2).** `_ColorDealer` never
+  repeats consecutively — but only in the order it is DEALT. Devices were sorted by their
+  layout node and a strip's colors dealt in one block at that spot, while on the real
+  Exterior Front line one strip's node sits at x=33 and the two segments it owns are laid
+  out at x=2 and x=3. Replaying this function against the Pi's real config, a two-color
+  palette produced **80 adjacent repeats over 40 seeds, every one at x=1/2 and x=3/4**;
+  three colors, 22. The nightly "Exterior On" palette paints exactly this room. Now the
+  function resolves every device first (`plan`), builds the units colors are dealt to (a
+  Hue light, a whole Govee device, or one segment), and on a line sorts them with
+  `_lightshow_order` / `_lightshow_positions` — the lightshow's own-position sort, reused
+  rather than written a third time — before dealing. After: 0 repeats on every seed. **A
+  floor plan still deals in device order, byte-identically** (the replay compared the
+  payloads): a strip stays one run there, the same call the Scenes panel makes. The
+  browser had the same bug by a different route; see `lineOrder` in `static/js/CLAUDE.md`.
 - **Why not snapshot ten payloads in the browser and pick one?** A category is ten
   devices-worth of resolved JSON, which would bloat `config.json` (rewritten on every
   mutation, on an SD card) by an order of magnitude, go stale the moment a light is added
@@ -1154,8 +1168,9 @@ the wrong end of the run and make Walk crawl through it in the wrong place. Same
 `color-mode.js` settled on for its preview swatches. A segment never dragged onto the map
 has no position of its own, so it collapses to its parent's spot with ties broken on
 segment index, which keeps an un-laid-out strip contiguous and in order. This is why the
-lightshow does **not** use `_palette_device_order` (which sorts devices, and is left alone
-for the palette scheduler).
+lightshow does **not** use `_palette_device_order` (which sorts devices). The palette
+scheduler keeps `_palette_device_order` for floor plans but, since v3.48.2, deals a LINE
+in this same `_lightshow_order` — it had the identical wrong-end-of-the-run bug.
 
 **Segment positions are stored per DEVICE**, as
 `segments[deviceKey] = {expanded, positions: {"<idx>": {x, y}}}` — not under a per-segment
