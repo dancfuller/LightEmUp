@@ -28,56 +28,135 @@ const SCENE_FILL_MODES = [
 // pick a hue at full saturation and 50% lightness. Compact alternative to
 // the full ColorPicker when you only need a primary hue and don't care
 // about tinting/shading. Returns full RGB via onChange.
+// One command per `ms` while a color control is dragged, trailing — the final
+// position always lands. The same cadence useThrottledControl gives the sliders;
+// without it a slow drag across the bar sent dozens of commands to the light.
+function useCommitThrottle(fn, ms = 180) {
+  const fnRef = useRef(fn);
+  fnRef.current = fn;
+  const slot = useRef({ timer: null, pending: null });
+  useEffect(() => () => clearTimeout(slot.current.timer), []);
+  return useCallback((v) => {
+    const s = slot.current;
+    s.pending = v;
+    if (s.timer) return;
+    const fire = () => {
+      if (s.pending == null) { s.timer = null; return; }
+      const x = s.pending; s.pending = null;
+      fnRef.current(x);
+      s.timer = setTimeout(fire, ms);
+    };
+    fire();
+  }, [ms]);
+}
+
+// An accidental TOUCH must never change a light (v3.50.0). This bar used to pick
+// a color on touch-DOWN and call preventDefault, so a scroll that happened to
+// start on it was swallowed and sent whatever hue sat under the finger — the
+// v3.32.0 slider accident, left open on the default color control of every light
+// card. Now, on touch:
+//   - touch-down picks nothing;
+//   - a mostly-vertical move is a scroll: `touchAction: pan-y` hands it to the
+//     page and the bar lets go;
+//   - a mostly-horizontal move past TAP_SLOP_PX is a drag: it picks, throttled;
+//   - a tap that never moved picks once, on release — tapping a hue is a real
+//     gesture on this control, unlike tapping a slider's track.
+// The mouse is exempt, as with the sliders: a pointer can't brush a control
+// while scrolling.
 function HueBar({ currentColor, onChange, height = 22 }) {
   const ref = useRef(null);
-  const draggingRef = useRef(false);
+  const g = useRef({ active: false, touch: false, moved: false, x: 0, y: 0 });
+  const lastTouchAt = useRef(0);                // see onMouseDown
+  const [localH, setLocalH] = useState(null);   // thumb follows the finger at once
+  const send = useCommitThrottle(onChange);
 
-  const pickAt = (clientX) => {
+  const hueAt = (clientX) => {
     const el = ref.current;
-    if (!el) return;
+    if (!el) return null;
     const rect = el.getBoundingClientRect();
-    const t = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-    const rgb = hslToRgb(t, 1, 0.5);
-    onChange(rgb);
+    return Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+  };
+  const pickAt = (clientX) => {
+    const t = hueAt(clientX);
+    if (t == null) return;
+    setLocalH(t);
+    send(hslToRgb(t, 1, 0.5));
   };
 
-  const onDown = (e) => {
-    draggingRef.current = true;
-    pickAt(e.touches ? e.touches[0].clientX : e.clientX);
+  const onMouseDown = (e) => {
+    // A tap on a phone is followed by compatibility mouse events. The touch path
+    // already handled it, so a mousedown right after a touch is not a second pick.
+    if (Date.now() - lastTouchAt.current < 800) return;
+    g.current = { active: true, touch: false, moved: true, x: e.clientX, y: e.clientY };
+    pickAt(e.clientX);
     e.preventDefault();
   };
-  const onMove = (e) => {
-    if (!draggingRef.current) return;
-    pickAt(e.touches ? e.touches[0].clientX : e.clientX);
+  const onTouchStart = (e) => {
+    const t = e.touches[0];
+    g.current = { active: true, touch: true, moved: false, x: t.clientX, y: t.clientY };
   };
-  const onUp = () => { draggingRef.current = false; };
 
   useEffect(() => {
+    const onMove = (e) => {
+      const s = g.current;
+      if (!s.active) return;
+      if (!s.touch) { pickAt(e.clientX); return; }
+      const t = e.touches[0];
+      if (!s.moved) {
+        const dx = Math.abs(t.clientX - s.x), dy = Math.abs(t.clientY - s.y);
+        if (dy > TAP_SLOP_PX && dy >= dx) { s.active = false; return; }   // a scroll
+        if (dx <= TAP_SLOP_PX) return;                                    // not yet anything
+        s.moved = true;
+      }
+      e.preventDefault();
+      pickAt(t.clientX);
+    };
+    const onEnd = (e) => {
+      const s = g.current;
+      if (s.touch) lastTouchAt.current = Date.now();
+      // A TAP picks where it landed. Judged from where the finger LIFTED, not from
+      // the moves we happened to see: once the page starts scrolling a browser may
+      // stop reporting moves, and a scroll must never read as a tap. A
+      // touchcancel never picks.
+      if (s.active && s.touch && !s.moved && e.type === "touchend") {
+        const t = e.changedTouches && e.changedTouches[0];
+        if (t && Math.abs(t.clientX - s.x) <= TAP_SLOP_PX
+              && Math.abs(t.clientY - s.y) <= TAP_SLOP_PX) {
+          if (e.cancelable) e.preventDefault();
+          pickAt(s.x);
+        }
+      }
+      g.current = { active: false, touch: false, moved: false, x: 0, y: 0 };
+      setLocalH(null);
+    };
     window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
+    window.addEventListener("mouseup", onEnd);
     window.addEventListener("touchmove", onMove, { passive: false });
-    window.addEventListener("touchend", onUp);
+    window.addEventListener("touchend", onEnd);
+    window.addEventListener("touchcancel", onEnd);
     return () => {
       window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("mouseup", onEnd);
       window.removeEventListener("touchmove", onMove);
-      window.removeEventListener("touchend", onUp);
+      window.removeEventListener("touchend", onEnd);
+      window.removeEventListener("touchcancel", onEnd);
     };
   }, []);
 
-  // Compute thumb position from currentColor's hue.
-  const { h } = currentColor
+  // Thumb: the finger's position while dragging, else currentColor's hue.
+  const { h: colorH } = currentColor
     ? rgbToHsl(currentColor.r, currentColor.g, currentColor.b)
     : { h: 0 };
+  const h = localH != null ? localH : colorH;
 
   return (
     <div
       ref={ref}
-      onMouseDown={onDown}
-      onTouchStart={onDown}
+      onMouseDown={onMouseDown}
+      onTouchStart={onTouchStart}
       style={{
         width: "100%", height, flexShrink: 0, borderRadius: height / 2, position: "relative",
-        cursor: "pointer", userSelect: "none",
+        cursor: "pointer", userSelect: "none", touchAction: "pan-y",
         background: "linear-gradient(to right, "
           + "hsl(0,100%,50%), hsl(30,100%,50%), hsl(60,100%,50%), "
           + "hsl(120,100%,50%), hsl(180,100%,50%), hsl(240,100%,50%), "
@@ -590,9 +669,16 @@ function StatusBadge({ connected, label }) {
   );
 }
 
+// The wheel is a 2D surface, so it can't hand vertical swipes to the page the
+// way the bar does (`touchAction: none` stays). What it can do, since v3.50.0:
+// not pick on touch-down, pick on a tap's release, pick only once a touch has
+// actually travelled, and throttle a drag to one command per 180 ms.
 function ColorWheel({ size = 180, onColorSelect }) {
   const canvasRef = useRef(null);
   const [isDragging, setIsDragging] = useState(false);
+  const touchRef = useRef({ active: false, moved: false, x: 0, y: 0 });
+  const lastTouchAt = useRef(0);
+  const sendColor = useCommitThrottle((c) => onColorSelect?.(c.r, c.g, c.b));
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -626,20 +712,45 @@ function ColorWheel({ size = 180, onColorSelect }) {
       const hue = (Math.atan2(dy, dx) / (2 * Math.PI) + 1) % 1;
       const sat = dist / radius;
       const [r, g, b] = hsvToRgb(hue, sat, 1);
-      onColorSelect?.(r, g, b);
+      sendColor({ r, g, b });
     }
-  }, [size, onColorSelect]);
+  }, [size, sendColor]);
 
+  const at = (t) => ({ clientX: t.clientX, clientY: t.clientY });
   return (
     <canvas
       ref={canvasRef} width={size} height={size}
       style={{ borderRadius: "50%", cursor: "crosshair", touchAction: "none" }}
-      onMouseDown={(e) => { setIsDragging(true); pickColor(e); }}
+      onMouseDown={(e) => {
+        if (Date.now() - lastTouchAt.current < 800) return;   // a tap's compatibility click
+        setIsDragging(true); pickColor(e);
+      }}
       onMouseMove={(e) => isDragging && pickColor(e)}
       onMouseUp={() => setIsDragging(false)}
       onMouseLeave={() => setIsDragging(false)}
-      onTouchStart={(e) => { e.preventDefault(); pickColor(e); }}
-      onTouchMove={(e) => { e.preventDefault(); pickColor(e); }}
+      onTouchStart={(e) => {
+        const t = e.touches[0];
+        touchRef.current = { active: true, moved: false, x: t.clientX, y: t.clientY };
+      }}
+      onTouchMove={(e) => {
+        const s = touchRef.current;
+        const t = e.touches[0];
+        if (!s.active) return;
+        if (!s.moved && Math.hypot(t.clientX - s.x, t.clientY - s.y) <= TAP_SLOP_PX) return;
+        s.moved = true;
+        pickColor(at(t));
+      }}
+      onTouchEnd={(e) => {
+        const s = touchRef.current;
+        const t = e.changedTouches && e.changedTouches[0];
+        lastTouchAt.current = Date.now();
+        if (s.active && !s.moved && t
+            && Math.hypot(t.clientX - s.x, t.clientY - s.y) <= TAP_SLOP_PX) {
+          pickColor({ clientX: s.x, clientY: s.y });
+        }
+        touchRef.current = { active: false, moved: false, x: 0, y: 0 };
+      }}
+      onTouchCancel={() => { touchRef.current = { active: false, moved: false, x: 0, y: 0 }; }}
     />
   );
 }

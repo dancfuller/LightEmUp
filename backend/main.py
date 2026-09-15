@@ -30,6 +30,7 @@ from discovery import (
     set_hue_light_state,
     hue_write_seq,
     hue_repair_scope,
+    hue_supported_state,
     discover_govee_lan,
     govee_lan_turn,
     govee_lan_brightness,
@@ -1099,6 +1100,7 @@ async def _apply_room_white(room_name: str, kelvin: int, brightness_pct: int,
         log.warning("Scheduler: white action — room %r not found", room_name)
         return
     await stop_lightshow(room_name, "room set to white")
+    await stop_room_storm(room_name, "room set to white", restore=False)
     mireds = max(153, min(500, round(1_000_000 / max(1, kelvin))))
     bri254 = max(1, min(254, round(brightness_pct * 254 / 100)))
     sent = {}
@@ -1151,6 +1153,7 @@ async def _apply_room_color(room_name: str, r: int, g: int, b: int, brightness_p
         log.warning("Scheduler: color action — room %r not found", room_name)
         return
     await stop_lightshow(room_name, "room set to a solid color")
+    await stop_room_storm(room_name, "room set to a solid color", restore=False)
     bri254 = max(1, min(254, round(brightness_pct * 254 / 100)))
     sent = {}
     _in_bulk_hue.set(True)
@@ -1410,6 +1413,7 @@ async def _start_scene_apply(req):
     a slow one, so the outgoing task is awaited to completion after cancelling —
     it must have let go of the Govee socket before the new one grabs it."""
     await stop_lightshow(req.room, "a scene was applied")
+    await stop_room_storm(req.room, "a scene was applied", restore=False)
     existing = _scene_tasks.get(req.room)
     if existing and not existing.done():
         existing.cancel()
@@ -1448,14 +1452,9 @@ async def _apply_room_power(room_name: str, on: bool,
             record_room_applied(room_name, "power",
                                 "Resumed last lighting" if on else "Turned off",
                                 source=source, source_detail=source_detail)
-        if source == "schedule":
-            # control_room already recorded what it sent each Hue light; reuse it
-            # rather than rebuilding the expectation here. This is the path the
-            # sunrise OFF takes, and an off that silently fails is the one that
-            # leaves lights burning all day.
-            entry = (config.get("room_last_applied") or {}).get(room_name) or {}
-            schedule_hue_late_verify(entry.get("expect_hue") or {},
-                                     source_detail or "a schedule")
+        # The delayed checks are armed by control_room itself since v3.50.0, for
+        # a hand-pressed off as much as a scheduled one; this block used to arm
+        # them for schedules only. See _arm_power_backstops.
     except HTTPException:
         log.warning("Scheduler: power action — room %r not found", room_name)
 
@@ -2287,6 +2286,9 @@ async def start_lightshow(room_name: str):
     """(Re)start a room's show from step 0. Restarting on every edit is
     deliberate — at a 30-second cadence, a change you can't see for half a minute
     reads as a change that didn't take."""
+    # A show and a storm can't share a room. Starting lightning already stopped
+    # the show; now the reverse holds too (v3.50.0).
+    await stop_room_storm(room_name, "a lightshow started", restore=False)
     async with _lightshow_locks.setdefault(room_name, asyncio.Lock()):
         await _start_lightshow_locked(room_name)
 
@@ -3286,10 +3288,19 @@ async def control_hue_light(req: HueLightStateRequest):
         raise HTTPException(400, "Hue Bridge not paired")
 
     key = f"hue:{req.light_id}"
-    # Level-only, on a light the caller says is off: remember it, send nothing.
+    # Level-only, on a light the caller says is off: remember it, send nothing —
+    # unless the BRIDGE says it is on (v3.50.0). The caller's view is only as
+    # fresh as its last refresh, and nothing refreshed it when Google or the Hue
+    # app switched a light on; deferring then saved the level for a power-on that
+    # never came, and the slider appeared to do nothing at all.
+    was_on = False
     if req.defer and req.brightness is not None and req.on is None:
-        set_pending_brightness(key, round(req.brightness * 100 / 254))
-        return {"success": True, "deferred": True, "state": {}}
+        if not (await _hue_live_on([req.light_id])).get(str(req.light_id)):
+            set_pending_brightness(key, round(req.brightness * 100 / 254))
+            return {"success": True, "deferred": True, "state": {}}
+        was_on = True
+        log.info("Hue light %s: shown as off, but the bridge says it's on — "
+                 "setting the level now", req.light_id)
 
     state = {}
     if req.on is not None:
@@ -3330,7 +3341,17 @@ async def control_hue_light(req: HueLightStateRequest):
         if req.brightness is None:
             state["bri"] = max(1, min(254, int(Y * 254)))
 
+    # Only what this light can take (v3.50.0): a dimmable bulb has no color and no
+    # color temperature, and asking for one only earned a refusal. Trimmed HERE and
+    # not just on the wire, so the record and the verify's expectation are what
+    # was actually sent.
+    state = hue_supported_state(req.light_id, state)
+    if not state:
+        return {"success": True, "state": {}, "unsupported": True}
     success = await set_hue_light_state(ip, username, req.light_id, state)
+    # A refusal the table didn't predict has now taught it; trim again so the
+    # record doesn't claim a parameter the light never took.
+    state = hue_supported_state(req.light_id, state)
     if success:
         record_hue_state(req.light_id, state)  # last-known, for power recovery
         # Verify discrete actions only. Presence of `on` is an exact proxy for
@@ -3344,7 +3365,10 @@ async def control_hue_light(req: HueLightStateRequest):
     publish_event("hue", key=f"hue:{req.light_id}")
     # `state` is echoed back so bulk callers can collect exactly what was sent and
     # hand it to schedule_hue_verify (which re-sends this dict verbatim on a miss).
-    return {"success": success, "state": state}
+    out = {"success": success, "state": state}
+    if was_on:
+        out["was_on"] = True     # the caller's "off" was stale; it should re-read
+    return out
 
 
 # ─── Hue verify-and-repair ──────────────────────────────────────────────────
@@ -3399,6 +3423,104 @@ HUE_XY_REPAIR_TOL = 0.15
 _hue_verify_pending: dict = {}
 _hue_verify_since: dict = {}   # light id -> its write count when the expectation was made
 _hue_verify_task: Optional[asyncio.Task] = None
+
+
+# ─── One bridge read, shared (v3.50.0) ───────────────────────────────────────
+# Every room's power command now arms its own delayed checks, so "All lights off"
+# over ten rooms wakes ten checks within a second of each other, and each used
+# to GET every light. A caller arriving while a read is in flight now waits for
+# that read, and one that can use a slightly older answer (`max_age`) takes the
+# last. The checks stay per ROOM on purpose: the whole-set rule in
+# _hue_verify_repair judges each room on its own, which one merged batch for the
+# house would lose.
+_hue_read_cache: dict = {"at": 0.0, "lights": None}
+_hue_read_inflight: Optional[asyncio.Future] = None
+
+
+async def _hue_read_all(max_age: float = 0.0) -> list:
+    global _hue_read_inflight
+    cached = _hue_read_cache["lights"]
+    if max_age > 0 and cached is not None and time.monotonic() - _hue_read_cache["at"] <= max_age:
+        return cached
+    if _hue_read_inflight is not None and not _hue_read_inflight.done():
+        return await asyncio.shield(_hue_read_inflight)
+    fut = asyncio.get_running_loop().create_future()
+    _hue_read_inflight = fut
+    try:
+        lights = await get_hue_lights(config.get("hue_bridge_ip"), config.get("hue_username"))
+    except BaseException as e:
+        fut.set_exception(e if isinstance(e, Exception) else RuntimeError("bridge read cancelled"))
+        fut.exception()          # retrieved: a failed read nobody shared must not warn
+        raise
+    finally:
+        if _hue_read_inflight is fut:
+            _hue_read_inflight = None
+    _hue_read_cache.update(at=time.monotonic(), lights=lights)
+    fut.set_result(lights)
+    return lights
+
+
+async def _hue_live_on(light_ids) -> dict:
+    """{light_id: True} for each of these lights the bridge reports ON and
+    reachable. Whatever it can't say — no bridge, a failed read — is absent, so
+    the caller treats it as "not known to be on"."""
+    if not config.get("hue_bridge_ip") or not config.get("hue_username"):
+        return {}
+    try:
+        lights = await _hue_read_all(max_age=2.0)   # a drag commits every 180ms
+    except Exception as e:
+        log.debug("Live-on check: bridge read failed (%s)", e)
+        return {}
+    want = {str(x) for x in light_ids}
+    return {str(l.get("id")): True for l in lights or []
+            if str(l.get("id")) in want
+            and (l.get("state") or {}).get("on")
+            and (l.get("state") or {}).get("reachable", True)}
+
+
+async def _defer_room_level(room_name: str, room: dict, pct: int) -> dict:
+    """A level dragged on a room the caller shows as OFF (v3.45.0): remember it
+    for each member's next power-on and send nothing — except to Hue lights the
+    bridge says are actually ON, which get it now (v3.50.0). Govee is still
+    deferred on the caller's word: its state is a blocking LAN read, not
+    something to do on every tick of a drag."""
+    hue_ids = [str(x) for x in room.get("hue_light_ids", [])]
+    live = await _hue_live_on(hue_ids) if hue_ids else {}
+    ip, username = config.get("hue_bridge_ip"), config.get("hue_username")
+    dimmed = []
+    for lid in hue_ids:
+        if not live.get(lid):
+            set_pending_brightness(f"hue:{lid}", pct)
+            continue
+        state = {"bri": max(1, min(254, round(pct * 254 / 100)))}
+        set_pending_brightness(f"hue:{lid}", None)
+        if await set_hue_light_state(ip, username, lid, state):
+            record_hue_state(lid, state)
+        dimmed.append(lid)
+    for slug in room.get("govee_devices", []):
+        set_pending_brightness(f"govee:{slug}", pct)
+    if dimmed:
+        log.info("Room %r: shown as off, but %d Hue light(s) are on — set the level on "
+                 "those now", room_name, len(dimmed))
+        publish_event("room", room=room_name)
+    return {"success": True, "deferred": True, "room": room_name, "live": dimmed}
+
+
+def _arm_power_backstops(label: str, expectations: dict, since: dict, on: bool):
+    """The delayed checks for a power command (v3.50.0); only schedules had them.
+    25s for on and off — long enough for the bridge to stop echoing us, short
+    enough not to fight a change of mind. An OFF also gets the 150s look: the
+    bridge can take minutes to admit a dropped frame (2026-09-02: clean reads at
+    +0.6s and +11s, a dark bulb all evening), and a missed off is the one that
+    burns all night. Both leave any light LightEmUp has written since (`since`),
+    and a room of three or more turned wholly back on by voice is left alone by
+    the whole-set rule."""
+    if not expectations:
+        return
+    reason = f"{label} turned {'on' if on else 'off'}"
+    schedule_hue_late_verify(expectations, reason, delay=HUE_APPLY_VERIFY_S, since=since)
+    if not on:
+        schedule_hue_late_verify(expectations, reason, delay=HUE_LATE_VERIFY_S, since=since)
 
 
 def schedule_hue_verify(expectations: dict, since: Optional[dict] = None):
@@ -3582,7 +3704,7 @@ async def _hue_verify_repair(expectations: dict, compare_color: bool = False,
     if not ip or not username:
         return
     try:
-        lights = await get_hue_lights(ip, username)
+        lights = await _hue_read_all()
         actual = {l["id"]: l.get("state", {}) for l in lights}
 
         # Free ride on the read we just did: pin any just-written expectation to
@@ -3995,6 +4117,10 @@ async def delete_room(room_name: str):
     calibration are keyed by device, not room, so they survive). Also drop the
     room-scoped sidecar config so a later room of the same name doesn't inherit
     stale layout / saved scene / lightning settings."""
+    # Anything still driving the room goes first (v3.50.0): a storm or a show
+    # keyed by a name that no longer exists can't be stopped from the UI.
+    await stop_room_storm(room_name, "room deleted")
+    await stop_lightshow(room_name, "room deleted", persist=False)
     removed = room_name in config.get("rooms", {})
     if removed:
         del config["rooms"][room_name]
@@ -4027,12 +4153,14 @@ async def control_room(req: RoomStateRequest):
     # member, not sent. Deliberately BEFORE stop_lightshow: nothing is being
     # driven, so there is no show to retire.
     if req.defer and req.brightness is not None and req.on is None:
-        for light_id in room.get("hue_light_ids", []):
-            set_pending_brightness(f"hue:{light_id}", int(req.brightness))
-        for slug in room.get("govee_devices", []):
-            set_pending_brightness(f"govee:{slug}", int(req.brightness))
-        return {"success": True, "deferred": True, "room": req.room_name}
+        return await _defer_room_level(req.room_name, room, int(req.brightness))
     await stop_lightshow(req.room_name, "room controlled directly")
+    # ...and so is a lightning storm (v3.50.0), which nothing but its own Stop
+    # button used to end. What it replaced is put back only when this command
+    # doesn't set a look of its own — a level, a resume. For an off or a color,
+    # restoring first would just flash the old look on the way to the new one.
+    await stop_room_storm(req.room_name, "room controlled directly",
+                          restore=not (req.on is False or req.r is not None))
 
     ip = config.get("hue_bridge_ip")
     username = config.get("hue_username")
@@ -4062,11 +4190,20 @@ async def control_room(req: RoomStateRequest):
                 h, s = _rgb_to_hue_sat(req.r, req.g, req.b)
                 state["hue"] = h
                 state["sat"] = s
+            # Only what this light can take; see control_hue_light (v3.50.0).
+            state = hue_supported_state(light_id, state)
+            if not state:
+                results["hue"].append({"light_id": light_id, "success": True,
+                                       "skipped": "not supported by this light"})
+                continue
             success = await set_hue_light_state(ip, username, light_id, state)
+            state = hue_supported_state(light_id, state)
             if success:
                 record_hue_state(str(light_id), state)  # last-known, for power recovery
                 hue_sent[str(light_id)] = state
             results["hue"].append({"light_id": light_id, "success": success})
+    # Each light's write count as of THESE writes, for the checks below.
+    hue_since = {lid: hue_write_seq(lid) for lid in hue_sent}
 
     # Control Govee devices in the room (membership is by mac slug; resolve the
     # current IP to actually address the device over LAN).
@@ -4108,7 +4245,13 @@ async def control_room(req: RoomStateRequest):
 
     # Read the Hue lights back and repair any that silently didn't take. The
     # drain runs as a background task so the caller isn't held for the settle.
-    schedule_hue_verify(hue_sent)
+    schedule_hue_verify(hue_sent, since=hue_since)
+    # A power command gets the DELAYED checks too now (v3.50.0); only scheduled
+    # ones had them. The 0.6s read is answered from the bridge's own model and
+    # can't see a silently dropped Zigbee frame, so a bedtime "off" that lost one
+    # bulb left it burning all night. See _arm_power_backstops.
+    if req.on is not None:
+        _arm_power_backstops(req.room_name, hue_sent, hue_since, bool(req.on))
     # Same for Govee, power only — see _govee_verify_repair. Registered here
     # rather than per-device so a room (or a zone) costs one pass.
     schedule_govee_verify(govee_sent)
@@ -4233,6 +4376,10 @@ async def control_all(req: AllControlRequest):
         finally:
             _in_bulk_hue.set(False)
     schedule_hue_verify(hue_sent)
+    # The lights in no room are the ones nobody is watching, so they get the same
+    # delayed checks a room's power command does (v3.50.0).
+    _arm_power_backstops("the unassigned lights", hue_sent,
+                         {lid: hue_write_seq(lid) for lid in hue_sent}, bool(req.on))
 
     govee_sent = {}
     for mac in list(_known_govee()):
@@ -4255,6 +4402,110 @@ async def control_all(req: AllControlRequest):
              len(touched["loose_hue"]), len(touched["loose_govee"]))
     publish_event("config")
     return {"success": True, **touched}
+
+
+# ─── Lightning storm lifecycle (v3.50.0) ─────────────────────────────────────
+# Almost nothing stopped a storm. Only its own Stop button and a config import
+# called stop_lightning; turning the room off, "All lights off", a zone, a scene,
+# Soft White, starting a lightshow, renaming the room and deleting it all left it
+# flashing — and a voice or app "off" was flashed back on for as long as it ran.
+# It is now retired by every path that retires a lightshow, and it notices an
+# outside "off" the way a lightshow does.
+LIGHTNING_WATCH_S = 3.0
+_storm_watches: dict = {}
+
+
+async def stop_room_storm(room_name: str, reason: str = "", restore: bool = True) -> bool:
+    """Stop the room's storm if one is running. Called beside every
+    `stop_lightshow` on a whole-room path. `restore`: see SceneManager."""
+    stopped = await scene_manager.stop_lightning(room_name, restore=restore)
+    if stopped:
+        log.info("Lightning %r stopped (%s)", room_name, reason or "no reason given")
+        # The storm's Govee datagrams have fire-and-forget duplicates that
+        # cancelling its tasks doesn't cancel; let them land before the caller's
+        # own command, or a straggling flash undoes it. See LIGHTSHOW_SETTLE_S.
+        await asyncio.sleep(LIGHTSHOW_SETTLE_S)
+        # Unsourced on purpose: the session that caused this (a room off, a scene)
+        # still shows the storm running, and clients ignore their own echoes.
+        publish_event("config", source=None)
+    return stopped
+
+
+async def _storm_external_off(hue_ids: list, st: dict) -> bool:
+    """Has something outside LightEmUp turned this storm's room off?
+
+    A storm sends `on: true` with every dim and every flash, so a light that
+    reads OFF during one was switched off by something else. The difficulty is
+    the storm's own writes: it re-lights lights on its own clock, so by the time
+    we look after a voice "off", part of the room may be lit again. So only
+    WITNESSES count, as in the lightshow's post-paint check: lights the storm has
+    not written since the previous look, and which were on at that look. Every
+    witness now off ⇒ the room was turned off. Any witness still on ⇒ it wasn't
+    (one lamp switched off in the Hue app doesn't end the storm).
+
+    `st` carries `seen_on` and `seq` between calls; the first call only fills
+    them. A bridge that can't be read, or no witnesses, is "can't tell" — never
+    "stop". Known gap: a flash landing in the same few seconds as the off hides
+    that light, and a single-light room then waits for the next look."""
+    seen_before = set(st.setdefault("seen_on", set()))
+    prev = st.setdefault("seq", {})
+    before = {lid: hue_write_seq(lid) for lid in hue_ids}
+    try:
+        lights = await _hue_read_all()
+    except Exception as e:
+        log.debug("Lightning watch: bridge read failed, assuming nothing changed (%s)", e)
+        return False
+    after = {lid: hue_write_seq(lid) for lid in hue_ids}
+    st["seq"] = dict(after)
+    if not lights:
+        return False
+    by_id = {str(l.get("id")): (l.get("state") or {}) for l in lights}
+    witnesses = off = 0
+    for lid in hue_ids:
+        cur = by_id.get(lid)
+        if not cur or not cur.get("reachable", True):
+            continue                  # a flipped wall switch says nothing about the room
+        if cur.get("on"):
+            st["seen_on"].add(lid)
+        quiet = prev.get(lid) == before[lid] == after[lid]
+        if not quiet or lid not in seen_before:
+            continue
+        witnesses += 1
+        if not cur.get("on"):
+            off += 1
+    return witnesses > 0 and off == witnesses
+
+
+async def _watch_storm(room_name: str, scene: dict):
+    """Look every LIGHTNING_WATCH_S for as long as THIS storm runs. On an outside
+    "off": stop without restoring, then put the off back — the storm re-lit part
+    of the room in the meantime, and the person asked for the room off. The
+    lightshow does the same (`_lightshow_restore_off`)."""
+    hue_ids = [str(x) for x in
+               (config.get("rooms", {}).get(room_name) or {}).get("hue_light_ids", [])]
+    st: dict = {}
+    try:
+        while scene_manager.active_scenes.get(room_name) is scene:
+            try:
+                await asyncio.wait_for(scene["stop_event"].wait(), timeout=LIGHTNING_WATCH_S)
+                return                    # the storm was stopped
+            except asyncio.TimeoutError:
+                pass
+            if not await _storm_external_off(hue_ids, st):
+                continue
+            if scene_manager.active_scenes.get(room_name) is not scene:
+                return
+            log.info("Lightning %r: the room was turned off outside LightEmUp — "
+                     "stopping the storm and leaving it off", room_name)
+            await stop_room_storm(room_name, "turned off outside LightEmUp", restore=False)
+            try:
+                await control_room(RoomStateRequest(room_name=room_name, on=False))
+            except Exception:
+                log.exception("Lightning %r: couldn't put the off back", room_name)
+            return
+    finally:
+        if _storm_watches.get(room_name) is asyncio.current_task():
+            _storm_watches.pop(room_name, None)
 
 
 @app.post("/api/scenes/lightning/start")
@@ -4314,13 +4565,17 @@ async def start_lightning(req: LightningStartRequest):
     )
     if success:
         record_room_applied(req.room_name, "lightning", "Lightning storm")
+        scene = scene_manager.active_scenes.get(req.room_name)
+        if scene is not None and hue_ip and hue_username and room.get("hue_light_ids"):
+            _storm_watches[req.room_name] = asyncio.create_task(
+                _watch_storm(req.room_name, scene), name=f"storm-watch-{req.room_name}")
     return {"success": success}
 
 
 @app.post("/api/scenes/lightning/stop")
 async def stop_lightning(req: LightningStopRequest):
     """Stop lightning scene for a room, restore prior state."""
-    await scene_manager.stop_lightning(req.room_name)
+    await stop_room_storm(req.room_name, "stopped in the panel")
     return {"success": True}
 
 
@@ -5405,10 +5660,11 @@ async def scene_room_apply(req: SceneApplyRequest):
     task, so painting a hexa no longer cancels its ROOM's in-flight scene — one
     task per room would make the two fight over devices that don't overlap."""
     scope = req.scope or req.room
-    # A WHOLE-room apply retires the room's lightshow; a device-scoped one does
-    # not, because painting one hexa isn't a statement about the room.
+    # A WHOLE-room apply retires the room's lightshow and storm; a device-scoped
+    # one does not, because painting one hexa isn't a statement about the room.
     if not req.scope:
         await stop_lightshow(req.room, "a scene was applied")
+        await stop_room_storm(req.room, "a scene was applied", restore=False)
     existing = _scene_tasks.get(scope)
     if existing and not existing.done():
         existing.cancel()
@@ -5804,14 +6060,10 @@ async def reapply_room(req: RoomReapplyRequest):
             raise HTTPException(409, "That scene's devices can't be resolved any more")
         sreq = SceneApplyRequest(**payload)
         sreq.label = entry.get("label")
-        existing = _scene_tasks.get(sreq.room)
-        if existing and not existing.done():
-            existing.cancel()
-            try:
-                await existing
-            except BaseException:
-                pass
-        _scene_tasks[sreq.room] = asyncio.create_task(_run_scene_apply(sreq))
+        # Through _start_scene_apply like every other whole-room scene, so it
+        # retires a running show or storm first (v3.50.0; this copy of the
+        # cancel-and-start dance skipped both).
+        await _start_scene_apply(sreq)
         return {"success": True, "kind": kind, "async": True}
 
     if kind == "white":
@@ -7030,6 +7282,11 @@ async def rename_room(req: RoomRenameRequest):
         return {"success": True}
     if new in rooms:
         raise HTTPException(409, f"A room named '{new}' already exists")
+
+    # A running storm is stopped, not re-keyed (v3.50.0): its tasks, its thunder
+    # subscribers and its flash patterns are all bound to the old name, and a
+    # storm under a name the UI no longer shows could never be stopped.
+    await stop_room_storm(old, "room renamed")
 
     # Move the key in every room-name-keyed sidecar dict.
     for key in ("rooms", "room_layouts", "room_color_state", "lightning_scenes",

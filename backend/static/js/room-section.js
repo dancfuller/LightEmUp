@@ -346,6 +346,17 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
     : null;
   const shownBrightness = roomBrightness != null ? roomBrightness
     : (avgBrightness != null ? avgBrightness : 75);
+  // Your dragged value stands only while it is the freshest thing known (v3.50.0).
+  // It used to stand for the rest of the session, so after one drag the header
+  // kept claiming that level through schedules, scenes and other apps. Four
+  // seconds after the last drag the header goes back to what the lights report —
+  // but only while the room is ON: a level set on a dark room is waiting for the
+  // next power-on, and the lights have nothing to report yet.
+  useEffect(() => {
+    if (roomBrightness == null || !anyOn) return;
+    const t = setTimeout(() => setRoomBrightness(null), 4000);
+    return () => clearTimeout(t);
+  }, [roomBrightness, anyOn]);
   const segmentCountFor = (d) => {
     const configured = segmentInfo?.configured_counts?.[goveeSlug(d)];
     const skuCount = segmentInfo?.sku_table?.[d.sku]?.count;

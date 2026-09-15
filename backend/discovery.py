@@ -138,6 +138,7 @@ async def get_hue_lights(ip: str, username: str) -> list[dict]:
             data = resp.json()
             lights = []
             for light_id, info in data.items():
+                _note_hue_caps(light_id, info)
                 lights.append({
                     "id": light_id,
                     "name": info.get("name", f"Light {light_id}"),
@@ -183,6 +184,74 @@ async def get_hue_groups(ip: str, username: str) -> list[dict]:
                 })
             return groups
     return []
+
+
+# ─── What each Hue light can actually do (v3.50.0) ───────────────────────────
+# The bridge refuses a parameter a light doesn't have — a dimmable white bulb
+# asked for a color temperature answers `parameter, ct, not available` — and
+# since v3.46.1 one refused parameter made the whole command read as failed.
+# The Bedroom's two AE 264 dimmable bulbs (14/15) refused the nightly 2700K
+# every night: their on and brightness landed and the room looked right, but
+# both were dropped from the verify, from "Now showing" and from power recovery.
+#
+# So each light's abilities are learned from the bridge's own description of it
+# (the state keys it reports, plus `capabilities.control`), refreshed on every
+# read, and a command is trimmed to what the light can take. A refusal the table
+# didn't predict teaches it too (see set_hue_light_state). A light not in the
+# table yet is sent the command unchanged — never worse than before.
+_hue_caps: dict = {}
+
+
+def _note_hue_caps(light_id, info: dict):
+    st = info.get("state") or {}
+    ctl = (info.get("capabilities") or {}).get("control") or {}
+    _hue_caps[str(light_id)] = {
+        "ct": "ct" in st or "ct" in ctl,
+        "color": "xy" in st or "hue" in st or "colorgamut" in ctl or "colorgamuttype" in ctl,
+    }
+
+
+def _learn_refusal(light_id, address):
+    param = str(address or "").rstrip("/").rsplit("/", 1)[-1]
+    caps = _hue_caps.setdefault(str(light_id), {"ct": True, "color": True})
+    if param == "ct":
+        caps["ct"] = False
+    elif param in ("xy", "hue", "sat"):
+        caps["color"] = False
+
+
+def mired_to_xy(mired) -> list:
+    """A color temperature as CIE xy on the Planckian locus (Kim et al. 2002) —
+    for a color bulb with no white channel: it can't take `ct`, but it can show
+    the same white as a color."""
+    t = max(1667.0, min(25000.0, 1_000_000 / max(1.0, float(mired))))
+    if t <= 4000:
+        x = -0.2661239e9 / t**3 - 0.2343589e6 / t**2 + 0.8776956e3 / t + 0.179910
+    else:
+        x = -3.0258469e9 / t**3 + 2.1070379e6 / t**2 + 0.2226347e3 / t + 0.240390
+    if t <= 2222:
+        y = -1.1063814 * x**3 - 1.34811020 * x**2 + 2.18555832 * x - 0.20219683
+    elif t <= 4000:
+        y = -0.9549476 * x**3 - 1.37418593 * x**2 + 2.09137015 * x - 0.16748867
+    else:
+        y = 3.0817580 * x**3 - 5.87338670 * x**2 + 3.75112997 * x - 0.37001483
+    return [round(x, 4), round(y, 4)]
+
+
+def hue_supported_state(light_id, state: dict) -> dict:
+    """`state` trimmed to what this light can take. An unknown light is unchanged."""
+    caps = _hue_caps.get(str(light_id))
+    if not caps or not state:
+        return state
+    out = dict(state)
+    if not caps["color"]:
+        for k in ("xy", "hue", "sat", "effect"):
+            out.pop(k, None)
+    if not caps["ct"]:
+        ct = out.pop("ct", None)
+        if ct is not None and caps["color"] and not ({"xy", "hue", "sat"} & out.keys()):
+            out["xy"] = mired_to_xy(ct)
+    return out
 
 
 # ─── Per-light write count: "has anything newer been sent?" (v3.48.3) ─────
@@ -239,6 +308,11 @@ async def set_hue_light_state(ip: str, username: str, light_id: str, state: dict
 
     Falls back to the status code alone if the body isn't the shape we expect —
     never worse than the old behavior."""
+    # Only what this light can take (v3.50.0) — see hue_supported_state. Nothing
+    # left means nothing to send and nothing refused.
+    state = hue_supported_state(light_id, state)
+    if not state:
+        return True
     # Counted before sending: the intention exists whether or not it lands, and a
     # pending check must not reverse it either way.
     if not _hue_repair_write.get():
@@ -258,13 +332,23 @@ async def set_hue_light_state(ip: str, username: str, light_id: str, state: dict
             return True
         errors = [item["error"] for item in body
                   if isinstance(item, dict) and isinstance(item.get("error"), dict)]
+        landed = any(isinstance(item, dict) and "success" in item for item in body)
         for err in errors:
             # print, not a logger: this module has no logging setup and every
             # other diagnostic here is a print. systemd captures stdout, so it
             # still lands in journalctl next to everything else.
             print(f"[Hue] light {light_id} rejected "
                   f"{err.get('address') or '?'}: {err.get('description') or err}")
-        return not errors
+            if err.get("type") == 6:
+                _learn_refusal(light_id, err.get("address"))
+        if not errors:
+            return True
+        # Type 6 is "parameter not available": the light doesn't HAVE that ability.
+        # If everything else landed, the command did all this light can do, and
+        # calling that a failure (v3.46.1) dropped the light from the verify, from
+        # "Now showing" and from power recovery (v3.50.0). Any other refusal —
+        # e.g. 201, a level sent to a light that is off — still fails it.
+        return landed and all(err.get("type") == 6 for err in errors)
 
 
 # ─── Govee LAN Discovery ────────────────────────────────────────────────────

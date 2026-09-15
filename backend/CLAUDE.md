@@ -186,7 +186,7 @@ reachable: true`. Light 29 took the same command and sat at `bri: 2`.
 `HUE_LATE_VERIFY_S` (150s) later, by which time the bridge has converged on what
 the bulbs actually report. It reuses `_hue_verify_repair` unchanged, so the
 comparison rules and the unreachable-skip are identical.
-- **Scheduled applies ONLY** *(superseded: every apply arms it since v3.42.3, and since v3.48.3 it never reverses a newer command — see "A newer command wins")*. A late repair re-asserts a look minutes after the
+- **Scheduled applies ONLY** *(superseded: every apply arms it since v3.42.3, and since v3.48.3 it never reverses a newer command — see "A newer command wins"; every power command arms it too since v3.50.0)*. A late repair re-asserts a look minutes after the
   fact, so if someone had deliberately switched one light off in the meantime it
   would fight them. On a schedule, the firing happened while nobody was in the
   room — exactly when this failure goes unnoticed for hours and when a manual
@@ -280,6 +280,8 @@ then cleared.
   inferred from `device_state` — that is recorded INTENT and can be stale, so a
   light someone else switched on would get its dim silently swallowed. The client
   renders live bridge/discovery state, so its view is the fresher one.
+  **v3.50.0:** only as fresh as its last refresh, it turned out — so for Hue the
+  backend now also asks the bridge (see "The Fable review's first five").
 - **An explicit level always supersedes a pending one** and clears it, so a scene
   or a white preset can never be undone by a level chosen hours earlier.
 - **`control_room` needed the consume logic separately**, because it drives
@@ -455,6 +457,111 @@ and the refusal was invisible to the verify, to "Now showing", and to the
 delivery-health count. It now reads the body, prints what was rejected, and
 returns False. An unparseable or unexpected body falls back to the status code
 alone — never worse than the old behavior.
+
+**Narrowed in v3.50.0:** a type-6 refusal ("parameter not available" — the light
+lacks that ability) alongside at least one success now returns True, and commands
+are trimmed to what each light can take before sending. See "The Fable review's
+first five".
+
+## The Fable review's first five (v3.50.0)
+
+`docs/fable-review/REPORT.md` ranked five fixes first. Most share the shape the
+review kept finding: **a protection added to one path and never to its siblings.**
+
+### Lightning storms have a lifecycle
+Only a storm's own Stop button and a config import used to call `stop_lightning`.
+Room off, "All lights off", zones, scenes, Soft White, starting a lightshow, and
+renaming or deleting the room all left it flashing. A double tap could start two
+storms (the "already active" check sat before two awaits) and the first became
+unreachable.
+- **`SceneManager` serializes start/stop per room** (`_locks`), the fix the
+  lightshow got in v3.40.2. The bodies are `_start_lightning_locked` /
+  `_stop_lightning_locked`.
+- **`stop_room_storm(room, reason, restore)`** sits beside every `stop_lightshow` on
+  a whole-room path: `control_room`, `_apply_room_white`, `_apply_room_color`,
+  `_start_scene_apply`, `scene_room_apply` (non-scoped), `start_lightshow`,
+  `reapply_room`, `rename_room` and `delete_room`. Zones and "All lights" reach it
+  through `control_room`. `reapply_room` now goes through `_start_scene_apply`; its
+  own copy of the cancel-and-start skipped the lightshow as well. **A new
+  whole-room path needs both calls.**
+- **`restore`** decides whether the pre-storm snapshot goes back. False when the
+  caller is about to set the room (off, a color, a scene, a white), since restoring
+  first only flashes the old look on the way. True for a level, a resume, a rename,
+  a delete, and the Stop button.
+- It settles `LIGHTSHOW_SETTLE_S` after stopping (the storm's Govee datagrams have
+  fire-and-forget duplicates) and publishes an **unsourced** `config` event, since
+  the session that caused the stop still shows the storm running.
+- **Rename stops the storm instead of re-keying it.** Its tasks, thunder
+  subscribers and flash patterns are all bound to the old name.
+
+**A storm notices an outside "off"** (`_watch_storm`, every `LIGHTNING_WATCH_S` =
+3s, through the shared bridge read). A storm sends `on: true` with every dim and
+flash, so a light that reads OFF was switched off by something else. The
+complication is the storm's own re-lighting, and the answer is the lightshow's:
+only **witnesses** count — lights the storm has not written since the previous look
+and that were on at it (`_storm_external_off`).
+- Every witness off ⇒ stop without restoring, then `control_room(on=False)` to put
+  the off back on whatever the storm re-lit.
+- Any witness on ⇒ not a room off. One lamp switched off in the Hue app doesn't
+  end a storm.
+- Unreachable lights, a failed read and an empty read all mean "can't tell".
+- Known gaps: a Govee-only room can't be judged, and a flash landing in the same
+  few seconds as the off hides that light until the next look.
+
+### Power commands get the delayed checks
+The 25s/150s verifies were schedule-only, and the 0.6s pass is structurally blind
+to a dropped Zigbee frame (see v3.42.2). A bedtime "off" that lost one bulb left it
+on all night. `control_room` now calls **`_arm_power_backstops`** for any `on`: 25s
+for on and off, plus the 150s look for an off. `control_all` arms the unassigned
+Hue lights the same way. `_apply_room_power`'s schedule-only block is gone, since
+it would now double-arm.
+- Both checks carry `since` from right after the writes, so a newer LightEmUp
+  command wins.
+- **Checks stay per ROOM**, so the whole-set rule still judges each room on its
+  own: a room of three or more turned wholly back on by voice is left alone. A one-
+  or two-light room turned back on from another app inside the window looks the
+  same as a missed off and is re-sent. The scene checks accepted the same trade in
+  v3.48.3.
+- **`_hue_read_all(max_age)`** shares one bridge read. A caller arriving while a
+  read is in flight waits for it, and `max_age` accepts a recent one. Ten rooms'
+  checks waking in the same second cost one GET. `_hue_verify_repair` reads
+  through it.
+
+### A level on a light "shown as off" asks the bridge (v3.45.0 revisited)
+v3.45.0 trusted the caller's `defer` because the client renders live state. That
+held only while the client refreshed, and nothing refreshed it when Google or the
+Hue app switched a light on. The level was then saved for a power-on that never
+came, and the slider seemed dead.
+- `control_hue_light` checks `_hue_live_on`, a shared read at most 2s old, so a
+  drag costs one GET per two seconds. A light that is actually on and reachable
+  gets the level at once, and the answer carries `was_on: true` so the page
+  re-reads.
+- `_defer_room_level` does the same per Hue member and returns `live: [ids]`.
+- **Govee stays deferred on the caller's word**: its state is a blocking LAN read.
+- An unreadable bridge keeps the old behavior.
+
+### Only what a light can take; a partial type-6 refusal is success
+v3.46.1 made one refused parameter fail the whole command. The Bedroom's two AE 264
+dimmable bulbs (14/15) refuse `ct` every night. Their on and level landed, yet both
+were dropped from the verify, from "Now showing" and from power recovery.
+- **`discovery._hue_caps`** records `{ct, color}` per light on every
+  `get_hue_lights` read (state keys plus `capabilities.control`). A type-6 refusal
+  teaches it too (`_learn_refusal`).
+- **`hue_supported_state(light_id, state)`** trims a command. No color ⇒ drop
+  xy/hue/sat/effect. No ct ⇒ drop ct, or convert it to xy for a color bulb
+  (`mired_to_xy`, the Planckian locus). An unknown light is left unchanged.
+- `set_hue_light_state` trims on the wire and sends nothing when nothing is left.
+  `control_hue_light` and `control_room` trim **before recording**, and again after
+  sending, so the record and the verify's expectation hold what the light can
+  actually show.
+- **`set_hue_light_state` returns True when every error is type 6 and something
+  landed.** Any other refusal (e.g. 201, a level sent to an off light), or nothing
+  landing, is still a failure.
+
+Covered by `test_v350.py` (76 assertions): the Bedroom case end to end, the table,
+ct→xy, the double-tap race, every storm stop path and its `restore`, the witness
+truth table, a voice off end to end, the per-room backstops, the shared read, and
+the bridge-checked defer. `test_hue_body.py` was updated for the narrowed rule.
 
 ## Delivery health — a rolling count of commands that didn't take (v3.46.0)
 
@@ -1452,7 +1559,8 @@ lights and now brought back the whole room. The check is what makes that safe.
   `_apply_room_color`, `start_lightning` — because a show that repaints 30 seconds after
   you set the room reads as the app ignoring you. A **device-scoped** scene (one light
   card) deliberately does not: that isn't a claim about the room. **A new whole-room path
-  needs `await stop_lightshow(room, reason)`.**
+  needs `await stop_lightshow(room, reason)` AND `await stop_room_storm(room, reason,
+  restore=…)`** — storms were missing from every one of these until v3.50.0.
 - **"Now showing" is stamped ONCE, at start** (`kind: "lightshow"`), not per frame — an
   SD-card write every 30 seconds for a strip that says the same thing. No `expect`, so
   `/api/rooms/status` answers `unknown` rather than crying divergence at a room that is

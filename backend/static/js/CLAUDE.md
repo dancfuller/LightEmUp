@@ -101,6 +101,26 @@ A new file must be added to index.html in the correct slot (after its dependenci
   synthetic pointer sequences: touch-tap ⇒ 0 commands, touch-drag ⇒ 1, mouse-click ⇒ 1.
   This came from a real report: scrolling the All Lights list to reach the hexa panels
   sent a command to the patio bulb sitting directly above them.
+- **The color bar and wheel got the same rule in v3.50.0.** The Fable review found
+  `HueBar` — the default color control on every light card — still picked on touch-DOWN
+  and called `preventDefault`, so a scroll starting on it was swallowed and sent a color,
+  one command per finger movement. Neither is a range input, so the guard is hand-rolled
+  in `components-shared.js` rather than taken from the hook:
+  - `HueBar` has `touchAction: pan-y`. Touch-down picks nothing; a mostly-vertical move
+    lets go and the page scrolls; a horizontal move past `TAP_SLOP_PX` is a drag. A tap
+    **does** pick, on release — tapping a hue is a real gesture here, unlike tapping a
+    slider's track — and it is **judged from where the finger lifted**
+    (`changedTouches`), because a browser may stop reporting moves once it starts
+    scrolling, and a scroll must never read as a tap. A `touchcancel` never picks.
+  - `ColorWheel` keeps `touchAction: none` (it is a 2D surface) but likewise picks on a
+    tap's release or after real travel, never on touch-down.
+  - Both ignore a mousedown within 800 ms of a touch. Phones follow a tap with
+    compatibility mouse events, which picked a second time.
+  - Both throttle through `useCommitThrottle` (180 ms, trailing): the sliders' cadence.
+  Verified with real CDP touch sequences (`tools/preview/_shoot_touch.mjs`, scratch).
+  The old bar: a scroll starting on it sent **12** commands, a tap sent 2, a 40-move
+  drag sent 39. The new one: 0, 1, and one per 180 ms; a desktop mouse click still
+  sends 1.
   **This is not stage-then-apply, and shouldn't become it** — a dimmer you have to confirm
   stops being a dimmer. The `ColorPicker`'s staging exists because picking a color has a
   discrete "I chose this" moment; brightness has none.
@@ -841,6 +861,11 @@ and a header row can't afford a label per group.
   normalized first); it only becomes your own value once you drag. An all-off room falls
   back to 75. Don't reintroduce a hardcoded default as the *displayed* value — it made the
   slider claim 75% over a dim room.
+- **Your value lets go again (v3.50.0).** Four seconds after the last drag, while the room
+  is on, `roomBrightness` resets to `null` and the header shows what the lights report
+  again. It used to hold the dragged value for the rest of the session, through
+  schedules, scenes and other apps. A level set on a dark room stays until the room is
+  on: it is waiting for the next power-on, and there is nothing to report yet.
 - **At <640px the row can't hold everything**, so it wraps deliberately: the **power toggle
   stays on the name line** (the control you want in the dark) and the looks wrap below it
   as a unit. That's why `powerToggle` is built as a value and placed in two spots.
@@ -1178,7 +1203,14 @@ seamless (no flash). Previously the navy `<body>` sat empty during that window.
 `controlHueLight` / `controlGoveeDevice` spread `cmd` into
 the POST body, so passing CT keys (`color_temp` mireds / `color_temp_kelvin`) works
 without new endpoints. Opens the EventSource on mount and coalesces incoming SSE into a
-debounced `loadAll`. `ctCalibrated = {...ctCorrection, ...ctRgb}` drives the badges.
+debounced `loadAll`. **SSE only carries LightEmUp's own changes, so the page also
+refreshes itself (v3.50.0):** `loadAll()` when it comes back into view after more than
+5 s hidden, and a lights-only `refreshHueLights()` (one bridge GET) every 60 s while
+visible. That tick is skipped within 5 s of any write from this page
+(`apiLastWriteAt()`, stamped by `api()` in utils.js): a read racing a command can
+return the state from just before it and flip the card back. Govee isn't polled,
+since that is a LAN scan. A defer answer saying the light
+was actually on (`was_on`, or a room's `live`) triggers the same Hue re-read. `ctCalibrated = {...ctCorrection, ...ctRgb}` drives the badges.
 - **Global master control (v3.4.0, backend-driven v3.43.0):** a bar under the nav
   (visible on every tab) with **just "All Off"**. `controlAll(on)` now makes ONE
   `POST /api/all/control` and paints the optimistic state locally; it used to issue

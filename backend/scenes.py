@@ -173,10 +173,36 @@ class SceneManager:
         # Flash event subscribers for thunder SSE (room_name -> list of queues).
         self._flash_subscribers: dict[str, list[asyncio.Queue]] = {}
         self._last_flash_notify: dict[str, float] = {}
+        # Start and stop run one at a time per room (v3.50.0). Both await before
+        # they touch `active_scenes` — the snapshot reads, the wait for the tasks —
+        # so a double tap on Start got two storms past the "already active" check
+        # and the first became unreachable: flashing, with nothing able to stop
+        # it. The lightshow had the same bug and the same fix (`_lightshow_locks`).
+        self._locks: dict[str, asyncio.Lock] = {}
 
     # ── public API ─────────────────────────────────────────────────────
 
-    async def start_lightning(
+    def _lock(self, room_name: str) -> asyncio.Lock:
+        return self._locks.setdefault(room_name, asyncio.Lock())
+
+    async def start_lightning(self, room_name: str, room_config: dict,
+                              hue_ip: Optional[str], hue_username: Optional[str],
+                              settings: Optional[LightningSettings] = None) -> bool:
+        """Start a storm in *room_name*; ``False`` if one is already running."""
+        async with self._lock(room_name):
+            return await self._start_lightning_locked(
+                room_name, room_config, hue_ip, hue_username, settings)
+
+    async def stop_lightning(self, room_name: str, restore: bool = True) -> bool:
+        """Stop a storm; ``False`` if none was running.
+
+        ``restore`` puts back what the storm replaced. A caller about to set the
+        room itself — off, a scene, a white — passes False: restoring first would
+        only flash the old look on the way to the new one."""
+        async with self._lock(room_name):
+            return await self._stop_lightning_locked(room_name, restore)
+
+    async def _start_lightning_locked(
         self,
         room_name: str,
         room_config: dict,
@@ -307,7 +333,7 @@ class SceneManager:
         log.info("Lightning started for room %r (%d tasks)", room_name, len(tasks))
         return True
 
-    async def stop_lightning(self, room_name: str) -> bool:
+    async def _stop_lightning_locked(self, room_name: str, restore: bool = True) -> bool:
         """Stop a running lightning scene, restore prior light states.
 
         Returns ``True`` if a scene was stopped, ``False`` if the room was
@@ -335,13 +361,14 @@ class SceneManager:
         hue_username = scene.get("hue_username")
         snapshots = scene.get("snapshots", {})
 
-        if hue_ip and hue_username and snapshots.get("hue"):
+        if restore and hue_ip and hue_username and snapshots.get("hue"):
             await self._restore_hue_lights(hue_ip, hue_username, snapshots["hue"])
 
-        if snapshots.get("govee"):
+        if restore and snapshots.get("govee"):
             await self._restore_govee_devices(snapshots["govee"])
 
-        log.info("Lightning stopped for room %r", room_name)
+        log.info("Lightning stopped for room %r%s", room_name,
+                 "" if restore else " (not restored: the room is being set)")
         return True
 
     def is_active(self, room_name: str) -> bool:

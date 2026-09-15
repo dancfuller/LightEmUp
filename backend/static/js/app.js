@@ -683,6 +683,36 @@ function App() {
     }
   }, []);
 
+  // Other controllers change these lights too — Google, the Hue and Govee apps —
+  // and SSE only carries changes LightEmUp itself made. So a phone that sat in a
+  // pocket for an hour showed an hour-old house, and the sliders acted on it: a
+  // light Google had switched on still read "off", and dragging its level saved
+  // it for a power-on that never came (v3.50.0). Refresh everything when the page
+  // comes back into view, and re-read the Hue lights once a minute while it is in
+  // view (one bridge GET). Govee stays on its own Re-scan, which is a LAN scan.
+  const refreshHueLights = useCallback(() => {
+    api("/hue/lights").then(h => h?.lights && setHueLights(h.lights)).catch(() => {});
+  }, []);
+  useEffect(() => {
+    let hiddenAt = document.visibilityState === "hidden" ? Date.now() : null;
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") { hiddenAt = Date.now(); return; }
+      if (hiddenAt !== null && Date.now() - hiddenAt > 5000) loadAll();
+      hiddenAt = null;
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    const timer = setInterval(() => {
+      // Not within 5s of a command from this page: see apiLastWriteAt (utils.js).
+      if (document.visibilityState === "visible" && Date.now() - apiLastWriteAt() > 5000) {
+        refreshHueLights();
+      }
+    }, 60000);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      clearInterval(timer);
+    };
+  }, [loadAll, refreshHueLights]);
+
   // The backend answers with the full recomputed status (cell count, step cost,
   // the interval it will actually use), so take its word rather than patching
   // local state optimistically — the derived numbers are the point.
@@ -1061,6 +1091,11 @@ function App() {
     api("/hue/light", {
       method: "POST",
       body: JSON.stringify({ light_id: light.id, ...cmd }),
+    }).then(res => {
+      // We showed it as off but the bridge says it's on (someone switched it on
+      // since our last refresh), so the level went to the light instead of being
+      // saved. Re-read, so the card stops showing it as off.
+      if (cmd.defer && res?.was_on) refreshHueLights();
     }).catch(e => console.error("Hue control error:", e));
     setHueLights(prev => prev.map(l => {
       if (l.id === light.id) {
@@ -1144,6 +1179,10 @@ function App() {
     api("/rooms/control", {
       method: "POST",
       body: JSON.stringify({ room_name: roomName, ...cmd }),
+    }).then(res => {
+      // The same stale "off" for a room: some of its Hue lights were on and took
+      // the level now (see controlHueLight).
+      if (cmd.defer && res?.live?.length) refreshHueLights();
     }).catch(e => console.error("Room control error:", e));
 
     // Optimistic update for all devices in this room

@@ -288,7 +288,14 @@ function hsvToRgb(h, s, v) {
 
 // ─── API Helpers ────────────────────────────────────────────────────────────
 
+// When this page last sent anything but a GET. app.js's once-a-minute Hue refresh
+// skips a tick that lands right after one: a bridge read racing a command can come
+// back with the state from just BEFORE it and flip the card back (v3.50.0).
+let API_LAST_WRITE_AT = 0;
+function apiLastWriteAt() { return API_LAST_WRITE_AT; }
+
 async function api(path, options = {}) {
+  if (options.method && options.method !== "GET") API_LAST_WRITE_AT = Date.now();
   try {
     const { headers: optHeaders, ...rest } = options;
     const res = await fetch(`${API}${path}`, {
