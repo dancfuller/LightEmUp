@@ -507,6 +507,46 @@ It is declared in `DEFAULT_CONFIG` and listed in **`_SETTING_INTERNAL`** — it 
 diagnostic history, not a setting, so the restore preview doesn't offer to put
 last fortnight's radio problems back.
 
+## Usage log — what each device actually uses (v3.49.0)
+The interface is being reorganized around real use. Four people use it very
+differently: the owner uses everything; Marie mostly sets the Living Room to a scene
+and then adjusts the rope, globe and hexa by hand; Drew (Sundays) does the same plus
+the exterior scenes, and wants lightshows but finds them hard to use; Nate visits
+about monthly. Guessing at frequency is how the app became "a collection of
+controls", so `usage_log.py` records it instead, and the redesign pass (Fable pass
+10) reads the summary.
+
+- **What is recorded:** `open` (a screen or panel was shown) and `act` (something
+  was done), each with a surface (`room:scenes`, `tab:schedules`, `light`), an
+  optional action (`apply`, `off`, `soft-white`), and optionally the room or device
+  key. `sanitize` keeps exactly those fields plus a few small scalars in `detail`, and
+  drops everything else — **no colors, no typed text, no names** beyond room names.
+- **Where it lives:** `usage_log.jsonl` (append-only, rotated into `.1` at
+  `MAX_BYTES`, so at most about 16 MB) and `usage_devices.json` (id to name, first and
+  last seen, width, browser), both beside the module and gitignored. **Deliberately
+  not `config.json`**: that is rewritten on every change and ships in every backup,
+  and this is a stream of taps. The endpoints never touch `config` and never call
+  `publish_event`, or every open browser would refetch everything on each batch.
+- **A device is a browser.** The frontend keeps a random id in `localStorage`, and
+  the owner names each one in Settings. Until then its browser label and screen width
+  identify it (402 px is an iPhone 17 Pro, 440 px a 16 Pro Max, 390 px an iPhone 14).
+  `usage_devices.json` is rewritten only when something changes or `last_seen` is
+  `LAST_SEEN_WRITE_S` old, not on every batch.
+- **Time is the server's.** Each event is back-dated by the age the browser measured
+  (`sent_at - at`), clamped to an hour, so a phone with a wrong clock can't reorder
+  anything.
+- **`opened_then_used`** is the number the redesign needs most. For the surfaces in
+  `OPEN_ACT` (Scenes, Controls, Lightshow, Lightning, Schedules) it counts visits
+  that opened the screen and visits that then did something there. Opened and never
+  used is the signature of a confusing screen, which a plain tap count cannot show.
+  A visit ends after `SESSION_GAP_S` (30 min) of silence.
+- File I/O runs in `asyncio.to_thread`, so a slow SD card can't stall the loop that is
+  driving lights.
+- Covered by `test_usage_log.py` (36 assertions): field sanitizing, id validation,
+  device labels, the write throttle, server-side timestamps, the batch cap, rotation,
+  visit splitting, opened-then-used, and that the endpoints leave config and SSE
+  alone.
+
 ## Detecting that something ELSE changed a room (v3.16.0)
 **LightEmUp is not the only thing driving these lights**, and can't be. The Hue app, the
 Govee app and Google Home routines all touch them — and must: Govee's on-device engine is

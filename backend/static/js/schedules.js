@@ -1164,7 +1164,7 @@ function SchedulesTab({ schedules, rooms, zones, location, favorites, onFavorite
           </div>
         </div>
         {!editing && (
-          <button onClick={() => setEditing({})} style={{
+          <button onClick={() => { trackUse("open", { s: "schedules:new" }); setEditing({}); }} style={{
             padding: "8px 16px", borderRadius: 8, border: "none",
             background: "#6366f1", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer",
           }}>+ New schedule</button>
@@ -1257,7 +1257,7 @@ function SchedulesTab({ schedules, rooms, zones, location, favorites, onFavorite
                 }}>
                 <div style={{ width: 20, height: 20, borderRadius: 10, background: "#fff" }} />
               </button>
-              <button onClick={() => setEditing(s)} style={{
+              <button onClick={() => { trackUse("open", { s: "schedules:edit" }); setEditing(s); }} style={{
                 padding: "6px 12px", borderRadius: 8, border: "1px solid #334155",
                 background: "transparent", color: "#94a3b8", fontSize: 12, fontWeight: 600, cursor: "pointer",
               }}>Edit</button>

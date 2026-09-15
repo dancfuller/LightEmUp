@@ -310,6 +310,102 @@ async function api(path, options = {}) {
   }
 }
 
+
+// ─── Usage log (v3.49.0) ────────────────────────────────────────────────────
+// Which screens and actions each device actually uses, so the interface can be
+// arranged around real use instead of guesses. It records WHAT was used — never
+// colors, names or anything typed. Storage and the summary are
+// backend/usage_log.py; the Settings card is usage-log.js.
+//
+// Call `trackUse("open", {s})` when a screen or panel is shown and
+// `trackUse("act", {s, a, room, key, detail})` when something is actually done.
+// `s` is the surface ("room:scenes", "tab:schedules", "light"), `a` the action.
+// Keep `detail` to a few small scalars; the server drops anything else.
+const USAGE_DEVICE_KEY = "leu.usageDevice";
+const USAGE_FLUSH_MS = 15000;
+const USAGE_COALESCE_MS = 3000;
+const usageQueue = [];
+
+// One random id per browser, kept in localStorage. NOT crypto.randomUUID: the Pi
+// is served over plain http://, which isn't a secure context, and randomUUID is
+// undefined there. getRandomValues has no such restriction. If storage is blocked
+// the id lasts for this page load only — a visit still counts, it just can't be
+// tied to the last one.
+const USAGE_DEVICE_ID = (() => {
+  const make = () => {
+    try {
+      const b = new Uint8Array(9);
+      crypto.getRandomValues(b);
+      return Array.from(b, x => x.toString(16).padStart(2, "0")).join("");
+    } catch (e) {
+      return `d${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+    }
+  };
+  try {
+    let id = localStorage.getItem(USAGE_DEVICE_KEY);
+    if (!id || !/^[A-Za-z0-9_-]{6,64}$/.test(id)) {
+      id = make();
+      localStorage.setItem(USAGE_DEVICE_KEY, id);
+    }
+    return id;
+  } catch (e) {
+    return make();
+  }
+})();
+
+// Repeats of the same thing within a few seconds fold into one event with a
+// count, so dragging a slider is one "brightness", not forty throttled commits.
+function trackUse(ev, fields = {}) {
+  try {
+    const now = Date.now();
+    const last = usageQueue[usageQueue.length - 1];
+    if (last && last.ev === ev && last.s === fields.s && last.a === fields.a
+        && last.room === fields.room && last.key === fields.key
+        && now - last.at < USAGE_COALESCE_MS) {
+      last.n = (last.n || 1) + 1;
+      last.at = now;
+      return;
+    }
+    usageQueue.push({ ev, ...fields, at: now });
+    if (usageQueue.length > 200) usageQueue.shift();
+  } catch (e) { /* a diagnostic must never break a control */ }
+}
+
+// What kind of change a light or room command is, for the usage log.
+function usageCmdKind(cmd) {
+  if (!cmd) return "other";
+  if (cmd.on === false) return "off";
+  if (cmd.r !== undefined) return "color";
+  if (cmd.color_temp !== undefined || cmd.color_temp_kelvin !== undefined) return "white";
+  if (cmd.brightness !== undefined) return cmd.defer ? "level-while-off" : "brightness";
+  if (cmd.on === true) return "on";
+  return "other";
+}
+
+// Plain fetch, not api(): this must never surface an error or block anything.
+// `keepalive` lets the last batch leave as the page is hidden or closed, which on
+// a phone is how nearly every visit ends.
+function flushUsage(keepalive) {
+  if (!usageQueue.length) return;
+  const events = usageQueue.splice(0, usageQueue.length);
+  try {
+    fetch(`${API}/usage/events`, {
+      method: "POST", keepalive: !!keepalive,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        device_id: USAGE_DEVICE_ID, width: window.innerWidth,
+        sent_at: Date.now(), events,
+      }),
+    }).catch(() => {});
+  } catch (e) { /* ignore */ }
+}
+setInterval(() => flushUsage(false), USAGE_FLUSH_MS);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") flushUsage(true);
+});
+window.addEventListener("pagehide", () => flushUsage(true));
+trackUse("open", { s: "app" });
+
 // ─── Device Name Helpers ────────────────────────────────────────────────────
 
 // SKU subset for devices likely on this network. Full table is in discovery.py.

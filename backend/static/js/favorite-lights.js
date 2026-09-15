@@ -161,7 +161,10 @@ function FavoriteLightsBar({ favoriteKeys, hueLights, goveeDevices, nicknames, d
     if (light.type === "hue") onControlHue(light, cmd);
     else onControlGovee(light, cmd);
   };
-  const setAll = (on) => found.forEach(({ light }) => control(light, { on }));
+  const setAll = (on) => {
+    trackUse("act", { s: "favorites", a: on ? "all-on" : "all-off" });
+    found.forEach(({ light }) => control(light, { on }));
+  };
 
   return (
     <FavoriteBand>
@@ -212,7 +215,10 @@ function FavoriteLightsBar({ favoriteKeys, hueLights, goveeDevices, nicknames, d
               light={light} deviceKey={key} roomName={deviceRoomMap?.[key]}
               nicknames={nicknames}
               expanded={expandedKey === key}
-              onToggleExpand={() => setExpandedKey(expandedKey === key ? null : key)}
+              onToggleExpand={() => {
+                if (expandedKey !== key) trackUse("open", { s: "favorites:card", key });
+                setExpandedKey(expandedKey === key ? null : key);
+              }}
               onControl={control} isMobile={isMobile}
             />
             {expandedKey === key && (

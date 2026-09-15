@@ -469,7 +469,7 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
   // Opener button in the room header (sets the surface view).
   const openerBtn = (key, label, accent, dashed) => (
     <button
-      onClick={() => setSurfaceView(key)}
+      onClick={() => { trackUse("open", { s: `room:${key}`, room: name }); setSurfaceView(key); }}
       style={{
         padding: isMobile ? "6px 12px" : "6px 16px", borderRadius: 8,
         border: dashed ? "1px dashed #475569" : "1px solid #334155",
@@ -824,7 +824,8 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
 
       <ControlSurface
         view={surfaceView} views={views}
-        onView={setSurfaceView} onClose={() => setSurfaceView(null)}
+        onView={(v) => { trackUse("open", { s: `room:${v}`, room: name }); setSurfaceView(v); }}
+        onClose={() => setSurfaceView(null)}
         roomName={name} isMobile={isMobile}
       >
         {panel}

@@ -49,6 +49,8 @@ from scenes import scene_manager, LightningSettings
 from razer_keeper import razer_keeper
 import lightshow
 import palettes
+import usage_log
+from fastapi import Request
 from version import __version__ as APP_VERSION, GIT_HASH, GIT_DATE, version_string
 import segment_state
 
@@ -4530,6 +4532,55 @@ def _days_since(iso: Optional[str]) -> Optional[int]:
     except (ValueError, TypeError):
         return None
     return max(0, (date.today() - d).days)
+
+
+# ─── Usage log (v3.49.0) ─────────────────────────────────────────────────────
+# Which screens and actions each device uses, so the interface can be reorganized
+# around real use. Storage and summarizing live in usage_log.py; see its module
+# docstring for what is and is NOT recorded.
+#
+# Two rules these endpoints keep on purpose:
+#   - they never touch `config`, and never call publish_event. A batch of taps is
+#     not a settings change: it must not rewrite config.json, land in a backup, or
+#     make every open browser refetch everything.
+#   - file I/O runs in a thread, so a slow SD card can't stall the event loop that
+#     is also driving lights.
+class UsageBatch(BaseModel):
+    device_id: str
+    width: Optional[float] = None
+    sent_at: Optional[float] = None
+    events: list = []
+
+
+class UsageDeviceName(BaseModel):
+    device_id: str
+    name: Optional[str] = None
+
+
+@app.post("/api/usage/events")
+async def usage_events(req: UsageBatch, request: Request):
+    try:
+        kept = await asyncio.to_thread(
+            usage_log.record, req.device_id, req.width, req.events,
+            request.headers.get("user-agent", ""), req.sent_at)
+    except ValueError:
+        raise HTTPException(400, "Bad device id")
+    return {"recorded": kept}
+
+
+@app.post("/api/usage/device")
+async def usage_device(req: UsageDeviceName):
+    """Name (or un-name, with an empty name) one browser — "Marie's iPhone"."""
+    try:
+        await asyncio.to_thread(usage_log.set_name, req.device_id, req.name)
+    except ValueError:
+        raise HTTPException(400, "Bad device id")
+    return {"success": True}
+
+
+@app.get("/api/usage/summary")
+async def usage_summary(days: int = 42):
+    return await asyncio.to_thread(usage_log.summary, max(1, min(90, int(days))))
 
 
 @app.get("/api/health/delivery")

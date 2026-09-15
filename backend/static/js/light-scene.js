@@ -269,6 +269,7 @@ function LightScenePanel({ light, segCount, segmentColors, segmentInfo, nickname
 
   const apply = () => {
     if (!colors || !groups.length || applying || unsupported) return;
+    trackUse("act", { s: "light-scene", a: "apply", key: deviceKey, detail: { mode } });
     // Seed the whole device with a color from ITS OWN look first, so the strip
     // reads as the scene immediately instead of flashing white while segments
     // fill in one rate-limited call at a time.

@@ -137,6 +137,9 @@ backend/
                        # Hue/Govee calls. Each pattern declares which room GEOMETRY
                        # it suits (line / floor plan), v3.40.0. Also owns ColorDealer
                        # (shared with the palette scheduler)
+  usage_log.py         # Usage log (v3.49.0): which screens and actions each device
+                       # uses. Writes usage_log.jsonl + usage_devices.json beside it
+                       # (gitignored runtime data, NOT config.json, NOT in backups)
   palette_library.json # SOURCE OF TRUTH for the 160 curated palettes, shared by the
                        # server and (via a generated JS file) the browser
   config.json          # LOCAL ONLY (gitignored) — user config
@@ -194,6 +197,8 @@ backend/
                           # had to be RE-SENT (v3.46.0). The one place radio trouble is
                           # visible without reading journalctl on the Pi. Loads after
                           # room-section.js: reuses its relativeTime
+      usage-log.js        # UsageLogCard — Settings card to name each device and see what
+                          # it uses (v3.49.0). The recording is trackUse() in utils.js
       backup-restore.js   # BackupRestoreCard — Settings export/import of every setting
                           # (downloads to the browser; import previews then replaces)
       app.js              # App component — state, routing, SSE client, API orchestration
@@ -298,6 +303,11 @@ All endpoints are under `/api/`. Key groups:
   AP wandering onto it, and the two facts are only useful together. Config key
   `repair_log` (internal — diagnostic history, not a setting). See `backend/CLAUDE.md`
   "Delivery health"
+- `/api/usage/events`, `/api/usage/device`, `/api/usage/summary` — the usage log
+  (v3.49.0): batches of "opened this screen" / "did this" events per browser, a
+  name per browser, and a per-device summary including how often a screen was opened
+  and then left unused. Stored beside `usage_log.py`, **never in config** and never
+  published over SSE. See `backend/CLAUDE.md` "Usage log"
 - `/api/devices/stale` — Hue + Govee devices missing 5+ days (config key `hue_missing_since`
   for Hue; Govee reuses `last_seen`). Drives the header's third badge, which is a
   deliberately different claim from "not responding" — see `backend/CLAUDE.md` "Gone N days"

@@ -1903,6 +1903,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     if (!preview || applying) return;
     const plan = buildScenePlan();
     if (!plan) return;
+    trackUse("act", { s: "scenes", room: roomName, a: "apply", detail: { mode } });
     const { base_seeds, hue, govee_whole, cloud } = plan;
     const applyCount = Object.keys(preview).length;
 

@@ -10,7 +10,8 @@ rules that apply to every UI change. **Keep this file current when behavior chan
 utils → audio → components-shared → light-card → favorite-lights → lightning-panel →
 room-map → palette-data → palette-library → color-mode → light-scene → location-data →
 schedules → lightshow → segment-reset-debug → room-section → zones → room-assignment →
-setup-wizard → server-logs → ct-calibration → delivery-health → backup-restore → app
+setup-wizard → server-logs → ct-calibration → delivery-health → usage-log → backup-restore →
+app
 
 A new file must be added to index.html in the correct slot (after its dependencies).
 
@@ -918,6 +919,43 @@ got a `Z` appended and became an invalid `Date`, rendering as an empty string.
 Everything the backend writes is UTC (`_now_iso`), so nothing was broken in practice —
 but the trap was one edit away from being sprung, and it is now a proper
 `/(?:Z|[+-]\d{2}:?\d{2})$/` test.
+
+## Usage log — `trackUse` (utils.js) and usage-log.js (v3.49.0)
+Records which screens and actions each device uses so the interface can be arranged
+around real use. See `backend/CLAUDE.md` "Usage log" for what is stored and why it is
+kept out of config.
+
+- **`trackUse("open", {s})` when a screen or panel is shown; `trackUse("act", {s, a,
+  room, key, detail})` when something is actually done.** Current hooks:
+  - tab changes (`setActiveTab`)
+  - the room drawer's openers and tabs (`room:<view>`)
+  - room power, level and color (`controlRoom`)
+  - Soft and Cool White
+  - every light command (`controlHueLight` / `controlGoveeDevice`, with
+    `usageCmdKind`)
+  - scene apply, and the per-light scene apply
+  - favorites: all on/off, pinning, expanding a card
+  - lightshow start, stop, edit and next step
+  - lightning start and stop
+  - schedule create, edit, toggle and delete, and opening the editor
+  - zones, "All lights off", and "Set here"
+
+  **When you add a new control a person uses, add a `trackUse` call** — an
+  un-instrumented control reads as "never used" in the data the redesign relies on.
+- **Repeats fold.** The same event within `USAGE_COALESCE_MS` (3 s) increments a
+  count instead of queueing again, so a slider drag is one `brightness`, not forty
+  throttled commits.
+- **Batched and fire-and-forget.** The queue flushes every 15 s, and on
+  `visibilitychange` hidden and `pagehide` with `keepalive`, since on a phone nearly
+  every visit ends by switching away. It uses plain `fetch`, not `api()`, because it
+  must never surface an error.
+- **The device id uses `crypto.getRandomValues`, not `randomUUID`.** The Pi is
+  served over plain `http://`, which is not a secure context, and `randomUUID` is
+  undefined there. Blocked storage falls back to an id that lasts one page load.
+- **`UsageLogCard`** (Settings, under Delivery health) lists every device with a name
+  field. This browser is listed first, marked THIS DEVICE, even before it has sent
+  anything. Each row also shows the browser, width, last use, visits and top
+  actions. It reuses `relativeTime` from room-section.js, so it loads after it.
 
 ## backup-restore.js — Settings → Backup & Restore (v3.11.0)
 `BackupRestoreCard` renders in the Settings tab (below `LocationCard`), with

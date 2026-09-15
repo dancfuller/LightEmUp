@@ -307,6 +307,7 @@ function App() {
   // used to drop you into the middle of Assign Rooms with no sign of what happened.
   // Wrapped here rather than at each link, so a future call site can't forget.
   const setActiveTab = useCallback(tab => {
+    trackUse("open", { s: `tab:${tab}` });
     setActiveTabRaw(tab);
     window.scrollTo({ top: 0, behavior: "auto" });
   }, []);
@@ -406,6 +407,7 @@ function App() {
   // by device order, so the strip reads in the order they were pinned — which is
   // roughly "most wanted first" for whoever built the list.
   const toggleFavoriteLight = (deviceKey) => {
+    trackUse("act", { s: "favorites", a: "pin-toggle", key: deviceKey });
     setFavoriteLights(prev => {
       const next = prev.includes(deviceKey)
         ? prev.filter(k => k !== deviceKey)
@@ -685,6 +687,11 @@ function App() {
   // the interval it will actually use), so take its word rather than patching
   // local state optimistically — the derived numbers are the point.
   const saveLightshow = useCallback(async (room, patch) => {
+    trackUse("act", {
+      s: "lightshow", room,
+      a: patch.enabled === true ? "start" : patch.enabled === false ? "stop" : "edit",
+      detail: { fields: Object.keys(patch).slice(0, 6).join(",") },
+    });
     try {
       const res = await api("/lightshow", {
         method: "POST", body: JSON.stringify({ room, ...patch }),
@@ -696,6 +703,7 @@ function App() {
   }, []);
 
   const stepLightshow = useCallback(async (room) => {
+    trackUse("act", { s: "lightshow", room, a: "next-step" });
     try {
       await api("/lightshow/step", { method: "POST", body: JSON.stringify({ room }) });
     } catch (e) {
@@ -745,6 +753,9 @@ function App() {
   // response. Failures surface (a schedule that silently didn't save is worse
   // than a slow save — it just never fires).
   const saveSchedule = useCallback(async (sched) => {
+    const onlyToggle = sched.id && Object.keys(sched).every(k => k === "id" || k === "enabled");
+    trackUse("act", { s: "schedules", a: !sched.id ? "create" : onlyToggle ? "toggle" : "edit",
+                     detail: { type: sched.action?.type } });
     const res = await api("/schedules", { method: "POST", body: JSON.stringify(sched) });
     setSchedules(prev => {
       const saved = res.schedule;
@@ -758,6 +769,7 @@ function App() {
   }, []);
 
   const deleteSchedule = useCallback(async (id) => {
+    trackUse("act", { s: "schedules", a: "delete" });
     setSchedules(prev => prev.filter(s => s.id !== id));   // optimistic
     try {
       await api(`/schedules/${id}`, { method: "DELETE" });
@@ -811,6 +823,8 @@ function App() {
   // /api/zones/control so a zone press and a zone SCHEDULE take the identical
   // backend path; each member room's "Now showing" is credited to the zone.
   const controlZone = useCallback(async (name, action) => {
+    trackUse("act", { s: "zone", a: action?.on === false ? "off" : action?.on === true ? "on" : (action?.type || "other"),
+                     detail: { zone: name } });
     try {
       await api("/zones/control", {
         method: "POST",
@@ -959,6 +973,7 @@ function App() {
   // changed the room. A scene replays asynchronously server-side, so wait a
   // moment before resyncing or the status would still read as diverged.
   const reapplyRoom = useCallback(async (roomName) => {
+    trackUse("act", { s: "room", room: roomName, a: "set-here" });
     try {
       const res = await api("/rooms/reapply", {
         method: "POST", body: JSON.stringify({ room_name: roomName }),
@@ -1007,6 +1022,7 @@ function App() {
   }, []);
 
   const startLightning = async (roomName) => {
+    trackUse("act", { s: "lightning", room: roomName, a: "start" });
     try {
       await api("/scenes/lightning/start", {
         method: "POST",
@@ -1019,6 +1035,7 @@ function App() {
   };
 
   const stopLightning = async (roomName) => {
+    trackUse("act", { s: "lightning", room: roomName, a: "stop" });
     try {
       await api("/scenes/lightning/stop", {
         method: "POST",
@@ -1040,6 +1057,7 @@ function App() {
   };
 
   const controlHueLight = async (light, cmd) => {
+    trackUse("act", { s: "light", a: usageCmdKind(cmd), key: `hue:${light.id}` });
     api("/hue/light", {
       method: "POST",
       body: JSON.stringify({ light_id: light.id, ...cmd }),
@@ -1058,6 +1076,7 @@ function App() {
   };
 
   const controlGoveeDevice = async (device, cmd) => {
+    trackUse("act", { s: "light", a: usageCmdKind(cmd), key: `govee:${goveeSlug(device)}` });
     api("/govee/control", {
       method: "POST",
       body: JSON.stringify({ ip: device.ip, mac: device.mac, ...cmd }),
@@ -1086,6 +1105,7 @@ function App() {
   // devices in no room, with the verifies coalesced into one pass for the house.
   // The optimistic paint stays local and instant, exactly as before.
   const controlAll = (on) => {
+    trackUse("act", { s: "live", a: on ? "all-on" : "all-off" });
     api("/all/control", { method: "POST", body: JSON.stringify({ on }) })
       .catch(e => console.error("All-lights control error:", e));
     setHueLights(prev => prev.map(l => ({ ...l, state: { ...l.state, on } })));
@@ -1099,6 +1119,7 @@ function App() {
   // already did all of that for the scheduler — this just points the buttons at it,
   // so a scheduled 2700K and pressing Soft White are finally the same code path.
   const roomWhite = async (roomName, kelvin) => {
+    trackUse("act", { s: "room", room: roomName, a: kelvin <= 3500 ? "soft-white" : "cool-white" });
     api("/rooms/white", {
       method: "POST",
       body: JSON.stringify({ room_name: roomName, kelvin, brightness: 100 }),
@@ -1119,6 +1140,7 @@ function App() {
 
   const controlRoom = async (roomName, cmd) => {
     // cmd can be { on: bool } or { on, brightness, r, g, b }
+    trackUse("act", { s: "room", room: roomName, a: usageCmdKind(cmd) });
     api("/rooms/control", {
       method: "POST",
       body: JSON.stringify({ room_name: roomName, ...cmd }),
@@ -1896,6 +1918,7 @@ function App() {
             </div>
 
             <DeliveryHealthCard isMobile={isMobile} />
+            <UsageLogCard isMobile={isMobile} />
             <PowerRecoveryCard settings={powerRecovery} onChange={updatePowerRecovery} isMobile={isMobile} />
 
             <LocationCard location={location} onChange={updateLocation} isMobile={isMobile} />

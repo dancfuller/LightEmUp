@@ -34,3 +34,10 @@ backend/logs/
 tools/preview/node_modules/
 tools/preview/package-lock.json
 tools/preview/*.png
+
+# Usage log (v3.49.0) — runtime data written on the Pi, never committed
+backend/usage_log.jsonl*
+backend/usage_devices.json*
+
+# Fable review bundles — derived from the code by tools/fable-review/build_bundles.py
+docs/fable-review/bundles/
