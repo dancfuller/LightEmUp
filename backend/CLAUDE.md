@@ -186,7 +186,7 @@ reachable: true`. Light 29 took the same command and sat at `bri: 2`.
 `HUE_LATE_VERIFY_S` (150s) later, by which time the bridge has converged on what
 the bulbs actually report. It reuses `_hue_verify_repair` unchanged, so the
 comparison rules and the unreachable-skip are identical.
-- **Scheduled applies ONLY.** A late repair re-asserts a look minutes after the
+- **Scheduled applies ONLY** *(superseded: every apply arms it since v3.42.3, and since v3.48.3 it never reverses a newer command — see "A newer command wins")*. A late repair re-asserts a look minutes after the
   fact, so if someone had deliberately switched one light off in the meantime it
   would fight them. On a schedule, the firing happened while nobody was in the
   room — exactly when this failure goes unnoticed for hours and when a manual
@@ -340,6 +340,58 @@ which needs the `room_last_applied` record that only exists once the apply
 finishes. If 8s ever proves too eager, the symptom is visible for free — the
 delivery-health count will show color repairs that the backstop then finds were
 never wrong.
+
+### A newer command wins — the delayed checks never reverse one (v3.48.3)
+
+The delayed color checks (8 s, 25 s and 150 s after an apply) re-send what that
+apply ASKED FOR to any light that doesn't match. Nothing told them whether
+something newer had been sent to the same light in between, so a second scene, a
+color picked on a light card, a lightshow frame or a lightning flash inside the
+window got **reversed** back to the older look. Found while planning the Fable
+review and reproduced directly: scene A went to light 16, the light was set to B,
+and A's 8-second check put A back. The 25 s and 150 s windows had this since
+v3.42.3; v3.47.0's 8 s window made it more likely to bite.
+
+**The fix is exact, not a heuristic: count intended writes per light.**
+`discovery.set_hue_light_state` bumps `_hue_write_seq[light]` on every call, before
+sending. Every Hue writer passes through that one function — main.py's paths, the
+lightning engine in `scenes.py`, the lightshow — so none can be missed. Each check
+remembers each light's count from when its expectation was made (`since`), and
+`_hue_verify_repair` leaves any light whose count has moved on.
+- **A repair's own re-send doesn't count** (`hue_repair_scope()`): it restates the old
+  intention rather than expressing a new one. Without that, the 8 s check's repair
+  would disarm the 25 s backstop for the same apply.
+- **The count is taken when the expectation is MADE, not when the check is
+  scheduled.** The scene apply's end-of-run passes are scheduled 10–30 s after its
+  Hue writes, once the segment calls finish. A count taken then would already
+  include a newer command made during the apply, and the backstop would reverse it.
+  So `do_hue` snapshots `hue_since` right after its writes, and all four checks use
+  it. `_apply_room_white` / `_apply_room_color` do the same.
+  `schedule_hue_verify(..., since=)` and `schedule_hue_late_verify(..., since=)`
+  default to "now", which is right only for a caller that has just written.
+
+**Changes made outside LightEmUp can't be counted** — a voice command or the Hue app
+talks to the bridge directly. For those there is one rule: **if every light the
+check could judge (three or more) disagrees, someone changed the room on purpose**,
+and the check leaves it. "Turn off the living room" changes them all, while a
+dropped command is partial. The room's "Changed since" / "Set here" is the way back,
+which is the stance `/api/rooms/status` already takes on other controllers' changes.
+
+**The threshold is three because of this bridge's history.** On 2026-09-02 *both*
+front-door bulbs — a two-light set of third-party AE 282 C bulbs — missed the same
+sunset command, one dark and one at brightness 2. For two lights, "all wrong" is a
+real miss here, and exactly what these checks exist to repair; `test_late_verify.py`
+models that night and fails at a threshold of two. No set of three or more has ever
+missed in full (the worst was 5 of 9).
+
+**What it still can't tell apart, stated plainly:** an outside change to one light,
+or to both lights of a two-light room, inside the window looks the same as a missed
+command, so it is re-sent. And if every light in a 3+ set genuinely misses together,
+the check leaves it and the room shows "Changed since". Both are narrower than the
+bug this replaces, which reversed every newer command.
+
+Covered by `test_stale_verify.py` (19 assertions). It drives the REAL
+`set_hue_light_state`, faking only httpx, so the counter itself is under test.
 
 ### The evening hole in the delivery chart (v3.47.0)
 

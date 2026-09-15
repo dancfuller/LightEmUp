@@ -4,11 +4,13 @@ Device discovery module for Hue Bridge (mDNS/UPnP) and Govee LAN devices (UDP mu
 
 import asyncio
 import base64
+import contextvars
 import json
 import socket
 import struct
 import time
 import httpx
+from contextlib import contextmanager
 from typing import Optional
 
 
@@ -183,6 +185,44 @@ async def get_hue_groups(ip: str, username: str) -> list[dict]:
     return []
 
 
+# ─── Per-light write count: "has anything newer been sent?" (v3.48.3) ─────
+# The delayed color checks re-send what an apply ASKED FOR, seconds or minutes
+# later. Nothing told them that something newer had been sent to the same light
+# in between — a second scene, a color picked on a light card, a lightshow frame,
+# a lightning flash — so they put the older look back. Reproduced directly:
+# scene A went out, the light was set to B, and A's 8-second check restored A.
+#
+# So every INTENDED write bumps a counter here, at the one function every Hue
+# writer goes through (main.py's paths, the lightning engine in scenes.py, the
+# lightshow). A check remembers the count from when its expectation was made and
+# leaves any light whose count has moved on. A repair's own re-send is not a new
+# intention — it restates the old one — so it runs inside `hue_repair_scope()`
+# and does not count; otherwise one check's repair would disarm the next check
+# for the same apply.
+_hue_write_seq: dict = {}
+_hue_repair_write: contextvars.ContextVar = contextvars.ContextVar("hue_repair_write", default=False)
+
+
+def hue_write_seq(light_id) -> int:
+    """How many intended writes this light has had (0 if none)."""
+    return _hue_write_seq.get(str(light_id), 0)
+
+
+def note_hue_write(light_id):
+    _hue_write_seq[str(light_id)] = _hue_write_seq.get(str(light_id), 0) + 1
+
+
+@contextmanager
+def hue_repair_scope():
+    """Writes inside this block restate an existing intention (a verify re-send)
+    rather than express a new one, so they don't advance the write count."""
+    token = _hue_repair_write.set(True)
+    try:
+        yield
+    finally:
+        _hue_repair_write.reset(token)
+
+
 async def set_hue_light_state(ip: str, username: str, light_id: str, state: dict) -> bool:
     """Set the state of a Hue light. state can include on, bri, hue, sat, ct, etc.
 
@@ -199,6 +239,10 @@ async def set_hue_light_state(ip: str, username: str, light_id: str, state: dict
 
     Falls back to the status code alone if the body isn't the shape we expect —
     never worse than the old behavior."""
+    # Counted before sending: the intention exists whether or not it lands, and a
+    # pending check must not reverse it either way.
+    if not _hue_repair_write.get():
+        note_hue_write(light_id)
     async with httpx.AsyncClient(timeout=5.0, verify=False) as client:
         resp = await client.put(
             f"http://{ip}/api/{username}/lights/{light_id}/state",

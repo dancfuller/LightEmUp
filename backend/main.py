@@ -28,6 +28,8 @@ from discovery import (
     get_hue_lights,
     get_hue_groups,
     set_hue_light_state,
+    hue_write_seq,
+    hue_repair_scope,
     discover_govee_lan,
     govee_lan_turn,
     govee_lan_brightness,
@@ -1107,7 +1109,10 @@ async def _apply_room_white(room_name: str, kelvin: int, brightness_pct: int,
                 sent[str(light_id)] = res["state"]
     finally:
         _in_bulk_hue.set(False)
-    schedule_hue_verify(sent)
+    # Each light's write count as of THESE writes; the checks below compare against
+    # it so a newer command in the meantime is left alone.
+    since = {lid: hue_write_seq(lid) for lid in sent}
+    schedule_hue_verify(sent, since=since)
     govee_sent = {}
     for slug in room.get("govee_devices", []):
         ip = gv_ip_for_slug(slug)
@@ -1129,11 +1134,11 @@ async def _apply_room_white(room_name: str, kelvin: int, brightness_pct: int,
     # bulb that was written a second ago. See HUE_COLOR_VERIFY_S.
     schedule_hue_late_verify(
         sent, source_detail or ("a schedule" if source == "schedule" else "a room preset"),
-        delay=HUE_COLOR_VERIFY_S)
+        delay=HUE_COLOR_VERIFY_S, since=since)
     # ...and a longer backstop, for a light that takes the command and then drifts.
     schedule_hue_late_verify(
         sent, source_detail or ("a schedule" if source == "schedule" else "a room preset"),
-        delay=HUE_LATE_VERIFY_S if source == "schedule" else HUE_APPLY_VERIFY_S)
+        delay=HUE_LATE_VERIFY_S if source == "schedule" else HUE_APPLY_VERIFY_S, since=since)
 
 
 async def _apply_room_color(room_name: str, r: int, g: int, b: int, brightness_pct: int,
@@ -1155,7 +1160,10 @@ async def _apply_room_color(room_name: str, r: int, g: int, b: int, brightness_p
                 sent[str(light_id)] = res["state"]
     finally:
         _in_bulk_hue.set(False)
-    schedule_hue_verify(sent)
+    # Each light's write count as of THESE writes; the checks below compare against
+    # it so a newer command in the meantime is left alone.
+    since = {lid: hue_write_seq(lid) for lid in sent}
+    schedule_hue_verify(sent, since=since)
     govee_sent = {}
     for slug in room.get("govee_devices", []):
         ip = gv_ip_for_slug(slug)
@@ -1171,11 +1179,11 @@ async def _apply_room_color(room_name: str, r: int, g: int, b: int, brightness_p
     # bulb that was written a second ago. See HUE_COLOR_VERIFY_S.
     schedule_hue_late_verify(
         sent, source_detail or ("a schedule" if source == "schedule" else "a room preset"),
-        delay=HUE_COLOR_VERIFY_S)
+        delay=HUE_COLOR_VERIFY_S, since=since)
     # ...and a longer backstop, for a light that takes the command and then drifts.
     schedule_hue_late_verify(
         sent, source_detail or ("a schedule" if source == "schedule" else "a room preset"),
-        delay=HUE_LATE_VERIFY_S if source == "schedule" else HUE_APPLY_VERIFY_S)
+        delay=HUE_LATE_VERIFY_S if source == "schedule" else HUE_APPLY_VERIFY_S, since=since)
 
 
 # ─── Palette actions (v3.17.0) ───────────────────────────────────────────────
@@ -3387,25 +3395,33 @@ HUE_XY_REPAIR_TOL = 0.15
 # exactly that for room + "Unassigned" controls) would cost one GET per light.
 # Now any number of commands landing within a settle window share ONE GET.
 _hue_verify_pending: dict = {}
+_hue_verify_since: dict = {}   # light id -> its write count when the expectation was made
 _hue_verify_task: Optional[asyncio.Task] = None
 
 
-def schedule_hue_verify(expectations: dict):
+def schedule_hue_verify(expectations: dict, since: Optional[dict] = None):
     """Queue {light_id: state_as_sent} for read-back. Cheap and synchronous —
     merges into the pending map and ensures the drain task is running. A later
-    expectation for the same light wins (it's the more recent intent)."""
+    expectation for the same light wins (it's the more recent intent).
+
+    `since` is each light's write count at the moment the expectation was made
+    (see `hue_write_seq`). Omit it and it is taken now, which is right for a
+    caller that has just written; a caller registering an OLDER expectation must
+    pass the count from back then, or a newer command gets reversed."""
     global _hue_verify_task
     if not expectations:
         return
     if not config.get("hue_bridge_ip") or not config.get("hue_username"):
         return
-    _hue_verify_pending.update({str(k): v for k, v in expectations.items()})
+    for k, v in expectations.items():
+        _hue_verify_pending[str(k)] = v
+        _hue_verify_since[str(k)] = (since or {}).get(str(k), hue_write_seq(k))
     if _hue_verify_task is None or _hue_verify_task.done():
         _hue_verify_task = asyncio.create_task(_hue_verify_drain())
 
 
 def schedule_hue_late_verify(expectations: dict, reason: str = "",
-                             delay: Optional[float] = None):
+                             delay: Optional[float] = None, since: Optional[dict] = None):
     """A SECOND verify pass, ~2.5 minutes after the first. For applies nobody is
     watching — i.e. schedules.
 
@@ -3424,15 +3440,20 @@ def schedule_hue_late_verify(expectations: dict, reason: str = "",
     time the bridge does converge on the truth, so a later look would have seen
     `on: false` and re-sent.
 
-    **Scheduled applies only, on purpose.** A late repair re-asserts a look
-    minutes after the fact, so if someone had deliberately switched one light off
-    in the meantime it would fight them. On a schedule that firing happened while
-    nobody was in the room — which is exactly when this failure goes unnoticed for
-    hours, and exactly when a manual change in the window is least likely."""
+    **A newer command always wins (v3.48.3).** A late repair re-asserts a look
+    after the fact. It used to do that unconditionally, so a second scene, a color
+    picked on a card, or a lightshow frame inside the window got reversed. The
+    expectation now carries each light's write count from when it was made
+    (`since`, taken here if the caller doesn't supply an older one), and
+    `_hue_verify_repair` leaves any light that has been written since. A change
+    made OUTSIDE LightEmUp can't be counted; see the whole-set rule there."""
     if not expectations:
         return
     if not config.get("hue_bridge_ip") or not config.get("hue_username"):
         return
+    # Taken NOW, synchronously — not when the task wakes, by which time the newer
+    # command it exists to respect may already have been counted.
+    snap = {str(k): (since or {}).get(str(k), hue_write_seq(k)) for k in expectations}
 
     async def _later():
         try:
@@ -3443,7 +3464,7 @@ def schedule_hue_late_verify(expectations: dict, reason: str = "",
             log.info("Hue late verify: re-checking %d light(s) from %s",
                      len(expectations), reason or "a scheduled apply")
             await _hue_verify_repair({str(k): v for k, v in expectations.items()},
-                                     compare_color=True)
+                                     compare_color=True, since=snap)
         except asyncio.CancelledError:
             pass
         except Exception:
@@ -3460,8 +3481,9 @@ async def _hue_verify_drain(settle_s: float = HUE_VERIFY_SETTLE_S):
         while _hue_verify_pending:
             await asyncio.sleep(settle_s)
             batch = dict(_hue_verify_pending)
+            since = {k: _hue_verify_since.pop(k) for k in batch if k in _hue_verify_since}
             _hue_verify_pending.clear()
-            await _hue_verify_repair(batch)
+            await _hue_verify_repair(batch, since=since)
     except asyncio.CancelledError:
         pass
     except Exception:
@@ -3542,7 +3564,8 @@ def _reconcile_expectations(actual: dict) -> bool:
     return changed
 
 
-async def _hue_verify_repair(expectations: dict, compare_color: bool = False):
+async def _hue_verify_repair(expectations: dict, compare_color: bool = False,
+                             since: Optional[dict] = None):
     """expectations: {light_id: state_dict_as_sent}. Re-sends to any light whose
     reported state disagrees with what we asked for. Assumes the caller has
     already waited for the mesh to settle.
@@ -3566,11 +3589,24 @@ async def _hue_verify_repair(expectations: dict, compare_color: bool = False):
         if _reconcile_expectations(actual):
             save_config(config)
 
-        repaired = []
+        # A NEWER COMMAND WINS (v3.48.3). A light LightEmUp has written since this
+        # expectation was made is showing something newer on purpose; re-sending
+        # the old state would reverse it. See hue_write_seq in discovery.py.
+        live = {}
         for light_id, sent in expectations.items():
+            lid = str(light_id)
+            if since and lid in since and hue_write_seq(lid) != since[lid]:
+                log.info("Hue verify: light %s has had a newer command since — leaving it", lid)
+                continue
+            live[lid] = sent
+
+        repaired = []
+        judged = 0
+        for light_id, sent in live.items():
             cur = actual.get(str(light_id))
             if not cur or not cur.get("reachable", True):
                 continue   # unreachable/unknown: a re-send won't land either
+            judged += 1
             want_on = sent.get("on")
             if want_on is not None and bool(cur.get("on")) != bool(want_on):
                 repaired.append((light_id, "on"))
@@ -3632,12 +3668,33 @@ async def _hue_verify_repair(expectations: dict, compare_color: bool = False):
                     # the LATE pass sets it — so a stubborn light costs one extra
                     # re-send per apply, never a loop.
 
+        # EVERY light changed ⇒ somebody changed the room (v3.48.3). A voice command
+        # or the Hue app talks to the bridge directly, so it can't be counted like
+        # our own writes. But a dropped command is a partial event — one bulb of
+        # two, five of nine — and every one of these checks has been partial on
+        # this bridge; "turn off the living room" changes them all. So when every
+        # light we could judge disagrees, treat it as a deliberate change and leave
+        # it: the room's "Changed since" / "Set here" is the way back, not a silent
+        # reversal. Same rule the lightshow uses for a voice off, and the same
+        # stance as /api/rooms/status (another controller's change is legitimate).
+        # Needs THREE or more lights, and the threshold comes from this bridge's own
+        # history, not taste. On 2026-09-02 both front-door bulbs (a two-light
+        # set, both third-party AE 282 C) missed the same sunset command — one
+        # stayed dark, the other sat at brightness 2. For two lights, "all wrong"
+        # is a real failure mode here, and it is the one these checks were built
+        # to repair. No larger set has ever missed in full; the worst was 5 of 9.
+        if judged >= 3 and len(repaired) == judged:
+            log.info("Hue verify: all %d light(s) changed since they were set — treating it as "
+                     "a deliberate change (voice or another app) and not reversing it", judged)
+            return
+
         for light_id, why in repaired:
             log.info("Hue verify: light %s didn't take (%s) — re-sending", light_id, why)
             record_repair(f"hue:{light_id}",
                           _device_label(f"hue:{light_id}", f"Light {light_id}"), why)
             try:
-                await set_hue_light_state(ip, username, str(light_id), expectations[light_id])
+                with hue_repair_scope():     # restating the old intention, not a new one
+                    await set_hue_light_state(ip, username, str(light_id), live[light_id])
             except Exception as e:
                 log.warning("Hue verify: re-send failed for %s: %s", light_id, e)
         if repaired:
@@ -5106,6 +5163,11 @@ async def _run_scene_apply(req: SceneApplyRequest):
     try:
         done = 0
         hue_expect = {}   # filled by do_hue; recorded for later divergence checks
+        # Each light's write count right after do_hue's writes. The end-of-apply
+        # passes run 10-30s later, after the segment calls; if something newer was
+        # sent in that time, the count taken THEN would already include it and the
+        # backstop would reverse it. So they all use this one.
+        hue_since = {}
         _scene_emit(scope, room, phase="applying", total=apply_total, done=0,
                     active=True, end_at=end_at_ms)
 
@@ -5155,7 +5217,8 @@ async def _run_scene_apply(req: SceneApplyRequest):
                     await tick("applying", apply_total, t.label)
             finally:
                 _in_bulk_hue.set(False)
-            schedule_hue_verify(sent)
+            hue_since.update({lid: hue_write_seq(lid) for lid in sent})
+            schedule_hue_verify(sent, since=hue_since)
             # The color-aware look rides HERE, with the Hue writes it belongs to —
             # NOT at the end of the apply, where it used to wait out every
             # rate-limited segment call before checking bulbs that had finished
@@ -5163,7 +5226,7 @@ async def _run_scene_apply(req: SceneApplyRequest):
             schedule_hue_late_verify(
                 sent, (req.source_detail or ("a schedule" if req.source == "schedule"
                                              else "an apply")) + " (first color check)",
-                delay=HUE_COLOR_VERIFY_S)
+                delay=HUE_COLOR_VERIFY_S, since=hue_since)
             hue_expect.update(sent)   # kept so a refresh can detect external changes
 
         async def do_govee_whole():
@@ -5259,7 +5322,7 @@ async def _run_scene_apply(req: SceneApplyRequest):
         # existed — so it had nothing to reconcile against. Run one more pass now
         # that the expectation is stored, which pins each color to whatever the
         # bridge settled on (and re-checks the lights while it's there).
-        schedule_hue_verify(hue_expect)
+        schedule_hue_verify(hue_expect, since=hue_since)
         # The fast verify above is blind to a silent mesh drop, so take a second
         # look — for EVERY whole-room apply, not just scheduled ones. A palette
         # applied by hand can lose a light just as easily; that is what happened on
@@ -5268,7 +5331,8 @@ async def _run_scene_apply(req: SceneApplyRequest):
         schedule_hue_late_verify(
             hue_expect, req.source_detail or ("a schedule" if req.source == "schedule"
                                               else "an apply"),
-            delay=HUE_LATE_VERIFY_S if req.source == "schedule" else HUE_APPLY_VERIFY_S)
+            delay=HUE_LATE_VERIFY_S if req.source == "schedule" else HUE_APPLY_VERIFY_S,
+            since=hue_since)
         _scene_emit(scope, room, phase="done", total=apply_total, done=apply_total, label="", active=False)
     except asyncio.CancelledError:
         _scene_emit(scope, room, phase="canceled", active=False, label="")
