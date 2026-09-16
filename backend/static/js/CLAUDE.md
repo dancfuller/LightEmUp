@@ -571,6 +571,16 @@ Assigns colors/temperatures across a room's devices and applies them.
   `applyTotal`/`applyLabel`/`applyEndAt`. So any open session shows live progress, not
   just the one that pressed Apply. Cancel → `POST /api/scenes/room-apply/cancel`.
 
+- **Tonal and the White modes fall back to the LEAST BAD shade (v3.51.1).** Both assign
+  most-constrained-first and prefer a shade ≥2 steps from every assigned neighbor; when
+  nothing satisfied that, they took the first SHUFFLED shade — which could hand a segment
+  the very shade its neighbor already had. On a strip every segment neighbors every
+  other, so any run longer than the number of gap-respecting shades ends up there: the
+  same neighbor-repeat class as the v3.48.2 line bug, in the two modes that fix never
+  touched. `furthestShade` takes the index furthest from every assigned neighbor, ties
+  broken by the existing shuffle so Shuffle still re-rolls the arrangement. It cannot
+  give eight distinct shades to ten lights; it does stop repeating while a shade is free.
+
 ## light-scene.js — scenes for ONE segmented light (v3.34.0)
 `LightScenePanel` renders inside a LightCard's Segments section (any Govee device with
 >1 segment) and offers Rainbow / Palette / My colors / Shades / Beacon / One color /
@@ -799,6 +809,15 @@ by the `lightshow` SSE event the backend emits at the end of every frame.
   `res.show` rather than patching local state optimistically (the deliberate exception the
   same as `saveSchedule`): cell count, step cost and the effective interval are all
   *derived*, and a guess at them is exactly the number the panel exists to report.
+- **Saves MERGE, and the panel shows what it saved before the server answers
+  (v3.51.1).** Two edits in quick succession used to lose one: the sliders shared a
+  single debounce timer, so the second cancelled the first's pending save, and each
+  multi-select list rebuilt itself from the value the SERVER last confirmed, so a second
+  tap made before the round trip returned overwrote the first. `save(patch)` keeps an
+  `overlay` of everything saved but not yet confirmed, merged over `show`, and clears it
+  once nothing is in flight — so the derived numbers still come from the Pi. `saveSoon`
+  accumulates its patch rather than replacing it. **Every control in this panel goes
+  through `save`, never `onSave` directly.**
 - Reuses `PaletteStrip` / `PALETTE_FILTERS` / `palettesFor` from **schedules.js**, which is
   why it must load after it. Bulk "Add all shown" / "Remove shown" mirror the scheduler's
   palette editor — "Summer and Winter" and "Summer minus three" should not be different
@@ -863,6 +882,11 @@ the surface row, since adding one later hit the identical wall.
 - **`DevicePickerModal` lives in `components-shared.js`**, not room-assignment.js. It's
   used by both tabs, and room-assignment.js loads AFTER room-section.js — reaching across
   would invert the script order index.html defines.
+- **Its `useState` runs BEFORE the empty-list early return (v3.51.1).** React counts hooks
+  per render, so when `devices` went empty while the modal was open — the last unassigned
+  light claimed from another tab, or an SSE refresh landing — the early return skipped the
+  hook, React threw "rendered fewer hooks than expected", and with no error boundary the
+  page went blank. Any hook goes above every early return.
 - **`assignDevicesToRoom` in app.js mirrors `addDevicesToRoom`** in room-assignment.js and
   goes through the same `handleRoomsChange`, so the two entry points can't drift on what
   "assigned" means. If you change one, change the other (or fold them together).

@@ -879,6 +879,37 @@ async def govee_lan_command(ip: str, cmd: str, data: dict) -> Optional[dict]:
 GOVEE_RESEND_DELAY_S = 0.12
 
 
+# ─── Per-device POWER write count (v3.51.1) ──────────────────────────────────
+# The Hue checks learned in v3.48.3 not to reverse a newer command. The Govee
+# power verify never did: it captures "this device should be off", waits out
+# GOVEE_VERIFY_SETTLE_S, reads the device back and re-sends — so a device turned
+# back ON inside that window was silently turned off again. It takes two commands
+# to one device within a couple of seconds, which a person easily produces.
+#
+# Counted here, at the one call every LAN command goes through, and only for
+# `turn`: a color or a level is not a statement about power, and power is the
+# only thing that check judges.
+_govee_write_seq: dict = {}
+_govee_repair_write: contextvars.ContextVar = contextvars.ContextVar(
+    "govee_repair_write", default=False)
+
+
+def govee_write_seq(ip) -> int:
+    """How many power commands this device has been sent (0 if none)."""
+    return _govee_write_seq.get(str(ip), 0)
+
+
+@contextmanager
+def govee_repair_scope():
+    """Writes inside this block restate an existing intention — a verify's own
+    re-send — rather than express a new one, so they don't advance the count."""
+    token = _govee_repair_write.set(True)
+    try:
+        yield
+    finally:
+        _govee_repair_write.reset(token)
+
+
 async def govee_lan_send(ip: str, cmd: str, data: dict, repeat: bool = True) -> Optional[dict]:
     """Fire-and-forget LAN control command. Govee control commands don't send a
     reply, so we don't wait for one — waiting blocked up to 3s per command,
@@ -886,6 +917,10 @@ async def govee_lan_send(ip: str, cmd: str, data: dict, repeat: bool = True) -> 
 
     Sent twice by default (see GOVEE_RESEND_DELAY_S); pass repeat=False for
     callers that already resend on their own cadence."""
+    # Counted before sending: the intention exists whether or not the datagram
+    # lands, and a pending power check must not reverse it either way.
+    if cmd == "turn" and not _govee_repair_write.get():
+        _govee_write_seq[str(ip)] = _govee_write_seq.get(str(ip), 0) + 1
     loop = asyncio.get_event_loop()
 
     def _send():

@@ -851,8 +851,13 @@ function SceneAddressToggle({ value, count, onChange, isMobile, small }) {
 // reached across files, because room-assignment.js loads AFTER room-section.js
 // and depending upward would invert the script order index.html defines.
 function DevicePickerModal({ title, devices, onSelect, onClose, nicknames }) {
-  if (devices.length === 0) return null;
+  // The hook runs BEFORE the early return (v3.51.1). React counts hooks per
+  // render, so when `devices` went empty while this modal was open — the last
+  // unassigned light claimed from another tab, or an SSE refresh landing — the
+  // early return skipped the useState, React threw "rendered fewer hooks than
+  // expected", and with no error boundary the whole page went blank.
   const [selected, setSelected] = useState(new Set());
+  if (devices.length === 0) return null;
 
   const toggle = (d) => {
     const key = d.type === "hue" ? `hue:${d.id}` : `govee:${goveeSlug(d)}`;

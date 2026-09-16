@@ -108,7 +108,10 @@ function LightshowCountdown({ nextAt, running }) {
 
 function LightshowPanel({ roomName, show, patterns, devices, favorites,
                           onFavoritesChange, onSave, onStep, isMobile }) {
-  const s = show || {};
+  // Everything saved but not yet confirmed by the server, merged over its answer.
+  // See `save` below for what it fixes.
+  const [overlay, setOverlay] = useState({});
+  const s = { ...(show || {}), ...overlay };
   const geometry = s.geometry || "none";
   const isPlan = geometry === "plan";
   // The Pi decides which patterns this room's layout can actually run; never
@@ -131,11 +134,46 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
   // Sliders auto-save like every other setting in this app (no Save button
   // anywhere), but a drag fires dozens of changes — debounce so a 30-second
   // interval isn't saved 40 times on the way there.
+  // Every control here saves itself, and the panel then shows whatever the server
+  // answered — which is right, because the numbers that matter (cell count, step
+  // cost, the interval it will really use) are DERIVED and a guess at them is
+  // exactly what the panel exists to report. But it lost edits two ways
+  // (v3.51.1), both on the screen Drew already finds hard:
+  //   - the sliders shared ONE debounce timer, so touching a second slider
+  //     cancelled the first one's pending save and only the last field was sent.
+  //     The first slider then sprang back on the next refresh.
+  //   - the multi-select lists (palettes, lights, color roles) each rebuilt their
+  //     list from the value the SERVER last confirmed, so a second tap made before
+  //     the first round trip returned was computed from the stale list and
+  //     overwrote the first pick.
+  // `save` answers both: the overlay above holds what has been saved but not yet
+  // confirmed, so the next tap builds on the last one, and the debounce
+  // ACCUMULATES a patch rather than replacing it.
   const saveTimer = useRef(null);
+  const pendingPatch = useRef({});
+  const inflight = useRef(0);
   useEffect(() => () => clearTimeout(saveTimer.current), []);
+
+  const save = (patch) => {
+    setOverlay(prev => ({ ...prev, ...patch }));
+    inflight.current += 1;
+    Promise.resolve(onSave(patch)).finally(() => {
+      inflight.current -= 1;
+      // With nothing in flight the server's answer IS the truth again, including
+      // the derived numbers and anything it clamped.
+      if (inflight.current === 0) setOverlay({});
+    });
+  };
+
   const saveSoon = (patch) => {
+    pendingPatch.current = { ...pendingPatch.current, ...patch };
+    setOverlay(prev => ({ ...prev, ...patch }));   // the slider reads back at once
     clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => onSave(patch), 500);
+    saveTimer.current = setTimeout(() => {
+      const merged = pendingPatch.current;
+      pendingPatch.current = {};
+      save(merged);
+    }, 500);
   };
 
   const selected = s.palettes || [];
@@ -143,12 +181,12 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
     const next = selected.includes(name)
       ? selected.filter(n => n !== name)
       : [...selected, name];
-    onSave({ palettes: next });
+    save({ palettes: next });
   };
 
   const excluded = s.exclude || [];
   const toggleDevice = (key) => {
-    onSave({
+    save({
       exclude: excluded.includes(key)
         ? excluded.filter(k => k !== key)
         : [...excluded, key],
@@ -208,7 +246,7 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
       <div style={{ ...card, borderColor: s.running ? "#a78bfa" : "#1e293b" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
           <button
-            onClick={() => onSave({ enabled: !s.enabled })}
+            onClick={() => save({ enabled: !s.enabled })}
             disabled={!s.enabled && !ready}
             title={ready ? "" : "Pick some colors first"}
             style={{
@@ -248,7 +286,7 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
           {shownPatterns.map(p => {
             const active = p.key === pattern;
             return (
-              <button key={p.key} onClick={() => onSave({ pattern: p.key })} style={{
+              <button key={p.key} onClick={() => save({ pattern: p.key })} style={{
                 textAlign: "left", padding: 10, borderRadius: 10, cursor: "pointer",
                 border: `1px solid ${active ? "#a78bfa" : "#1e293b"}`,
                 background: active ? "rgba(167,139,250,0.12)" : "#0a0f1e",
@@ -293,7 +331,7 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
            : pattern === "wipe" ? [["forward", "from the start"], ["backward", "from the end"]]
            : [["forward", "forward"], ["backward", "backward"], ["bounce", "bounce"]]
           ).map(([k, label]) => (
-            <button key={k} onClick={() => onSave({ direction: k })}
+            <button key={k} onClick={() => save({ direction: k })}
               style={chip((s.direction || "forward") === k)}>{label}</button>
           )))}
 
@@ -301,37 +339,37 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
         {opts.includes("axis") && isPlan && optRow(
           pattern === "alternate" ? "Grouping" : "Across",
           axisChoices.map(([k, label]) => (
-            <button key={k} onClick={() => onSave({ axis: k })}
+            <button key={k} onClick={() => save({ axis: k })}
               style={chip(axisValue === k)}>{label}</button>
           )))}
 
         {opts.includes("groups") && optRow("Take turns in",
           [2, 3, 4].map(g => (
-            <button key={g} onClick={() => onSave({ groups: g })}
+            <button key={g} onClick={() => save({ groups: g })}
               style={chip((s.groups || 2) === g)}>{g} groups</button>
           )))}
 
         {opts.includes("swaps") && optRow("Pairs per step",
           [1, 2, 3].map(n => (
-            <button key={n} onClick={() => onSave({ swaps: n })}
+            <button key={n} onClick={() => save({ swaps: n })}
               style={chip((s.swaps || 2) === n)}>{n}</button>
           )))}
 
         {opts.includes("tail") && optRow("Tail length",
           [1, 2, 3, 4, 6].map(n => (
-            <button key={n} onClick={() => onSave({ tail: n })}
+            <button key={n} onClick={() => save({ tail: n })}
               style={chip((s.tail || 3) === n)}>{n}</button>
           )))}
 
         {opts.includes("band") && optRow("Band width",
           [1, 2, 3, 4].map(n => (
-            <button key={n} onClick={() => onSave({ band: n })}
+            <button key={n} onClick={() => save({ band: n })}
               style={chip((s.band || 2) === n)}>{n}</button>
           )))}
 
         {opts.includes("rest") && optRow("Resting lights",
           [["dim", "dim"], ["off", "off"]].map(([k, label]) => (
-            <button key={k} onClick={() => onSave({ rest: k })}
+            <button key={k} onClick={() => save({ rest: k })}
               style={chip((s.rest || "dim") === k)}>{label}</button>
           )))}
 
@@ -406,7 +444,7 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
         <div style={heading}>Colors</div>
         <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
           {LIGHTSHOW_SOURCES.map(src => (
-            <button key={src.key} onClick={() => onSave({ source: src.key })}
+            <button key={src.key} onClick={() => save({ source: src.key })}
               style={chip((s.source || "palettes") === src.key)}>{src.label}</button>
           ))}
         </div>
@@ -463,10 +501,10 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
                 single mode it would just be a way to break the selection. */}
             {multi && (
               <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
-                <button onClick={() => onSave({
+                <button onClick={() => save({
                   palettes: Array.from(new Set([...selected, ...filtered.map(p => p.name)])),
                 })} style={{ ...chip(false), padding: "4px 8px", fontSize: 10 }}>+ Add all shown</button>
-                <button onClick={() => onSave({
+                <button onClick={() => save({
                   palettes: selected.filter(n => !filtered.some(p => p.name === n)),
                 })} style={{ ...chip(false), padding: "4px 8px", fontSize: 10 }}>− Remove shown</button>
               </div>
@@ -476,7 +514,7 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
                 const on = selected.includes(p.name);
                 return (
                   <button key={p.name}
-                    onClick={() => multi ? togglePalette(p.name) : onSave({ palettes: [p.name] })}
+                    onClick={() => multi ? togglePalette(p.name) : save({ palettes: [p.name] })}
                     style={{
                     display: "flex", alignItems: "center", gap: 8, padding: "6px 8px",
                     borderRadius: 8, cursor: "pointer", textAlign: "left",
@@ -498,7 +536,7 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
             </div>
             {pattern !== "hop" && (
               <button onClick={() => {
-                if (multi) onSave({ palettes: selected.slice(0, 1) });
+                if (multi) save({ palettes: selected.slice(0, 1) });
                 setMultiOpen(!multi);
               }} style={{
                 background: "none", border: "none", padding: "8px 0 0", cursor: "pointer",
@@ -535,7 +573,7 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
             <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginBottom: 10 }}>
               {(s.colors || []).map((c, i) => (
                 <button key={i} title="Remove"
-                  onClick={() => onSave({ colors: (s.colors || []).filter((_, j) => j !== i) })}
+                  onClick={() => save({ colors: (s.colors || []).filter((_, j) => j !== i) })}
                   style={{
                     width: 26, height: 26, borderRadius: 6, cursor: "pointer", padding: 0,
                     background: `rgb(${c[0]},${c[1]},${c[2]})`,
@@ -555,7 +593,7 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
               stageApply={true} applyLabel="Add color"
               currentColor={{ r: 255, g: 120, b: 40 }}
               onColorSelect={() => {}}
-              onApply={(r, g, b) => onSave({ colors: [...(s.colors || []), [r, g, b]] })}
+              onApply={(r, g, b) => save({ colors: [...(s.colors || []), [r, g, b]] })}
             />
           </div>
         )}
@@ -583,7 +621,7 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
               return (
                 <div key={i} style={{ textAlign: "center", width: 62 }}>
                   <button
-                    onClick={() => onSave({ color_order: promoteColor(orderList, i) })}
+                    onClick={() => save({ color_order: promoteColor(orderList, i) })}
                     title={inUse ? `Make this the ${roleWords[0].toLowerCase()}` : "Bring this color back in"}
                     style={{
                       width: 46, height: 46, borderRadius: 10, cursor: "pointer", padding: 0,
@@ -602,7 +640,7 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
                      : inUse ? roleWords[1].toUpperCase() : "OFF"}
                   </div>
                   <button
-                    onClick={() => onSave({ color_order: toggleColor(orderList, i) })}
+                    onClick={() => save({ color_order: toggleColor(orderList, i) })}
                     disabled={inUse && orderList.length <= 2}
                     style={{
                       background: "none", border: "none", padding: "2px 0 0",
@@ -615,9 +653,9 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
             })}
           </div>
           <div style={{ display: "flex", gap: 6, marginTop: 12, flexWrap: "wrap" }}>
-            <button onClick={() => onSave({ color_order: shuffleOrder(orderList) })}
+            <button onClick={() => save({ color_order: shuffleOrder(orderList) })}
               style={chip(false)}>Shuffle roles</button>
-            <button onClick={() => onSave({ color_order: [] })}
+            <button onClick={() => save({ color_order: [] })}
               style={chip(false)}>Reset</button>
           </div>
           {orderList.length === 2 && (
@@ -632,7 +670,7 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
       {/* ── Which lights ────────────────────────────────────────────────── */}
       <div style={card}>
         <div style={heading}>Lights</div>
-        <button onClick={() => onSave({ segments: !(s.segments !== false) })} style={{
+        <button onClick={() => save({ segments: !(s.segments !== false) })} style={{
           display: "flex", alignItems: "center", gap: 10, width: "100%", textAlign: "left",
           padding: 10, borderRadius: 10, cursor: "pointer", marginBottom: 10,
           border: `1px solid ${s.segments !== false ? "#a78bfa" : "#1e293b"}`,
@@ -695,7 +733,7 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
         background: "linear-gradient(180deg, rgba(10,15,30,0) 0%, #0a0f1e 32%)",
       }}>
         <button
-          onClick={() => onSave({ enabled: !s.enabled })}
+          onClick={() => save({ enabled: !s.enabled })}
           disabled={!s.enabled && !ready}
           style={{
             width: "100%", padding: "12px 16px", borderRadius: 10, border: "none",

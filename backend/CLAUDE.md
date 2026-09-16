@@ -563,6 +563,57 @@ ct→xy, the double-tap race, every storm stop path and its `restore`, the witne
 truth table, a voice off end to end, the per-room backstops, the shared read, and
 the bridge-checked defer. `test_hue_body.py` was updated for the narrowed rule.
 
+## The Fable review's item 6 — the smaller S2s (v3.51.1)
+
+Four of the seven are here. The other three are frontend — the device picker's
+hook, the shade fallback and the lightshow panel's saves — in
+`static/js/CLAUDE.md`.
+
+### A color pick no longer eats the level saved for the next power-on
+`control_hue_light` consumes a pending level into `state["bri"]` when a light is
+switched on, and the RGB block then overwrote it with the color's own luminance:
+it asked `req.brightness is None` rather than "does this command already carry a
+level?". So picking a color on an OFF light threw the saved level away — v3.45.0
+silently not working, for one gesture. The guard is now `if "bri" not in state`.
+
+### The Govee power verify won't reverse a newer command either
+The Hue checks learned this in v3.48.3; the Govee one never did. It captures "this
+device should be off", waits `GOVEE_VERIFY_SETTLE_S`, reads the device back and
+re-sends — so a device turned back ON inside that window was turned off again.
+- **`discovery.govee_write_seq(ip)`** counts **power** commands in `govee_lan_send`,
+  the one call every LAN command goes through. Only `turn` counts: a color or a
+  level is not a statement about power, and power is all this check judges.
+- `schedule_govee_verify(..., since=)` snapshots the count per device (taken at
+  registration, which is right for a caller that has just written), and
+  `_govee_verify_repair` leaves any device whose count has moved, saying so in the
+  outcome line (`N superseded`).
+- Its own re-send runs inside **`govee_repair_scope()`**, so it can't disarm the
+  re-read that follows it. Same rule as `hue_repair_scope`.
+
+### One light's error no longer abandons a room
+`control_room`'s Hue loop had no try/except, so an httpx failure propagated out of
+the endpoint and **the Govee loop below it never ran at all**. Each light is now
+isolated and reported as `{success: false, error}`, like the loops beside it. The
+unassigned-Hue pass in "All lights" got the same treatment (it had one try around
+the whole loop; graded S3).
+
+### A cancelled apply stops its own writes
+`do_hue` and `do_govee_whole` run as their own TASKS so they don't wait on the seed
+phase (v3.44.0). Cancellation lands in `await do_seeds()` — before the gather that
+would reach them — so they carried on writing the very devices the replacing apply
+was starting on, for about two seconds. The `finally` now cancels and awaits them,
+and closes the deferred coroutines (which otherwise log "never awaited").
+`_start_scene_apply` and `scene_room_apply` then settle `LIGHTSHOW_SETTLE_S` before
+starting the new apply: the cancelled run's last Govee datagram has a
+fire-and-forget duplicate 0.12s behind it that cancelling cannot stop.
+
+Covered by `test_v351.py` (19 assertions): the saved level surviving a color pick,
+an explicit level still winning, luminance still applying otherwise, a room
+surviving one light's error with its Govee device still driven, "All lights"
+surviving one loose light, the Govee count (a genuine miss repaired, a newer
+command left alone, the repair's own re-send not counting, and a level or color not
+counting), and a cancelled apply writing nothing after the cancel.
+
 ## Delivery health — a rolling count of commands that didn't take (v3.46.0)
 
 The failure this app fights hardest is **invisible by construction**. The Hue bridge

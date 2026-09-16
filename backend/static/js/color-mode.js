@@ -1330,6 +1330,26 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     return { ...result, ...stripColors };
   }, [placedColorLights, paletteColors, buildAdjacency, fixtures, roomName, shuffleSeed, isLinear]);
 
+  // When no shade satisfies the gap, take the LEAST BAD one rather than the first
+  // shuffled one (v3.51.1). On a strip every segment neighbors every other, so any
+  // run longer than the number of gap-respecting shades ends up here — and "first
+  // shuffled" could hand a segment the very shade its neighbor already has, which
+  // is the one thing these modes promise can't happen. Furthest-from-any-neighbor
+  // still can't give eight distinct shades to ten lights, but it never repeats
+  // while a different shade is free, and it degrades by distance instead of luck.
+  // `indices` is already shuffled, so ties break on the room's seed and Shuffle
+  // still re-rolls the arrangement.
+  function furthestShade(indices, neighborIndices) {
+    const used = [...neighborIndices];
+    if (!used.length) return indices[0];
+    let best = indices[0], bestGap = -1;
+    for (const idx of indices) {
+      const gap = Math.min(...used.map(n => Math.abs(idx - n)));
+      if (gap > bestGap) { best = idx; bestGap = gap; }
+    }
+    return best;
+  }
+
   // ─── Tonal mode: 8 shades of one color, randomly assigned with adjacency gap ─
   const computeTonal = useCallback(() => {
     if (placedColorLights.length === 0) return null;
@@ -1361,7 +1381,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
         const tooClose = [...neighborIndices].some(n => Math.abs(idx - n) < 2);
         if (!tooClose) { chosen = idx; break; }
       }
-      if (chosen === -1) chosen = indices[0]; // fallback
+      if (chosen === -1) chosen = furthestShade(indices, neighborIndices);
       assignment[device.key] = chosen;
     });
 
@@ -1577,7 +1597,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
         [indices[i], indices[j]] = [indices[j], indices[i]];
       }
       let chosen = indices.find(idx => ![...neighborIdx].some(nn => Math.abs(idx - nn) < gap));
-      if (chosen === undefined) chosen = indices[0];
+      if (chosen === undefined) chosen = furthestShade(indices, neighborIdx);  // see computeTonal
       assignment[device.key] = chosen;
     });
     const result = {};

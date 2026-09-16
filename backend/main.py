@@ -31,6 +31,8 @@ from discovery import (
     hue_write_seq,
     hue_repair_scope,
     hue_supported_state,
+    govee_write_seq,
+    govee_repair_scope,
     discover_govee_lan,
     govee_lan_turn,
     govee_lan_brightness,
@@ -1421,6 +1423,10 @@ async def _start_scene_apply(req):
             await existing
         except BaseException:
             pass
+        # Its last Govee datagram has a fire-and-forget duplicate 0.12s behind it
+        # that cancelling cannot stop; let that land before the new apply starts
+        # writing the same devices. Same reason stop_lightshow settles.
+        await asyncio.sleep(LIGHTSHOW_SETTLE_S)
     _scene_tasks[req.room] = asyncio.create_task(_run_scene_apply(req))
     return _scene_tasks[req.room]
 
@@ -3337,8 +3343,14 @@ async def control_hue_light(req: HueLightStateRequest):
             state["xy"] = [round(X / total, 4), round(Y / total, 4)]
         else:
             state["xy"] = [0.3127, 0.3290]  # D65 white
-        # Only derive brightness from color luminance if no explicit brightness was sent
-        if req.brightness is None:
+        # Only derive brightness from the color's luminance if this command carries
+        # no level of its own. `req.brightness is None` asked a different question
+        # (v3.51.1): a level chosen while the light was OFF is consumed into
+        # state["bri"] a few lines above, and this then overwrote it with the
+        # luminance — so picking a color on an off light silently threw away the
+        # level saved for its next power-on. The v3.45.0 feature, not working for
+        # that one gesture.
+        if "bri" not in state:
             state["bri"] = max(1, min(254, int(Y * 254)))
 
     # Only what this light can take (v3.50.0): a dimmable bulb has no color and no
@@ -3849,17 +3861,24 @@ GOVEE_VERIFY_SETTLE_S = 1.5    # let both copies of the double-send land first
 # Verification is COALESCED like Hue's: a zone off spanning several rooms
 # registers into one pending map and costs a single pass.
 _govee_verify_pending: dict = {}
+_govee_verify_since: dict = {}   # ip -> its power-write count when the expectation was made
 _govee_verify_task: Optional[asyncio.Task] = None
 
 
-def schedule_govee_verify(expectations: dict):
+def schedule_govee_verify(expectations: dict, since: Optional[dict] = None):
     """Queue {ip: (want_on, room_name)} for read-back. Synchronous and cheap —
     merges into the pending map and ensures the drain task is running, so no
-    caller ever waits out the settle."""
+    caller ever waits out the settle.
+
+    `since` is each device's power-write count when the expectation was made
+    (`govee_write_seq`), taken here when the caller doesn't supply one — right
+    for a caller that has just written. See _govee_verify_repair."""
     global _govee_verify_task
     if not expectations:
         return
     _govee_verify_pending.update(expectations)
+    for ip in expectations:
+        _govee_verify_since[str(ip)] = (since or {}).get(str(ip), govee_write_seq(ip))
     if _govee_verify_task is None or _govee_verify_task.done():
         _govee_verify_task = asyncio.create_task(_govee_verify_drain())
 
@@ -3871,8 +3890,10 @@ async def _govee_verify_drain(settle_s: float = GOVEE_VERIFY_SETTLE_S):
         while _govee_verify_pending:
             await asyncio.sleep(settle_s)
             batch = dict(_govee_verify_pending)
+            since = {str(k): _govee_verify_since.get(str(k)) for k in batch}
             _govee_verify_pending.clear()
-            await _govee_verify_repair(batch)
+            _govee_verify_since.clear()
+            await _govee_verify_repair(batch, since=since)
     except asyncio.CancelledError:
         pass
     except Exception:
@@ -3894,7 +3915,7 @@ def _govee_label(ip: str) -> str:
     return ip
 
 
-async def _govee_verify_repair(expectations: dict):
+async def _govee_verify_repair(expectations: dict, since: Optional[dict] = None):
     """expectations: {ip: (want_on, room_name)}. Reads each device back and
     re-sends once to any that didn't take. Queries are SEQUENTIAL — every Govee
     device answers on port 4002 and only one socket may hold it (discovery.py
@@ -3912,8 +3933,19 @@ async def _govee_verify_repair(expectations: dict):
     if not expectations:
         return
     failed = {}    # room name -> [device label, ...]
-    tally = {"correct": 0, "repaired": 0, "unreachable": 0, "stuck": 0}
+    tally = {"correct": 0, "repaired": 0, "unreachable": 0, "stuck": 0, "superseded": 0}
     for ip, (want_on, room_name) in expectations.items():
+        # A NEWER COMMAND WINS (v3.51.1) — the Hue rule from v3.48.3, which this
+        # check never got. It captures "this device should be off", waits out the
+        # settle and re-sends, so a device turned back on inside that window was
+        # turned off again. `since` is counted at the one LAN call every command
+        # goes through, and only for power (see govee_write_seq).
+        base = (since or {}).get(str(ip))
+        if base is not None and govee_write_seq(ip) != base:
+            log.info("Govee verify: %s has had a newer power command since — leaving it",
+                     _govee_label(ip))
+            tally["superseded"] += 1
+            continue
         want_word = "on" if want_on else "off"
         try:
             state = await govee_lan_get_state(ip)
@@ -3935,7 +3967,10 @@ async def _govee_verify_repair(expectations: dict):
         log.info("Govee verify: %s (%s) didn't take — re-sending %s",
                  label, ip, want_word)
         try:
-            await govee_lan_turn(ip, bool(want_on))
+            # The re-send restates the old intention rather than expressing a new
+            # one, so it must not disarm this check or the next.
+            with govee_repair_scope():
+                await govee_lan_turn(ip, bool(want_on))
             await asyncio.sleep(GOVEE_VERIFY_SETTLE_S)
             again = await govee_lan_get_state(ip)
         except Exception:
@@ -3956,8 +3991,9 @@ async def _govee_verify_repair(expectations: dict):
     # distinguish "read all 7 back, all off" from "the verify never ran" — so it
     # proved nothing and the investigation stalled. One line ends that ambiguity.
     log.info("Govee verify: %d device(s) — %d already correct, %d repaired, "
-             "%d unreachable, %d still wrong", len(expectations),
-             tally["correct"], tally["repaired"], tally["unreachable"], tally["stuck"])
+             "%d unreachable, %d still wrong, %d superseded", len(expectations),
+             tally["correct"], tally["repaired"], tally["unreachable"], tally["stuck"],
+             tally["superseded"])
 
     if failed:
         _mark_room_not_applied(failed)
@@ -4196,7 +4232,17 @@ async def control_room(req: RoomStateRequest):
                 results["hue"].append({"light_id": light_id, "success": True,
                                        "skipped": "not supported by this light"})
                 continue
-            success = await set_hue_light_state(ip, username, light_id, state)
+            try:
+                success = await set_hue_light_state(ip, username, light_id, state)
+            except Exception as e:
+                # One light's network error must not abandon the rest of the room —
+                # including the Govee loop below, which hasn't run yet (v3.51.1).
+                # "All lights" isolates per room and per Govee device; this loop
+                # never isolated per light.
+                log.warning("Room %r: Hue light %s failed: %s", req.room_name, light_id, e)
+                results["hue"].append({"light_id": light_id, "success": False,
+                                       "error": str(e)})
+                continue
             state = hue_supported_state(light_id, state)
             if success:
                 record_hue_state(str(light_id), state)  # last-known, for power recovery
@@ -4367,7 +4413,14 @@ async def control_all(req: AllControlRequest):
                 lid = str(light.get("id"))
                 if lid in in_a_room_hue:
                     continue
-                res = await control_hue_light(HueLightStateRequest(light_id=lid, on=req.on))
+                try:
+                    res = await control_hue_light(HueLightStateRequest(light_id=lid, on=req.on))
+                except Exception as e:
+                    # Per LIGHT, like the room and Govee loops beside it (v3.51.1).
+                    # This is the panic button: one unassigned bulb failing must not
+                    # abandon the others.
+                    log.warning("All-control: unassigned Hue %s failed: %s", lid, e)
+                    continue
                 if res.get("success") and res.get("state"):
                     hue_sent[lid] = res["state"]
                     touched["loose_hue"].append(lid)
@@ -5466,6 +5519,14 @@ async def _run_scene_apply(req: SceneApplyRequest):
             _scene_emit(scope, room, phase=phase, total=total, done=done,
                         label=label, device=device, active=True, end_at=end_at_ms)
 
+    # The independent fast paths run as their own TASKS (see below), so they are
+    # NOT cancelled along with this coroutine — named out here so the finally can
+    # stop them (v3.51.1).
+    early: list = []
+    # The slow paths are created as COROUTINES and only awaited by the gather, so
+    # a cancellation before it leaves them un-awaited — harmless, but Python says
+    # so at runtime, and a warning nobody can act on is noise in the journal.
+    deferred: list = []
     try:
         done = 0
         hue_expect = {}   # filled by do_hue; recorded for later divergence checks
@@ -5590,10 +5651,10 @@ async def _run_scene_apply(req: SceneApplyRequest):
         # the seeds and the hold. For the Living Room that is ~2.6s off the time to
         # first light, and the same 2.6s off the Hue read-back — `schedule_hue_verify`
         # fires from inside do_hue, so verification moves earlier by exactly as much.
-        early = [asyncio.ensure_future(do_hue())]
+        early.append(asyncio.ensure_future(do_hue()))
         if not whole_collides:
             early.append(asyncio.ensure_future(do_govee_whole()))
-        deferred = [do_razer(), do_cloud()]
+        deferred.extend([do_razer(), do_cloud()])
         if whole_collides:
             deferred.append(do_govee_whole())
 
@@ -5644,6 +5705,21 @@ async def _run_scene_apply(req: SceneApplyRequest):
         _scene_emit(scope, room, phase="canceled", active=False, label="")
         raise
     finally:
+        # A CANCELLED apply must not leave its own writes running (v3.51.1).
+        # Cancellation lands wherever this coroutine is awaiting — most often
+        # inside do_seeds, before the gather that would reach them — and do_hue /
+        # do_govee_whole are separate tasks, so they carried on writing the very
+        # devices the replacing apply was starting on, for about two seconds.
+        # v3.48.3's write count already stopped the orphan's delayed Hue checks
+        # from reverting the newer scene; this is the writes themselves.
+        for t in early:
+            if not t.done():
+                t.cancel()
+        if early:
+            await asyncio.gather(*early, return_exceptions=True)
+        for c in deferred:
+            if asyncio.iscoroutine(c):
+                c.close()      # a no-op once the gather has consumed it
         # Re-enable events and emit one refresh so all sessions resync once.
         _suppress_publish.set(False)
         publish_event("config")
@@ -5672,6 +5748,7 @@ async def scene_room_apply(req: SceneApplyRequest):
             await existing
         except BaseException:
             pass
+        await asyncio.sleep(LIGHTSHOW_SETTLE_S)   # see _start_scene_apply
     task = asyncio.create_task(_run_scene_apply(req))
     _scene_tasks[scope] = task
     return {"started": True, "room": req.room, "scope": scope}
