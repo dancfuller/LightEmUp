@@ -1102,6 +1102,23 @@ patterns generated at start, and segment colors are computed once — so those t
 effect on the **next** storm start. Making cadence fully live means regenerating
 patterns each cycle (deferred; needs a real-storm test). Endpoint returns `applied_live`.
 
+**Three fixes from the review (v3.51.3):**
+- **`applied_live` says what actually applied.** The panel posts every setting on
+  each save, so the endpoint diffs against the running storm's own settings and
+  sorts the changes with `scenes.LIVE_FIELDS` / `PARTLY_LIVE_FIELDS` /
+  `NEXT_START_FIELDS`; it returns `next_start` too, and the panel's footer then
+  says timing changes wait for the next start. It used to be True for any save
+  while a storm ran. **A new storm setting belongs in one of those three sets.**
+- **An inverted range can't stop a storm starting.** `generate_pattern` reads every
+  min/max pair through `_span`, which orders them; `randint(low, high)` raised
+  when a Min slider had been dragged past its Max. The panel also pushes the other
+  slider along (`updateRange`), so the range never reads backwards.
+- **A storm leaves razer mode when it stops.** The devices it drove per segment are
+  kept as `razer_ips`, and `govee_razer_disable` runs on each before the restore.
+  It was imported and never called. Whether razer mode actually ignores the
+  restore's LAN commands is untested on hardware; this is the protocol's
+  documented exit either way.
+
 ## Power-recovery after an outage (v3.3.0)
 A sudden power loss + restore reboots the Pi, the Hue bridge, and the Govee devices
 together; the lights come back to their **hardware/bridge** default (often full-on),

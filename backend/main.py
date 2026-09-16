@@ -4669,16 +4669,29 @@ async def save_lightning_settings(req: LightningSettingsRequest):
         config["lightning_scenes"] = {}
 
     # Merge with existing settings (only overwrite provided fields).
+    import scenes
     existing = config["lightning_scenes"].get(req.room_name, {})
     updates = req.model_dump(exclude={"room_name"}, exclude_none=True)
+    # The panel posts EVERY setting on each save, so what changed is worked out
+    # here, against the running storm's own settings when there is one (v3.51.3).
+    # `applied_live` used to be True for any save while a storm ran — including
+    # timing it can't pick up until the next start.
+    scene = scene_manager.active_scenes.get(req.room_name)
+    current = (scene["settings"].model_dump()
+               if scene and scene.get("settings") is not None else existing)
+    changed = {k for k, v in updates.items() if current.get(k) != v}
     existing.update(updates)
     config["lightning_scenes"][req.room_name] = existing
     save_config(config)
     # If a storm is running in this room, live-apply the changed settings so the
     # user's tweaks take effect without stopping the storm (see update_settings for
     # what applies live vs. on next start).
-    applied_live = scene_manager.update_settings(req.room_name, updates)
-    return {"success": True, "settings": existing, "applied_live": applied_live}
+    running = scene_manager.update_settings(req.room_name, updates)
+    live = scenes.LIVE_FIELDS | scenes.PARTLY_LIVE_FIELDS
+    later = scenes.NEXT_START_FIELDS | scenes.PARTLY_LIVE_FIELDS
+    return {"success": True, "settings": existing,
+            "applied_live": bool(running and changed & live),
+            "next_start": sorted(changed & later) if running else []}
 
 
 @app.get("/api/scenes/lightning/events/{room_name}")

@@ -98,14 +98,14 @@ def generate_pattern(settings: LightningSettings, seed: int = 0) -> list[Event]:
 
     while elapsed_ms < PATTERN_DURATION_MS:
         # ── dark gap ───────────────────────────────────────────────────
-        gap_ms = rng.randint(settings.min_gap_ms, settings.max_gap_ms)
+        gap_ms = rng.randint(*_span(settings.min_gap_ms, settings.max_gap_ms))
         elapsed_ms += gap_ms
 
         if elapsed_ms >= PATTERN_DURATION_MS:
             break
 
         # ── burst ──────────────────────────────────────────────────────
-        burst_count = rng.randint(settings.burst_count_min, settings.burst_count_max)
+        burst_count = rng.randint(*_span(settings.burst_count_min, settings.burst_count_max))
         first_flash = True
         for i in range(burst_count):
             # Delay before flash.
@@ -114,7 +114,7 @@ def generate_pattern(settings: LightningSettings, seed: int = 0) -> list[Event]:
                 first_flash = False
             else:
                 # Small inter-burst gap before subsequent flashes.
-                flash_delay = rng.randint(30, settings.inter_burst_gap_ms)
+                flash_delay = rng.randint(*_span(30, settings.inter_burst_gap_ms))
                 elapsed_ms += flash_delay
 
             if elapsed_ms >= PATTERN_DURATION_MS:
@@ -124,7 +124,7 @@ def generate_pattern(settings: LightningSettings, seed: int = 0) -> list[Event]:
 
             # Flash duration (how long the flash stays bright).
             flash_dur = rng.randint(
-                settings.flash_duration_min_ms, settings.flash_duration_max_ms
+                *_span(settings.flash_duration_min_ms, settings.flash_duration_max_ms)
             )
             elapsed_ms += flash_dur
 
@@ -157,6 +157,26 @@ _GOVEE_BG_COLOR = (255, 180, 80)
 
 
 # ─── SceneManager ─────────────────────────────────────────────────────────
+
+
+def _span(a, b):
+    """(low, high), whichever way round they were saved (v3.51.3). The min and max
+    sliders are independent, and `randint` raises when low > high — so a Min Gap
+    dragged past its Max Gap made the next storm fail to start at all."""
+    lo, hi = int(a), int(b)
+    return (lo, hi) if lo <= hi else (hi, lo)
+
+
+# What a RUNNING storm picks up from a settings save (v3.51.3). The loops read
+# these per flash:
+LIVE_FIELDS = {"color_r", "color_g", "color_b", "use_color_temp"}
+# ...these the Govee whole-device loop reads per flash, but Hue computes once at
+# start:
+PARTLY_LIVE_FIELDS = {"color_temp_kelvin", "background_brightness", "background_color_temp_k"}
+# ...and these are baked into the patterns or the task layout when a storm starts.
+NEXT_START_FIELDS = {"min_gap_ms", "max_gap_ms", "flash_duration_min_ms",
+                     "flash_duration_max_ms", "burst_count_min", "burst_count_max",
+                     "inter_burst_gap_ms", "govee_flash", "storm_start_delay_s"}
 
 
 class SceneManager:
@@ -263,6 +283,7 @@ class SceneManager:
 
         stop_event = asyncio.Event()
         tasks: list[asyncio.Task] = []
+        razer_ips: list[str] = []       # devices driven per segment, in razer mode
 
         # ── Hue tasks ─────────────────────────────────────────────────
         if hue_ip and hue_username:
@@ -292,6 +313,7 @@ class SceneManager:
             segment_count = 0 if in_fixture else room_config.get("govee_segments", {}).get(ip, 0)
 
             if segment_count > 0:
+                razer_ips.append(ip)
                 # Per-segment mode (H6061).
                 seg_patterns = [
                     generate_pattern(settings, seed=hash((room_name, "seg", ip, s)))
@@ -328,6 +350,7 @@ class SceneManager:
             "settings": settings,
             "hue_ip": hue_ip,
             "hue_username": hue_username,
+            "razer_ips": razer_ips,
         }
 
         log.info("Lightning started for room %r (%d tasks)", room_name, len(tasks))
@@ -355,6 +378,18 @@ class SceneManager:
             for t in tasks:
                 if not t.done():
                     t.cancel()
+
+        # Leave razer mode on every device the storm drove per segment (v3.51.3).
+        # `govee_razer_disable` was imported and never called, so a strip stayed in
+        # razer mode until its own 60-second timeout — with the restore's LAN
+        # commands below landing while it was still in that mode. Untested on
+        # hardware whether razer mode ignores them; leaving it is the protocol's
+        # documented exit either way.
+        for ip in scene.get("razer_ips") or []:
+            try:
+                await govee_razer_disable(ip)
+            except Exception as exc:
+                log.debug("Razer disable failed for %s: %s", ip, exc)
 
         # ── restore state ─────────────────────────────────────────────
         hue_ip = scene.get("hue_ip")

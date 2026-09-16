@@ -24,6 +24,10 @@ function LightningPanel({ roomName, isActive, onStart, onStop, goveeDevices, seg
   const [settings, setSettings] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  // Set when a save changed something a running storm only picks up when it next
+  // starts (v3.51.3) — the Pi says which in `next_start`.
+  const [needsRestart, setNeedsRestart] = useState(false);
+  useEffect(() => { if (!isActive) setNeedsRestart(false); }, [isActive]);
 
   useEffect(() => {
     api(`/scenes/lightning/settings/${encodeURIComponent(roomName)}`)
@@ -92,8 +96,20 @@ function LightningPanel({ roomName, isActive, onStart, onStop, goveeDevices, seg
     api("/scenes/lightning/settings", {
       method: "POST",
       body: JSON.stringify({ room_name: roomName, ...s }),
-    }).catch(e => console.error("Failed to save lightning settings:", e))
+    }).then(res => { if (res?.next_start?.length) setNeedsRestart(true); })
+      .catch(e => console.error("Failed to save lightning settings:", e))
       .finally(() => setSaving(false));
+  };
+
+  // A min can't pass its max, or the reverse (v3.51.3). The sliders are
+  // independent, and a storm saved that way used to fail to start at all. The Pi
+  // now copes with it; the panel still shouldn't show a range that reads backwards.
+  const updateRange = (minKey, maxKey, which, v) => {
+    const key = which === "min" ? minKey : maxKey;
+    const other = which === "min" ? maxKey : minKey;
+    updateSetting(key, v);
+    const o = settings?.[other];
+    if (o != null && (which === "min" ? v > o : v < o)) updateSetting(other, v);
   };
 
   const updateSetting = (key, value) => {
@@ -316,12 +332,12 @@ function LightningPanel({ roomName, isActive, onStart, onStop, goveeDevices, seg
             {showAdvanced && (
               <div style={{ marginTop: 8, padding: "10px 12px", background: "rgba(15,23,42,0.6)", borderRadius: 8, border: "1px solid #1e293b" }}>
                 <div style={{ fontSize: 10, color: "#64748b", marginBottom: 8 }}>Fine-tune timing — changing these clears the preset selection.</div>
-                <Slider label="Min Gap" value={settings.min_gap_ms} min={80} max={30000} onChange={(v) => updateSetting("min_gap_ms", v)} color="#818cf8" unit="ms" />
-                <Slider label="Max Gap" value={settings.max_gap_ms} min={200} max={60000} onChange={(v) => updateSetting("max_gap_ms", v)} color="#818cf8" unit="ms" />
-                <Slider label="Flash Duration (min)" value={settings.flash_duration_min_ms} min={10} max={300} onChange={(v) => updateSetting("flash_duration_min_ms", v)} color="#c084fc" unit="ms" />
-                <Slider label="Flash Duration (max)" value={settings.flash_duration_max_ms} min={20} max={500} onChange={(v) => updateSetting("flash_duration_max_ms", v)} color="#c084fc" unit="ms" />
-                <Slider label="Burst Count (min)" value={settings.burst_count_min} min={1} max={6} onChange={(v) => updateSetting("burst_count_min", v)} color="#67e8f9" />
-                <Slider label="Burst Count (max)" value={settings.burst_count_max} min={1} max={10} onChange={(v) => updateSetting("burst_count_max", v)} color="#67e8f9" />
+                <Slider label="Min Gap" value={settings.min_gap_ms} min={80} max={30000} onChange={(v) => updateRange("min_gap_ms", "max_gap_ms", "min", v)} color="#818cf8" unit="ms" />
+                <Slider label="Max Gap" value={settings.max_gap_ms} min={200} max={60000} onChange={(v) => updateRange("min_gap_ms", "max_gap_ms", "max", v)} color="#818cf8" unit="ms" />
+                <Slider label="Flash Duration (min)" value={settings.flash_duration_min_ms} min={10} max={300} onChange={(v) => updateRange("flash_duration_min_ms", "flash_duration_max_ms", "min", v)} color="#c084fc" unit="ms" />
+                <Slider label="Flash Duration (max)" value={settings.flash_duration_max_ms} min={20} max={500} onChange={(v) => updateRange("flash_duration_min_ms", "flash_duration_max_ms", "max", v)} color="#c084fc" unit="ms" />
+                <Slider label="Burst Count (min)" value={settings.burst_count_min} min={1} max={6} onChange={(v) => updateRange("burst_count_min", "burst_count_max", "min", v)} color="#67e8f9" />
+                <Slider label="Burst Count (max)" value={settings.burst_count_max} min={1} max={10} onChange={(v) => updateRange("burst_count_min", "burst_count_max", "max", v)} color="#67e8f9" />
                 <Slider label="Inter-burst Gap" value={settings.inter_burst_gap_ms} min={10} max={200} onChange={(v) => updateSetting("inter_burst_gap_ms", v)} color="#818cf8" unit="ms" />
               </div>
             )}
@@ -491,7 +507,9 @@ function LightningPanel({ roomName, isActive, onStart, onStop, goveeDevices, seg
 
           {/* Settings auto-save (debounced) — no explicit Save button. */}
           <div style={{ fontSize: 11, color: "#64748b", alignSelf: "flex-start", fontStyle: "italic" }}>
-            {saving ? "Saving…" : (isActive ? "Changes save automatically · applied live where possible" : "Changes save automatically")}
+            {saving ? "Saving…" : !isActive ? "Changes save automatically"
+              : needsRestart ? "Saved · timing changes apply the next time the storm starts"
+              : "Changes save automatically · colors apply live"}
           </div>
         </div>
       )}
