@@ -1076,7 +1076,16 @@ def _freshen_scene_payload(payload: dict):
         kept = []
         for entry in p.get(listname, []) or []:
             mac = entry.get(mac_field)
-            ip = gv_ip_for_slug(gv_slug(mac)) if mac else entry.get("ip")
+            if not mac:
+                # No device identity (v3.51.5). Falling back to the stored IP would
+                # address whatever device DHCP has since given that address, so the
+                # entry is dropped like any other that can't be resolved. Plans have
+                # carried `mac` since v3.8.0; a scene captured before that needs
+                # capturing again.
+                log.warning("Scene snapshot: a %s entry for %s has no mac; dropped",
+                            listname, entry.get("ip"))
+                continue
+            ip = gv_ip_for_slug(gv_slug(mac))
             if not ip:
                 continue   # unresolved — drop this device
             entry["ip"] = ip
@@ -1278,6 +1287,80 @@ def _device_label(key: str, fallback: str) -> str:
     return (config.get("nicknames", {}) or {}).get(key) or fallback
 
 
+# ─── Scene fill, mirrored from the browser (v3.51.5) ─────────────────────────
+# `segment_fill_modes[device key]` ("follow" | "solid" | "shades") is applied by the
+# Scenes panel as the LAST step of its preview (`applySegmentFillModes`,
+# color-mode.js). The scheduler's palette builder never read it, so a strip set to
+# "solid" came out one color by hand and per segment on a schedule. These mirror
+# `applySegmentFillModes`, `generateTonalShades`, `rgbToHsl` and `hslToRgb` — change
+# one side, change the other. `_js_round` is Math.round (Python rounds halves to
+# even; JS rounds them up).
+def _js_round(v: float) -> int:
+    return int(math.floor(v + 0.5))
+
+
+def _rgb_to_hsl(r, g, b):
+    r, g, b = r / 255, g / 255, b / 255
+    mx, mn = max(r, g, b), min(r, g, b)
+    light = (mx + mn) / 2
+    if mx == mn:
+        return 0.0, 0.0, light
+    d = mx - mn
+    s = d / (2 - mx - mn) if light > 0.5 else d / (mx + mn)
+    if mx == r:
+        h = ((g - b) / d + (6 if g < b else 0)) / 6
+    elif mx == g:
+        h = ((b - r) / d + 2) / 6
+    else:
+        h = ((r - g) / d + 4) / 6
+    return h, s, light
+
+
+def _hsl_to_rgb(h, s, light):
+    if s == 0:
+        r = g = b = light
+    else:
+        def hue2rgb(p, q, t):
+            if t < 0:
+                t += 1
+            if t > 1:
+                t -= 1
+            if t < 1 / 6:
+                return p + (q - p) * 6 * t
+            if t < 1 / 2:
+                return q
+            if t < 2 / 3:
+                return p + (q - p) * (2 / 3 - t) * 6
+            return p
+        q = light * (1 + s) if light < 0.5 else light + s - light * s
+        p = 2 * light - q
+        r, g, b = hue2rgb(p, q, h + 1 / 3), hue2rgb(p, q, h), hue2rgb(p, q, h - 1 / 3)
+    return (_js_round(r * 255), _js_round(g * 255), _js_round(b * 255))
+
+
+def _tonal_shades(r, g, b, count: int) -> list:
+    h = _rgb_to_hsl(r, g, b)[0]
+    out = []
+    for i in range(count):
+        t = 0 if count == 1 else i / (count - 1)
+        s_v = 1.0 - t * 0.80
+        l_h = 1 - s_v / 2
+        out.append(_hsl_to_rgb((h + (t - 0.5) * 0.03) % 1, 1, l_h))
+    return out
+
+
+def _apply_fill_mode(device_key: str, seg_colors: list) -> list:
+    mode = (config.get("segment_fill_modes") or {}).get(device_key) or "follow"
+    if mode == "follow" or not seg_colors:
+        return seg_colors
+    base = tuple(seg_colors[0])
+    if mode == "solid":
+        return [base] * len(seg_colors)
+    if mode == "shades":
+        return _tonal_shades(base[0], base[1], base[2], len(seg_colors))
+    return seg_colors
+
+
 def _build_palette_scene(room_name: str, palette: dict, brightness: int = 100,
                          rng=None):
     """Resolve a palette into a SceneApplyRequest for one room.
@@ -1377,6 +1460,7 @@ def _build_palette_scene(room_name: str, palette: dict, brightness: int = 100,
 
         if kind == "segments":
             seg_colors = [dealt[(key, i)] for i in range(count)]
+            seg_colors = _apply_fill_mode(key, seg_colors)   # scene fill, as Apply does
             if protocol == "razer":
                 razer.append(SceneRazer(ip=ip, mac=mac or slug, sku=sku,
                                         colors=[list(c) for c in seg_colors],
@@ -1461,7 +1545,7 @@ async def _apply_room_power(room_name: str, on: bool,
             # it so the header credits the schedule that actually did it.
             record_room_applied(room_name, "power",
                                 "Resumed last lighting" if on else "Turned off",
-                                source=source, source_detail=source_detail)
+                                source=source, source_detail=source_detail, on=bool(on))
         # The delayed checks are armed by control_room itself since v3.50.0, for
         # a hand-pressed off as much as a scheduled one; this block used to arm
         # them for schedules only. See _arm_power_backstops.
@@ -2760,6 +2844,11 @@ async def _catch_up_spans():
                          "%s — starting it now", name, stamp, end_due)
                 await _fire_schedule(sched)
                 sched["last_fired"] = stamp   # the OCCURRENCE, not now: it's the truth
+                # A one-off disables itself once it fires (v3.51.5). The normal loop
+                # did; this re-entry didn't, so a one-off recovered after an outage
+                # read as enabled for ever afterwards.
+                if (sched.get("trigger") or {}).get("type") == "oneoff":
+                    sched["enabled"] = False
             sched["end_due"] = end_due
             changed = True
         except Exception:
@@ -4337,7 +4426,7 @@ async def control_room(req: RoomStateRequest):
     # recorded: that's the room slider, which fires repeatedly while dragging and
     # would otherwise churn the record (and overwrite the scene name) on every tick.
     if req.on is False:
-        record_room_applied(req.room_name, "power", "Turned off", expect=hue_sent)
+        record_room_applied(req.room_name, "power", "Turned off", expect=hue_sent, on=False)
     elif req.r is not None and req.g is not None and req.b is not None:
         record_room_applied(req.room_name, "color", "Solid color",
                             swatches=[[req.r, req.g, req.b]], expect=hue_sent)
@@ -4345,7 +4434,7 @@ async def control_room(req: RoomStateRequest):
         # "Resume" sends only {on:true}; each light returns to whatever it
         # remembers, so there's nothing to compare later — record no expectation
         # rather than a misleading one.
-        record_room_applied(req.room_name, "power", "Resumed last lighting")
+        record_room_applied(req.room_name, "power", "Resumed last lighting", on=True)
 
     publish_event("room", room=req.room_name)
     return {"results": results}
@@ -5992,7 +6081,8 @@ def record_room_applied(room: str, kind: str, label: str,
                         source: str = "app",
                         source_detail: Optional[str] = None,
                         expect: Optional[dict] = None,
-                        payload: Optional[dict] = None):
+                        payload: Optional[dict] = None,
+                        on: Optional[bool] = None):
     """Record what `room` was just set to. Best-effort display metadata — it must
     never break a light command, so callers don't need to guard it.
 
@@ -6021,6 +6111,8 @@ def record_room_applied(room: str, kind: str, label: str,
             entry["expect_hue"] = {str(k): v for k, v in expect.items()}
         if payload:
             entry["payload"] = payload
+        if on is not None:
+            entry["on"] = bool(on)    # a power record's state, for "Set here" (v3.51.5)
         config.setdefault("room_last_applied", {})[room] = entry
         schedule_save()
         # Publish UNSOURCED (source=None overrides the ContextVar via **fields) so
@@ -6205,7 +6297,13 @@ async def reapply_room(req: RoomReapplyRequest):
         sw = (entry.get("swatches") or [[255, 255, 255]])[0]
         await _apply_room_color(req.room_name, sw[0], sw[1], sw[2], 100)
     elif kind == "power":
-        await _apply_room_power(req.room_name, "off" not in (entry.get("label") or "").lower())
+        # The stored state, not the label (v3.51.5): parsing "off" out of the words
+        # breaks the day a label is reworded. Records from before `on` existed fall
+        # back to the label.
+        on = entry.get("on")
+        if on is None:
+            on = "off" not in (entry.get("label") or "").lower()
+        await _apply_room_power(req.room_name, bool(on))
     else:
         raise HTTPException(400, f"Can't replay a '{kind}' look")
     return {"success": True, "kind": kind}

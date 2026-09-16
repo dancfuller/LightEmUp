@@ -31,9 +31,9 @@ function PowerRecoveryCard({ settings, onChange, isMobile }) {
 
   const MODES = [
     { value: "resume_unless_night", title: "Resume Lighting Unless Overnight",
-      desc: "Restore your lights during the day. If power is restored overnight, keep the lights off." },
+      desc: "During the day, put each light back to the last look LightEmUp set on it — a light it has never set is left however it comes back on. If power is restored overnight, keep every light off." },
     { value: "resume_always", title: "Resume Previous Lighting",
-      desc: "Always restore the last lighting, whatever the time." },
+      desc: "Always put each light back to the last look LightEmUp set on it, whatever the time. A light it has never set is left however it comes back on." },
     { value: "off", title: "Do Nothing",
       desc: "Leave the lights however they come back on after power returns." },
   ];

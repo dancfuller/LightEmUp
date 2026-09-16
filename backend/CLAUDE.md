@@ -842,7 +842,8 @@ actually reports.
 
 ## "Now showing" — what each room was last set to (v3.12.0)
 `config["room_last_applied"][room]` = `{kind, label, swatches, kelvin, at, source,
-source_detail}` (additive). It powers the strip in each room header, so opening a fresh
+source_detail}` (additive), plus `on` on a power record (v3.51.5), which "Set
+here" reads instead of parsing "off" out of the label. It powers the strip in each room header, so opening a fresh
 session on another device answers "what did I set this room to?" without opening the
 Scenes panel.
 - **This is NOT `room_color_state`, and the difference is the whole point.**
@@ -1158,6 +1159,10 @@ which at 3am lights the whole house. On a **genuine fresh boot** the lifespan sc
   device → off); otherwise **resume** (`_recovery_resume`: replay `device_state`).
   `_recovery_resume` defaults a Govee entry with no recorded on-state to **off** (not on),
   so an outage never blasts on a device whose state we never captured.
+  A device with NO record at all — one LightEmUp has never set — is left alone during
+  the day. That's deliberate: its own power-on behavior knows more than a guess would,
+  and turning it off could undo a light someone else had on. The card says so in plain
+  words (v3.51.5); it used to promise to "restore your lights".
 - **`device_state` now holds Hue too.** `record_hue_state(light_id, state)` mirrors the
   last Hue command under `hue:<id>` (on/bri/xy/ct/hue/sat; xy/ct mutually exclusive),
   called from `control_hue_light` + room control, purely so resume can replay it — the
@@ -1226,7 +1231,8 @@ for one room (or, for everything except `scene`, a zone).
   addresses devices by DHCP IP, and a schedule can sit for weeks — a router reboot would
   silently break it (exactly what MAC-keying fixed in v3.0.0). So every stored Govee
   entry carries `mac`/`device_mac`, and firing maps it through `gv_ip_for_slug(gv_slug(
-  mac))`; entries that no longer resolve are dropped + logged. **If you add a Govee list
+  mac))`; entries that no longer resolve are dropped + logged. So is an entry with
+  no mac at all (v3.51.5): its stored IP may belong to a different device by now. **If you add a Govee list
   to the apply payload, add it to the tuple in `_freshen_scene_payload` too.** Hue keys
   by stable `light_id` and needs nothing.
 - `white`/`color` actions go through `_apply_room_white` / `_apply_room_color`, which
@@ -1304,7 +1310,9 @@ so "Try it now" exercises the identical path.
   "Summer and Winter" and "Summer minus three" the same gesture.
 - **`palettes.py` is pure data + selection** — it knows nothing about rooms or devices.
   `resolve_candidates(action)` mirrors the frontend's `paletteCandidates()`; keep the two
-  in step or the editor will preview a set the Pi won't draw from. Unknown names are
+  in step or the editor will preview a set the Pi won't draw from. On both sides
+  anything but `source: "category"` is a list (v3.51.5); a missing `source` used to
+  resolve differently in each. Unknown names are
   **dropped and logged**, never fatal: a renamed palette must not stop a schedule firing.
 - **`pick()` avoids an immediate repeat.** `_last_palette_pick` is keyed by schedule id and
   lives **in memory only** — persisting it would mean an SD-card write every time any
@@ -1317,6 +1325,14 @@ so "Try it now" exercises the identical path.
 - **Segments vs whole comes from `gv_scene_address`** — the same per-device setting the
   Scenes panel writes (see the section above), so a scheduled palette paints the room the
   way pressing Apply does. It read `govee_segment_mode` in v3.17.0, which was wrong.
+- **Scene fill applies too (v3.51.5).** `_apply_fill_mode` reads
+  `segment_fill_modes[device key]` and turns a strip's dealt colors into one color
+  ("solid") or tonal shades of its first ("shades"), exactly as the Scenes panel's
+  `applySegmentFillModes` does last in its preview. The scheduler never read it, so a
+  strip set to "solid" was one color by hand and per segment on a schedule.
+  `_tonal_shades`, `_rgb_to_hsl` and `_hsl_to_rgb` mirror `generateTonalShades`,
+  `rgbToHsl` and `hslToRgb` in utils.js, including JS's round-half-up; a scratch test
+  compares both sides' output directly. **Change one, change the other.**
 - **`_build_palette_scene` is the only place the backend does scene math**, and it's
   deliberately simpler than the browser's adjacency solver: deal a shuffled pool
   round-robin (`_ColorDealer`, which never repeats consecutively even across cycle
@@ -1415,6 +1431,8 @@ span which should be running right now, and arms its end.
   and a span whose end just fired is no longer active.
 - `last_fired` is stamped with the **occurrence**, not the boot time — that's the truth,
   and it keeps the normal tick's dedupe correct.
+- **A one-off re-entered here disables itself** (v3.51.5), as it does when the normal
+  loop fires it. Without that it read as enabled for ever afterwards.
 
 ## Room lightshows (v3.39.0)
 "Neat — the last time I looked at the house, these lights were different colors."

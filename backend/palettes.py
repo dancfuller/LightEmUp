@@ -92,7 +92,10 @@ def resolve_candidates(action: dict) -> list[dict]:
     Names that no longer exist are dropped rather than fatal — someone can
     rename a palette in the JSON, and a schedule that silently loses one entry
     is far better than a schedule that stops firing."""
-    if (action or {}).get("source") == "list":
+    # Anything but "category" is a list (v3.51.5) — the browser's
+    # `paletteCandidates` already read it that way, and for an action with no
+    # `source` the two used to draw from different sets.
+    if (action or {}).get("source") != "category":
         names = action.get("palettes") or []
         found = [_BY_NAME[n] for n in names if n in _BY_NAME]
         missing = [n for n in names if n not in _BY_NAME]
