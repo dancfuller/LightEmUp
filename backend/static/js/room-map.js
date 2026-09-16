@@ -2195,7 +2195,12 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
               : "This room has no color lights."}
           </div>
         )}
-        <button onClick={() => { setExpanded(true); setIsEdit(true); }} style={{
+        <button onClick={() => {
+          // An act on the drawer (it was used) and an open of the editor (v3.51.2).
+          trackUse("act", { s: "room:map", a: "open-editor", room: roomName });
+          trackUse("open", { s: "room:map-editor", room: roomName });
+          setExpanded(true); setIsEdit(true);
+        }} style={{
           width: "100%", padding: "10px 14px", borderRadius: 10, border: "1px solid #334155",
           background: "rgba(99,102,241,0.15)", color: "#a5b4fc", fontSize: 13, fontWeight: 700, cursor: "pointer",
         }}>Open layout editor · {isLinear ? "Line" : "Floor Plan"}</button>
@@ -2206,7 +2211,7 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
   // Full-window layout editor (all devices): a fixed overlay with a sticky
   // header (room name + Done) above the scrollable map/legend/edit tools.
   return (
-    <div style={{
+    <div data-usage-surface="room:map-editor" data-usage-room={roomName} style={{
       position: "fixed", inset: 0, zIndex: 1000, background: "#0b1220",
       display: "flex", flexDirection: "column",
       paddingTop: "env(safe-area-inset-top)", paddingBottom: "env(safe-area-inset-bottom)",

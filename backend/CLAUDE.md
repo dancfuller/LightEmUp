@@ -589,6 +589,12 @@ re-sends — so a device turned back ON inside that window was turned off again.
   outcome line (`N superseded`).
 - Its own re-send runs inside **`govee_repair_scope()`**, so it can't disarm the
   re-read that follows it. Same rule as `hue_repair_scope`.
+- **The check runs again right before each re-send (v3.51.2).** Follow-up pass 12
+  found it only ran at the top: before the Govee LAN read, and once for all Hue
+  lights before a loop of awaited re-sends. A command landing in that gap was still
+  reversed, and the Govee read could even SEE it (the light reads "on", so it was
+  switched back off). Both `_govee_verify_repair` and `_hue_verify_repair` now
+  compare the count once more immediately before sending.
 
 ### One light's error no longer abandons a room
 `control_room`'s Hue loop had no try/except, so an httpx failure propagated out of
@@ -704,6 +710,32 @@ controls", so `usage_log.py` records it instead, and the redesign pass (Fable pa
   device labels, the write throttle, server-side timestamps, the batch cap, rotation,
   visit splitting, opened-then-used, and that the endpoints leave config and SSE
   alone.
+
+### What the Fable review of the log found (v3.51.2)
+Follow-up pass 11 checked whether six weeks of this data can answer the redesign
+pass. It could count activity but often not say WHERE, and three problems were
+quietly corrupting the data rather than just leaving gaps:
+- **An act carries `via` and `via_room`: the tagged surface its touch landed in**
+  (see `static/js/CLAUDE.md`). `opened_then_used` now matches on it through
+  `_used_there`, per (surface, room) per visit. It used to count a drawer as used
+  when any matching act happened anywhere in the visit, so opening a room's
+  Controls and closing it, then using the room header's slider or the Favorites
+  strip, read as "used", and backing out of Living Room → Scenes to apply a scene
+  in Exterior Front credited Living Room. **Events recorded before `via` existed
+  keep the old, looser rule** instead of being thrown away. The summary also
+  reports `acted_from` ("light from favorites") and `zones`.
+- **The device id survives Safari wiping localStorage.** WebKit deletes a site's
+  script-writable storage after seven days of browsing without visiting it —
+  every visit for someone who opens the app monthly, and borderline for a weekly
+  visitor, since the days counted are days Safari is USED. Each visit arrived as
+  a new, unnamed device, with its history and name left on the old id. The Pi now
+  sets the id as a cookie (`leu_device`, 400 days, deliberately not HttpOnly so
+  the page can read it back), which that rule doesn't cover. `canonical_id`
+  decides when the body and the cookie disagree: a cookie naming a known device
+  beats an id the log has never seen (storage was wiped), and otherwise the
+  body's id wins. The reply carries `device_id` and the page adopts it.
+- **`zone` is a top-level field**, so zone presses reach the summary.
+- Covered by `test_v3512.py` (19 assertions, together with the verify race below).
 
 ## Detecting that something ELSE changed a room (v3.16.0)
 **LightEmUp is not the only thing driving these lights**, and can't be. The Hue app, the

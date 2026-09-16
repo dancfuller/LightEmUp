@@ -2180,7 +2180,10 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
               { key: "govee", label: "Govee only" },
             ].map(opt => (
               <button key={opt.key}
-                onClick={() => setTargetVendor(opt.key)}
+                onClick={() => {
+                  trackUse("act", { s: "scenes", a: "vendor", room: roomName, detail: { vendor: opt.key } });
+                  setTargetVendor(opt.key);
+                }}
                 style={{
                   padding: "6px 12px", borderRadius: 6, border: "none",
                   background: targetVendor === opt.key ? "#6366f1" : "transparent",

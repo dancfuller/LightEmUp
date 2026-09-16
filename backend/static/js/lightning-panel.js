@@ -97,6 +97,9 @@ function LightningPanel({ roomName, isActive, onStart, onStop, goveeDevices, seg
   };
 
   const updateSetting = (key, value) => {
+    // One event per setting, a drag folding into one (v3.51.2): enough to tell
+    // which of this panel's controls anyone touches.
+    trackUse("act", { s: "lightning", a: "setting", room: roomName, detail: { field: key } });
     setSettings(prev => ({ ...prev, [key]: value }));
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(persistSettings, 600);
@@ -283,7 +286,10 @@ function LightningPanel({ roomName, isActive, onStart, onStop, goveeDevices, seg
                 return (
                   <button
                     key={key}
-                    onClick={() => { const { label, ...timing } = preset; setSettings(prev => ({ ...prev, ...timing })); }}
+                    onClick={() => {
+                      trackUse("act", { s: "lightning", a: "preset", room: roomName, detail: { preset: key } });
+                      const { label, ...timing } = preset; setSettings(prev => ({ ...prev, ...timing }));
+                    }}
                     style={{
                       padding: "6px 14px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer",
                       border: active ? "none" : "1px solid #334155",
@@ -295,7 +301,10 @@ function LightningPanel({ roomName, isActive, onStart, onStop, goveeDevices, seg
               })}
             </div>
             <button
-              onClick={() => setShowAdvanced(!showAdvanced)}
+              onClick={() => {
+                if (!showAdvanced) trackUse("open", { s: "lightning:advanced", room: roomName });
+                setShowAdvanced(!showAdvanced);
+              }}
               style={{
                 padding: "3px 9px", borderRadius: 5, fontSize: 10, fontWeight: 600, cursor: "pointer",
                 border: "1px solid #334155",
@@ -541,6 +550,7 @@ function StormStopBar({ rooms = [], onStop, isMobile }) {
     <div
       role="region"
       aria-label="Lightning storm running"
+      data-usage-surface="storm-bar"
       style={{
         position: "fixed", zIndex: 1100,
         // Clear of the iPhone home indicator.

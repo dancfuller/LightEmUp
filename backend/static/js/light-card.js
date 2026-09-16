@@ -431,7 +431,10 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
                   because it's the faster answer to the same question. */}
               {segCount > 1 && (
                 <button
-                  onClick={() => setShowScene(!showScene)}
+                  onClick={() => {
+                    if (!showScene) trackUse("open", { s: "light-scene", key: deviceKey });
+                    setShowScene(!showScene);
+                  }}
                   style={{
                     width: "100%", marginBottom: 8, padding: "7px 10px", borderRadius: 8,
                     border: `1px solid ${showScene ? "#6366f1" : "#334155"}`,

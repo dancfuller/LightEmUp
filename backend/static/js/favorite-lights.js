@@ -22,7 +22,7 @@
 function FavoriteBand({ children }) {
   const isMobile = useIsMobile();
   return (
-    <div style={{
+    <div data-usage-surface="favorites" style={{
       padding: isMobile ? "10px 12px" : "14px 24px",
       background: "rgba(2,6,23,0.35)",
       borderBottom: "1px solid #1e293b",

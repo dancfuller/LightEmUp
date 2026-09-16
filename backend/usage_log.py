@@ -48,11 +48,18 @@ _devices_cache: Optional[dict] = None
 # An OPEN of the surface on the left counts as "used" when an ACT on one of the
 # surfaces on the right happens in the same visit. Opened-but-never-used is the
 # number that says a screen is confusing — a plain tap count can't.
+#
+# Since v3.51.2 an act carries `via`, the surface its touch landed in, and that is
+# what's matched (see _used_there); the sets below are only the fallback for
+# events recorded before `via` existed.
 OPEN_ACT = {
     "room:scenes": {"scenes"},
     "room:controls": {"room", "light"},
     "room:lightshow": {"lightshow"},
     "room:lightning": {"lightning"},
+    "room:map": {"room:map"},
+    "room:map-editor": {"room:map"},
+    "light-scene": {"light-scene"},
     "tab:schedules": {"schedules"},
 }
 
@@ -63,6 +70,26 @@ def _now() -> datetime:
 
 def valid_id(device_id) -> bool:
     return isinstance(device_id, str) and bool(_ID_RX.match(device_id))
+
+
+def canonical_id(body_id, cookie_id) -> str:
+    """Which device this browser really is (v3.51.2).
+
+    The id lives in the browser's localStorage, and Safari deletes that after seven
+    days of browsing without visiting the site — every visit, for someone who opens
+    the app monthly. They came back as a new, unnamed device each time, their
+    history and their name left behind on the old id. The Pi now also sets the id
+    as a cookie, which that rule doesn't cover. When the two disagree and only the
+    cookie's id is a device we know, storage was wiped: the cookie wins, and the
+    browser adopts it from the reply."""
+    if not valid_id(cookie_id) or cookie_id == body_id:
+        return body_id
+    if not valid_id(body_id):
+        return cookie_id
+    known = devices()
+    if cookie_id in known and body_id not in known:
+        return cookie_id
+    return body_id
 
 
 def browser_label(ua: str) -> Optional[str]:
@@ -92,7 +119,7 @@ def sanitize(ev) -> Optional[dict]:
     if not isinstance(ev, dict) or ev.get("ev") not in _EVENT_KINDS:
         return None
     out = {"ev": ev["ev"]}
-    for k in ("s", "a", "room", "key"):
+    for k in ("s", "a", "room", "key", "via", "via_room", "zone"):
         v = _clean_str(ev.get(k))
         if v:
             out[k] = v
@@ -259,6 +286,27 @@ def _visits(events: list) -> list:
     return visits
 
 
+def _used_there(visit: list, surface: str, room: Optional[str]) -> bool:
+    """Was anything DONE on the surface that was opened, in that room? (v3.51.2)
+
+    It used to be enough that a matching act happened anywhere in the visit. So
+    opening a room's Controls and closing it, then using the room header's slider
+    or the Favorites strip, read as "used" — and backing out of one room's Scenes
+    to apply a scene in another room credited the first. An act now carries `via`,
+    the surface its touch landed in. Events recorded before `via` existed keep the
+    old, looser rule rather than being thrown away."""
+    uses = OPEN_ACT[surface]
+    for e in visit:
+        if e["ev"] != "act":
+            continue
+        if e.get("via"):
+            if e["via"] == surface and (room is None or e.get("via_room") in (None, room)):
+                return True
+        elif e["s"] in uses and (room is None or e.get("room") in (None, room)):
+            return True
+    return False
+
+
 def summary(days: int = 42) -> dict:
     """Per device: visits, what it opened, what it did, which rooms, when, and —
     for the screens in OPEN_ACT — how often it opened one and did nothing there."""
@@ -273,25 +321,32 @@ def summary(days: int = 42) -> dict:
         evs = per.get(did, [])
         visits = _visits(evs)
         opens, acts, rooms = Counter(), Counter(), Counter()
+        zones, where = Counter(), Counter()
         hours = [0] * 24
         for e in evs:
             if e["ev"] == "open":
                 opens[e["s"]] += 1
             else:
-                acts[e["s"] + (f" · {e['a']}" if e.get("a") else "")] += e.get("n", 1)
+                n = e.get("n", 1)
+                acts[e["s"] + (f" · {e['a']}" if e.get("a") else "")] += n
+                # Where each kind of act was done from — "light from favorites"
+                # vs "light from room:controls" is a question the redesign asks.
+                if e.get("via"):
+                    where[f"{e['s']} from {e['via']}"] += n
             if e.get("room"):
                 rooms[e["room"]] += 1
+            if e.get("zone"):
+                zones[e["zone"]] += 1
             hours[e["_t"].astimezone().hour] += 1
         follow = {}
         for v in visits:
-            opened = {e["s"] for e in v if e["ev"] == "open"}
-            acted = {e["s"] for e in v if e["ev"] == "act"}
-            for surface, uses in OPEN_ACT.items():
-                if surface in opened:
-                    f = follow.setdefault(surface, {"opened": 0, "used": 0})
-                    f["opened"] += 1
-                    if acted & uses:
-                        f["used"] += 1
+            opened = {(e["s"], e.get("room")) for e in v
+                      if e["ev"] == "open" and e["s"] in OPEN_ACT}
+            for surface, room in sorted(opened, key=lambda x: (x[0], x[1] or "")):
+                f = follow.setdefault(surface, {"opened": 0, "used": 0})
+                f["opened"] += 1
+                if _used_there(v, surface, room):
+                    f["used"] += 1
         meta = known.get(did, {})
         rows.append({
             "id": did,
@@ -306,6 +361,8 @@ def summary(days: int = 42) -> dict:
             "opens": opens.most_common(15),
             "acts": acts.most_common(20),
             "rooms": rooms.most_common(8),
+            "zones": zones.most_common(8),
+            "acted_from": where.most_common(20),
             "by_hour": hours,
             "opened_then_used": follow,
         })

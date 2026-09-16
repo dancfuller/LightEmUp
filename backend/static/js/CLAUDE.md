@@ -1027,6 +1027,33 @@ kept out of config.
   field. This browser is listed first, marked THIS DEVICE, even before it has sent
   anything. Each row also shows the browser, width, last use, visits and top
   actions. It reuses `relativeTime` from room-section.js, so it loads after it.
+- **Surfaces are TAGGED, and every act records where it happened (v3.51.2).** A
+  container carries `data-usage-surface` (and `data-usage-room` where it has one):
+  `<main>` is `tab:<name>`, then the Live bar (`live`), Favorites (`favorites`), a
+  room's header row (`room:header`), each drawer view (`room:<view>`, set in
+  `ControlSurface`), the full-window map editor (`room:map-editor`), the per-light
+  scene panel (`light-scene`) and the storm Stop bar (`storm-bar`). A capture-phase
+  `pointerdown`/`keydown` listener in utils.js remembers the nearest tagged ancestor
+  of the last touch, and `trackUse("act", …)` stamps it as `via` / `via_room`. The
+  nearest tag wins, so a light card inside a drawer reads as that drawer. **A new
+  surface people act on needs a `data-usage-surface`** — without one its acts are
+  credited to whatever encloses it. This replaced threading a "where from" argument
+  through every control: the same `controlHueLight` is called from Favorites, room
+  drawers and All Lights, and couldn't tell them apart.
+  - `usageTouchedWithin(s)` asks whether the last touch landed in `s` — for a change
+    that also happens with nobody touching anything. Layout edits use it: a layout
+    fitted to its contents when the editor opens isn't anyone editing.
+  - Folding repeats now also compares `via`, `zone` and `detail`, so two lightshow
+    edits keep both fields and two zones stay two events; a slider drag still folds.
+  - A batch that fails with a network error or a 5xx goes back in the queue (capped
+    at 200) instead of being dropped; a 4xx is not retried.
+  - The device id falls back to the `leu_device` cookie the Pi sets, and
+    `usageAdoptDeviceId` takes the id the server answers with. See
+    `backend/CLAUDE.md` › Usage log for why.
+  - Newly recorded: the map editor's open and layout edits; Assign Rooms' move,
+    remove, rename, delete, add-devices and add-room; Lightning presets, settings
+    and its Advanced section; the Scenes panel's vendor filter; min saturation; and
+    opening the per-light scene panel.
 
 ## backup-restore.js — Settings → Backup & Restore (v3.11.0)
 `BackupRestoreCard` renders in the Settings tab (below `LocationCard`), with

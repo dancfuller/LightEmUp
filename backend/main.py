@@ -3825,6 +3825,13 @@ async def _hue_verify_repair(expectations: dict, compare_color: bool = False,
             return
 
         for light_id, why in repaired:
+            # The newer-command filter above ran right after the bridge read, but
+            # each re-send is an awaited HTTP call, so a command to a light later
+            # in this loop could land in between and still be reversed (v3.51.2).
+            if since and str(light_id) in since and hue_write_seq(light_id) != since[str(light_id)]:
+                log.info("Hue verify: light %s had a newer command during the check — "
+                         "leaving it", light_id)
+                continue
             log.info("Hue verify: light %s didn't take (%s) — re-sending", light_id, why)
             record_repair(f"hue:{light_id}",
                           _device_label(f"hue:{light_id}", f"Light {light_id}"), why)
@@ -3962,6 +3969,15 @@ async def _govee_verify_repair(expectations: dict, since: Optional[dict] = None)
             continue
         if bool(state.get("on")) == bool(want_on):
             tally["correct"] += 1
+            continue
+        # ...and again right before re-sending (v3.51.2). The check above runs
+        # before the LAN read, and a command landing DURING that read was still
+        # reversed — the read could even see it (the light reads "on", so it was
+        # switched back off).
+        if base is not None and govee_write_seq(ip) != base:
+            log.info("Govee verify: %s had a newer power command during the check — "
+                     "leaving it", label)
+            tally["superseded"] += 1
             continue
 
         log.info("Govee verify: %s (%s) didn't take — re-sending %s",
@@ -4865,15 +4881,26 @@ class UsageDeviceName(BaseModel):
     name: Optional[str] = None
 
 
+# The device id also lives in a cookie the Pi sets (v3.51.2); see
+# usage_log.canonical_id. Safari wipes localStorage for a site not visited in a
+# week, and a server-set cookie survives that. Deliberately NOT HttpOnly: the page
+# reads it back when its own storage has been wiped.
+USAGE_COOKIE = "leu_device"
+USAGE_COOKIE_MAX_AGE_S = 400 * 86400      # the longest lifetime browsers honor
+
+
 @app.post("/api/usage/events")
-async def usage_events(req: UsageBatch, request: Request):
+async def usage_events(req: UsageBatch, request: Request, response: Response):
+    device_id = usage_log.canonical_id(req.device_id, request.cookies.get(USAGE_COOKIE))
     try:
         kept = await asyncio.to_thread(
-            usage_log.record, req.device_id, req.width, req.events,
+            usage_log.record, device_id, req.width, req.events,
             request.headers.get("user-agent", ""), req.sent_at)
     except ValueError:
         raise HTTPException(400, "Bad device id")
-    return {"recorded": kept}
+    response.set_cookie(USAGE_COOKIE, device_id, max_age=USAGE_COOKIE_MAX_AGE_S,
+                        samesite="lax", path="/")
+    return {"recorded": kept, "device_id": device_id}
 
 
 @app.post("/api/usage/device")
@@ -6156,8 +6183,9 @@ async def reapply_room(req: RoomReapplyRequest):
 
 
 class RoomAppliedRequest(BaseModel):
-    """For looks the frontend fans out CLIENT-side (the "Set room to" white
-    shortcuts drive each device directly, so no room endpoint sees them)."""
+    """For a look the frontend still fans out CLIENT-side. Today that is only the
+    "Unassigned" pseudo-room's white shortcuts, which isn't a backend room; real
+    rooms go through /api/rooms/white, which records itself (v3.43.0)."""
     room_name: str
     kind: str
     label: str

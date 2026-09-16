@@ -37,7 +37,7 @@ function DeviceRow({ device, roomName, allRoomNames, onMove, onRemove, nicknames
       {roomName && (
         <select
           value={roomName}
-          onChange={(e) => onMove(device, roomName, e.target.value)}
+          onChange={(e) => { trackUse("act", { s: "assign", a: "move", room: roomName }); onMove(device, roomName, e.target.value); }}
           style={{
             padding: "5px 8px", borderRadius: 8, border: "1px solid #334155",
             background: "#1e293b", color: "#e2e8f0", fontSize: 12,
@@ -51,7 +51,7 @@ function DeviceRow({ device, roomName, allRoomNames, onMove, onRemove, nicknames
       )}
       {onRemove && (
         <button
-          onClick={() => onRemove(device, roomName)}
+          onClick={() => { trackUse("act", { s: "assign", a: "remove", room: roomName }); onRemove(device, roomName); }}
           style={{
             padding: "5px 10px", borderRadius: 8, border: "none",
             background: "rgba(248,113,113,0.12)", color: "#f87171",
@@ -118,7 +118,7 @@ function RoomCard({ roomName, devices, allRoomNames, unassigned, onMoveDevice, o
                     background: "#0f172a", color: "#f1f5f9", fontSize: 15, fontWeight: 700, width: 180,
                   }}
                 />
-                <button onClick={commitRename} style={{
+                <button onClick={() => { trackUse("act", { s: "assign", a: "rename", room: roomName }); commitRename(); }} style={{
                   padding: "6px 12px", borderRadius: 8, border: "none",
                   background: "#6366f1", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer",
                 }}>Save</button>
@@ -158,7 +158,7 @@ function RoomCard({ roomName, devices, allRoomNames, unassigned, onMoveDevice, o
             )}
             {!isDefault && (
               <button
-                onClick={() => onDeleteRoom(roomName)}
+                onClick={() => { trackUse("act", { s: "assign", a: "delete-room", room: roomName }); onDeleteRoom(roomName); }}
                 style={{
                   padding: "6px 14px", borderRadius: 8, border: "none",
                   background: "rgba(248,113,113,0.1)", color: "#f87171",
@@ -233,7 +233,7 @@ function RoomCard({ roomName, devices, allRoomNames, unassigned, onMoveDevice, o
         <DevicePickerModal
           title={`Add devices to ${roomName}`}
           devices={unassigned}
-          onSelect={(picked) => onAddDevices(roomName, picked)}
+          onSelect={(picked) => { trackUse("act", { s: "assign", a: "add-devices", room: roomName }); onAddDevices(roomName, picked); }}
           onClose={() => setShowPicker(false)}
           nicknames={nicknames}
         />
@@ -481,7 +481,7 @@ function RoomAssignment({ hueLights, goveeDevices, rooms, onRoomsChange, onRenam
           }}
         />
         <button
-          onClick={addRoom} disabled={!newRoomName.trim()}
+          onClick={() => { trackUse("act", { s: "assign", a: "add-room" }); addRoom(); }} disabled={!newRoomName.trim()}
           style={{
             padding: "10px 20px", borderRadius: 10, border: "none",
             background: newRoomName.trim() ? "#334155" : "#1e293b",

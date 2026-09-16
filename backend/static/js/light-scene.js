@@ -365,7 +365,7 @@ function LightScenePanel({ light, segCount, segmentColors, segmentInfo, nickname
   });
 
   return (
-    <div style={{
+    <div data-usage-surface="light-scene" style={{
       marginTop: 10, padding: isMobile ? 12 : 14, borderRadius: 12,
       background: "rgba(2,6,23,0.55)", border: "1px solid #334155",
     }}>

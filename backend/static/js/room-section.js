@@ -274,7 +274,8 @@ function ControlSurface({ view, views, onView, onClose, roomName, isMobile, chil
       position: "fixed", inset: 0, zIndex: 200, background: "rgba(2,6,15,0.55)",
       display: "flex", justifyContent: "flex-end",
     }}>
-      <div onClick={(e) => e.stopPropagation()} style={{
+      <div onClick={(e) => e.stopPropagation()}
+        data-usage-surface={`room:${view}`} data-usage-room={roomName} style={{
         width: 460, maxWidth: "100%", height: "100%", overflowY: "auto",
         background: "linear-gradient(180deg, #0f172a 0%, #0a0f1e 100%)",
         borderLeft: "1px solid #334155", padding: 22,
@@ -644,7 +645,8 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
   return (
     <div style={{ marginBottom: 32 }}>
       {/* Room header — name row, then a row of surface-opener buttons. */}
-      <div style={{ display: "flex", flexDirection: "column", marginBottom: 4, paddingBottom: 12, borderBottom: "1px solid #1e293b", gap: 12 }}>
+      <div data-usage-surface="room:header" data-usage-room={name}
+        style={{ display: "flex", flexDirection: "column", marginBottom: 4, paddingBottom: 12, borderBottom: "1px solid #1e293b", gap: 12 }}>
         {/* Name, the quick looks, brightness and power all on ONE line (v3.25.0).
             The white presets used to sit in their own "Set room to" block two rows
             further down, which put the three things you reach for most often —

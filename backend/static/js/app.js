@@ -754,6 +754,7 @@ function App() {
   }, []);
 
   const updateMinSat = useCallback(async (enabled, pct) => {
+    trackUse("act", { s: "prefs", a: "min-saturation" });
     setMinSatEnabled(enabled);
     setMinSatPct(pct);
     try {
@@ -853,8 +854,10 @@ function App() {
   // /api/zones/control so a zone press and a zone SCHEDULE take the identical
   // backend path; each member room's "Now showing" is credited to the zone.
   const controlZone = useCallback(async (name, action) => {
+    // `zone` is a top-level field (v3.51.2): inside `detail` it never reached the
+    // summary's per-target breakdown.
     trackUse("act", { s: "zone", a: action?.on === false ? "off" : action?.on === true ? "on" : (action?.type || "other"),
-                     detail: { zone: name } });
+                     zone: name });
     try {
       await api("/zones/control", {
         method: "POST",
@@ -1213,6 +1216,12 @@ function App() {
   };
 
   const handleLayoutChange = (roomName, layout) => {
+    // Recorded only after a touch INSIDE the full-window editor (v3.51.2): a
+    // layout fitted to its contents when the editor opens lands here too, and
+    // that isn't anyone editing anything.
+    if (usageTouchedWithin("room:map-editor")) {
+      trackUse("act", { s: "room:map", a: "edit", room: roomName });
+    }
     setRoomLayouts(prev => ({ ...prev, [roomName]: layout }));
   };
 
@@ -1512,7 +1521,7 @@ function App() {
           controls that has nothing to do with scheduling. "LIVE" names what
           separates it from every page below: these act on the house right now.
           The tint + inset border make it chrome rather than content. */}
-      <div style={{
+      <div data-usage-surface="live" style={{
         padding: isMobile ? "8px 10px" : "9px 24px",
         background: "rgba(2,6,23,0.55)",
         borderBottom: "1px solid #1e293b",
@@ -1568,7 +1577,8 @@ function App() {
           storm runs, and renders nothing when none does. */}
       <StormStopBar rooms={lightningActiveRooms} onStop={stopLightning} isMobile={isMobile} />
 
-      <main style={{ padding: isMobile ? 12 : 24, maxWidth: 1200, margin: "0 auto" }}>
+      <main data-usage-surface={`tab:${activeTab}`}
+        style={{ padding: isMobile ? 12 : 24, maxWidth: 1200, margin: "0 auto" }}>
         {error && (
           <div style={{
             padding: 16, borderRadius: 12,

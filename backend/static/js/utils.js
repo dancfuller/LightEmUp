@@ -331,14 +331,41 @@ async function api(path, options = {}) {
 const USAGE_DEVICE_KEY = "leu.usageDevice";
 const USAGE_FLUSH_MS = 15000;
 const USAGE_COALESCE_MS = 3000;
+const USAGE_VIA_MS = 60000;
 const usageQueue = [];
+
+// WHERE a touch landed (v3.51.2). A container marks itself with
+// data-usage-surface (and data-usage-room); the nearest one around the target
+// wins, so a light card inside a room drawer reads as that drawer. Every "act"
+// then records it as `via`. Capture phase, so a handler that stops propagation
+// can't hide it; a touch outside every tagged surface clears it, so a stale
+// surface can't be credited later. Without this a light switched from
+// Favorites, a room drawer or All Lights all read as the same `light` event.
+let usageLastSurface = null;
+["pointerdown", "keydown"].forEach(type => document.addEventListener(type, (e) => {
+  try {
+    const el = e.target && e.target.closest ? e.target.closest("[data-usage-surface]") : null;
+    usageLastSurface = el ? {
+      s: el.getAttribute("data-usage-surface"),
+      room: el.getAttribute("data-usage-room") || undefined,
+      at: Date.now(),
+    } : null;
+  } catch (err) { /* a diagnostic must never break a control */ }
+}, true));
+
+// True when the last touch landed in surface `s` — for changes that ALSO happen
+// with nobody touching anything (a layout fitted to its contents on open).
+function usageTouchedWithin(s) {
+  return !!usageLastSurface && usageLastSurface.s === s
+    && Date.now() - usageLastSurface.at < USAGE_VIA_MS;
+}
 
 // One random id per browser, kept in localStorage. NOT crypto.randomUUID: the Pi
 // is served over plain http://, which isn't a secure context, and randomUUID is
 // undefined there. getRandomValues has no such restriction. If storage is blocked
 // the id lasts for this page load only — a visit still counts, it just can't be
 // tied to the last one.
-const USAGE_DEVICE_ID = (() => {
+let USAGE_DEVICE_ID = (() => {
   const make = () => {
     try {
       const b = new Uint8Array(9);
@@ -348,26 +375,53 @@ const USAGE_DEVICE_ID = (() => {
       return `d${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
     }
   };
+  // The Pi also keeps this id in a cookie it sets itself (v3.51.2). Safari
+  // deletes a site's localStorage after seven days of browsing without visiting
+  // it — every visit, for someone who opens the app monthly — but a cookie the
+  // SERVER set isn't covered by that rule. So a wiped localStorage falls back to it.
+  const fromCookie = (() => {
+    try {
+      const m = document.cookie.match(/(?:^|;\s*)leu_device=([A-Za-z0-9_-]{6,64})/);
+      return m ? m[1] : null;
+    } catch (e) { return null; }
+  })();
   try {
     let id = localStorage.getItem(USAGE_DEVICE_KEY);
     if (!id || !/^[A-Za-z0-9_-]{6,64}$/.test(id)) {
-      id = make();
+      id = fromCookie || make();
       localStorage.setItem(USAGE_DEVICE_KEY, id);
     }
     return id;
   } catch (e) {
-    return make();
+    return fromCookie || make();
   }
 })();
+
+// The server's answer to "which device is this?" wins (usage_log.canonical_id).
+function usageAdoptDeviceId(id) {
+  if (!id || id === USAGE_DEVICE_ID || !/^[A-Za-z0-9_-]{6,64}$/.test(id)) return;
+  USAGE_DEVICE_ID = id;
+  try { localStorage.setItem(USAGE_DEVICE_KEY, id); } catch (e) { /* ignore */ }
+}
 
 // Repeats of the same thing within a few seconds fold into one event with a
 // count, so dragging a slider is one "brightness", not forty throttled commits.
 function trackUse(ev, fields = {}) {
   try {
     const now = Date.now();
+    if (ev === "act" && fields.via === undefined && usageLastSurface
+        && now - usageLastSurface.at < USAGE_VIA_MS) {
+      fields = { ...fields, via: usageLastSurface.s };
+      if (usageLastSurface.room) fields.via_room = usageLastSurface.room;
+    }
     const last = usageQueue[usageQueue.length - 1];
+    // `via` and `detail` are part of what makes two events the same (v3.51.2).
+    // Folding ignored `detail`, so two lightshow edits within 3s kept only the
+    // first field changed, and two different zones pressed together kept one.
     if (last && last.ev === ev && last.s === fields.s && last.a === fields.a
         && last.room === fields.room && last.key === fields.key
+        && last.zone === fields.zone && last.via === fields.via
+        && JSON.stringify(last.detail || null) === JSON.stringify(fields.detail || null)
         && now - last.at < USAGE_COALESCE_MS) {
       last.n = (last.n || 1) + 1;
       last.at = now;
@@ -395,6 +449,13 @@ function usageCmdKind(cmd) {
 function flushUsage(keepalive) {
   if (!usageQueue.length) return;
   const events = usageQueue.splice(0, usageQueue.length);
+  // A batch that doesn't arrive goes back in the queue (v3.51.2). It used to be
+  // taken out first and dropped on any failure — a Wi-Fi blip, a deploy
+  // restarting the Pi. A 4xx is not retried: it would only fail the same way.
+  const requeue = () => {
+    usageQueue.unshift(...events);
+    if (usageQueue.length > 200) usageQueue.splice(0, usageQueue.length - 200);
+  };
   try {
     fetch(`${API}/usage/events`, {
       method: "POST", keepalive: !!keepalive,
@@ -403,8 +464,13 @@ function flushUsage(keepalive) {
         device_id: USAGE_DEVICE_ID, width: window.innerWidth,
         sent_at: Date.now(), events,
       }),
-    }).catch(() => {});
-  } catch (e) { /* ignore */ }
+    }).then(r => {
+      if (r.ok) return r.json();
+      if (r.status >= 500) requeue();
+      return null;
+    }).then(res => usageAdoptDeviceId(res && res.device_id))
+      .catch(() => requeue());
+  } catch (e) { requeue(); }
 }
 setInterval(() => flushUsage(false), USAGE_FLUSH_MS);
 document.addEventListener("visibilitychange", () => {
