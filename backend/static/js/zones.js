@@ -14,24 +14,25 @@
 // Quick actions. Sits in the app-wide bar beside "All Off", so a zone is one tap
 // away wherever you are — which is the whole point of a scram button.
 function ZoneBar({ zones, onControl, isMobile }) {
-  const [busy, setBusy] = useState(null);   // `${zone}|${on}` currently in flight
+  const [busy, setBusy] = useState({});     // zone name → the on/off in flight for it
   const names = Object.keys(zones || {});
   if (names.length === 0) return null;      // nothing to show until a zone exists
 
+  // Busy is per ZONE (v3.51.6). One zone in flight used to disable every zone's
+  // buttons, so "downstairs off" then "outside off" meant waiting out the first.
   const press = async (name, on) => {
-    const key = `${name}|${on}`;
-    setBusy(key);
+    setBusy(b => ({ ...b, [name]: on }));
     try { await onControl(name, { type: "power", on }); }
-    finally { setBusy(b => (b === key ? null : b)); }
+    finally { setBusy(b => { const n = { ...b }; delete n[name]; return n; }); }
   };
 
   const btn = (name, on) => {
-    const key = `${name}|${on}`;
-    const active = busy === key;
+    const inFlight = name in busy;
+    const active = inFlight && busy[name] === on;
     return (
       <button
         onClick={() => press(name, on)}
-        disabled={!!busy}
+        disabled={inFlight}
         title={`Turn every light in ${name} ${on ? "on (resume each room's last lighting)" : "off"}`}
         style={{
           padding: isMobile ? "4px 9px" : "4px 11px",
@@ -40,7 +41,7 @@ function ZoneBar({ zones, onControl, isMobile }) {
             : on ? "rgba(99,102,241,0.16)" : "rgba(148,163,184,0.10)",
           color: on ? "#c7d2fe" : "#cbd5e1",
           fontSize: isMobile ? 11 : 12, fontWeight: 700,
-          cursor: busy ? "wait" : "pointer", whiteSpace: "nowrap",
+          cursor: inFlight ? "wait" : "pointer", whiteSpace: "nowrap",
         }}
       >{active ? "…" : (on ? "On" : "Off")}</button>
     );

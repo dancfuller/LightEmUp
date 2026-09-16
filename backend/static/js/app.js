@@ -1082,6 +1082,11 @@ function App() {
 
   const refreshState = async () => {
     setRefreshing(true);
+    // The button says "Refresh all device states", and Govee's live state only
+    // comes from a LAN scan, which loadAll skips after the first load (v3.51.6).
+    // The scan takes several seconds, so it runs in the background and the Govee
+    // list updates when it lands; the spinner covers the quick part.
+    rescanGovee();
     try {
       await loadAll();
     } finally {
@@ -1338,7 +1343,7 @@ function App() {
       Object.entries(persistedEntry.colors).forEach(([k, v]) => { segColors[parseInt(k)] = v; });
     }
     return (
-      <LightCard key={`govee-${light.ip}`} light={light}
+      <LightCard key={`govee-${goveeSlug(light)}`} light={light}
         onControl={(l, cmd) => {
           controlGoveeDevice(l, cmd);
           if (refreshSegmentState && (cmd.r !== undefined || cmd.on === false)) {

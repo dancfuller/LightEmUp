@@ -1246,9 +1246,15 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
     const gx = Math.round(svgP.x / gridSize);
     const gy = isLinear ? 0 : Math.round(svgP.y / gridSize);
     if (placingDevice) {
+      // A floor-plan device renders at its cell's CENTER, so the tapped cell is
+      // round(p / grid - 0.5) — the rule dragging already uses (v2.19.5). Plain
+      // round() put a tap in a cell's right or bottom half one cell over
+      // (v3.51.6). A line has no offset.
+      const cx = isLinear ? gx : Math.round(svgP.x / gridSize - 0.5);
+      const cy = isLinear ? 0 : Math.round(svgP.y / gridSize - 0.5);
       updateLayout(prev => ({
         ...prev,
-        devices: { ...prev.devices, [placingDevice]: { x: gx, y: gy } },
+        devices: { ...prev.devices, [placingDevice]: { x: cx, y: cy } },
       }));
       setPlacingDevice(null);
     } else if (placingFurniture) {

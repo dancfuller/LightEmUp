@@ -5990,6 +5990,7 @@ class RoomColorStateRequest(BaseModel):
     mode: Optional[str] = None
     color_space: Optional[str] = None
     palette_colors: Optional[list] = None
+    palette_source: Optional[list] = None   # the untrimmed palette (v3.51.6)
     base_color: Optional[dict] = None
     brightness: Optional[int] = None
     direction: Optional[str] = None

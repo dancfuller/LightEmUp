@@ -1085,7 +1085,10 @@ function ScheduleEditor({ initial, rooms, zoneNames, favorites, onFavoritesChang
           {end && (
             <div style={{ fontSize: 10, color: "#64748b", marginTop: 6 }}>
               Turns the same {isZone ? "zone" : "room"} off{endSummary(end).replace(/^, off/, "")}.
-              {end.type !== "after" && " Crossing midnight is fine — the days above apply to when it turns ON."}
+              {/* A one-off has a date, not days, so "the days above" points at
+                  nothing there (v3.51.6). */}
+              {end.type !== "after" && trigger.type !== "oneoff"
+                && " Crossing midnight is fine — the days above apply to when it turns ON."}
             </div>
           )}
         </div>
@@ -1138,7 +1141,9 @@ function SchedulesTab({ schedules, rooms, zones, location, favorites, onFavorite
     onConsumePending();
   }, [pendingScene]);
 
-  const needsLocation = schedules.some(s => s.trigger?.type === "sun")
+  // Only ENABLED sun schedules need a location (v3.51.6); a disabled one kept the
+  // banner up with nothing to fix.
+  const needsLocation = schedules.some(s => s.enabled !== false && s.trigger?.type === "sun")
     && (location?.lat == null || location?.lng == null);
 
   const save = async (sched) => {

@@ -2,15 +2,22 @@
 
 function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, onNicknameChange, roomName, segmentColors, segmentInfo, segmentBrightness, onSegmentStateRefresh, controlMode, onControlModeChange, segmentFillMode, onSegmentFillModeChange, onSegmentCountChange, ctCorrection, onRecheck, isFavorite, onToggleFavorite }) {
   const isMobile = useIsMobile();
-  const deviceBrightness = light.type === "hue"
-    ? Math.round((light.state?.brightness || 0) / 254 * 100)
-    : (light.state?.brightness ?? 50);
+  // An UNKNOWN level is unknown for both vendors (v3.51.6). It read as 0% for Hue
+  // and 50% for Govee: two different, confident numbers for the same "we don't
+  // know". It rests at 0 and the label says "—" until someone moves it. (Hue
+  // levels are 1–254, so a Hue 0 means the bridge reported none.)
+  const brightnessKnown = light.type === "hue"
+    ? !!light.state?.brightness : light.state?.brightness != null;
+  const deviceBrightness = !brightnessKnown ? 0
+    : light.type === "hue" ? Math.round(light.state.brightness / 254 * 100)
+    : light.state.brightness;
   // When the device is in segment mode, the device's own brightness state
   // is meaningless (razer packets carry brightness inline as RGB scale).
   // Prefer the server-stored segment brightness so the slider reflects
   // what the segments are actually showing.
   const initialBrightness = segmentBrightness != null ? segmentBrightness : deviceBrightness;
   const [brightness, setBrightness] = useState(initialBrightness);
+  const [brightnessTouched, setBrightnessTouched] = useState(false);
   const [lightColor, setLightColor] = useState(() => getInitialColor(light));
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState("");
@@ -310,7 +317,9 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
 
       <Slider
             label="Brightness" value={brightness} min={0} max={100}
+            valueLabel={!brightnessKnown && segmentBrightness == null && !brightnessTouched ? "—" : undefined}
             onChange={(v) => {
+              setBrightnessTouched(true);
               setBrightness(v);
               if (light.type === "hue") {
                 // With the light off, remember the level for its next power-on

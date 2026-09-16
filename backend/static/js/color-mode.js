@@ -753,7 +753,10 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     if (s.color_space) setColorSpace(s.color_space);
     if (Array.isArray(s.palette_colors) && s.palette_colors.length) {
       setPaletteColors(s.palette_colors);
-      setPaletteSource(s.palette_colors);
+      // The palette this one was trimmed from (v3.51.6), so + regrows its own
+      // colors after a reload instead of inventing tints of the ones left.
+      setPaletteSource(Array.isArray(s.palette_source) && s.palette_source.length
+        ? s.palette_source : s.palette_colors);
     }
     if (s.base_color) setBaseColor(s.base_color);
     if (typeof s.brightness === "number") setBrightness(s.brightness);
@@ -913,7 +916,10 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
                name: nicknames?.[key] || light?.name
                      || (light?.sku ? GOVEE_SKU_NAMES?.[light.sku] : null) || key.slice(6) };
     })
-    .filter(d => d.light?.capabilities?.has_color && d.count > 1);
+    .filter(d => d.light?.capabilities?.has_color && d.count > 1)
+    // Hidden while the filter is Hue-only (v3.51.6): they'd edit devices this
+    // apply won't touch.
+    .filter(() => effectiveVendor !== "hue");
 
   // key → its placed entry (own x/y + synthetic flag), for the preview sort.
   const placedByKey = {};
@@ -1684,7 +1690,9 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     if (!hasCurrent && placedColorLights.length > 0) {
       setBeaconSourceKey(placedColorLights[0].key);
     }
-  }, [mode, layout, fixtures]);
+  // The filter also changes which lights are placed (v3.51.6): without it a
+  // Hue-only switch could leave Beacon pointing at a Govee light it no longer shows.
+  }, [mode, layout, fixtures, placedColorLights.map(d => d.key).join("|")]);
 
   // ─── Generate preview ───────────────────────────────────────────────
   const computeForMode = () => {
@@ -1960,6 +1968,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
       mode,
       color_space: colorSpace,
       palette_colors: paletteColors,
+      palette_source: paletteSource,
       base_color: baseColor,
       brightness,
       direction,
@@ -2585,6 +2594,12 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
                 >+</button>
               </div>
 
+              {/* The two ways to lose a color behave differently, and the preset
+                  modes' faded, tap-to-restore swatches make it look reversible
+                  everywhere — so say it (v3.51.6). */}
+              <div style={{ fontSize: 10, color: "#64748b", marginBottom: 6, lineHeight: 1.4 }}>
+                − hides the last color and + brings it back; × removes that color for good.
+              </div>
               {/* Editable palette swatches */}
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
                 {paletteColors.map((c, i) => (
@@ -2727,7 +2742,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
                             fontSize: 12, fontWeight: 700, lineHeight: 1,
                             padding: 0, flexShrink: 0,
                           }}
-                          title="Remove slot"
+                          title="Remove this color for good (pick it again to add it back)"
                         >×</button>
                       )}
                     </div>

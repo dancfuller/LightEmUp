@@ -755,14 +755,14 @@ function ColorWheel({ size = 180, onColorSelect }) {
   );
 }
 
-function Slider({ label, value, min, max, onChange, color, unit = "", throttleMs = 180 }) {
+function Slider({ label, value, min, max, onChange, color, unit = "", throttleMs = 180, valueLabel }) {
   const [local, onInput, guard] = useThrottledControl(value, onChange, throttleMs);
   const pct = ((local - min) / (max - min)) * 100;
   return (
     <div style={{ marginBottom: 12 }}>
       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
         <span style={{ fontSize: 12, color: "#94a3b8", fontWeight: 500 }}>{label}</span>
-        <span style={{ fontSize: 12, color: "#e2e8f0", fontWeight: 600 }}>{local}{unit}</span>
+        <span style={{ fontSize: 12, color: "#e2e8f0", fontWeight: 600 }}>{valueLabel ?? `${local}${unit}`}</span>
       </div>
       <input
         type="range" min={min} max={max} value={local}

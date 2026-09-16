@@ -40,9 +40,12 @@ function ServerLogs({ onClose }) {
     return () => clearInterval(id);
   }, [tail, fetchLogs]);
 
-  // Auto-scroll to bottom when new lines arrive and tail is on
+  // Follow new lines only while the view is already at the bottom (v3.51.6). It
+  // jumped to the bottom on every 3-second refresh, so scrolling up to read an
+  // error lasted three seconds. `atBottom` is kept current as you scroll.
+  const atBottom = useRef(true);
   useEffect(() => {
-    if (tail && scrollRef.current) {
+    if (tail && atBottom.current && scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [lines, tail]);
@@ -150,7 +153,10 @@ function ServerLogs({ onClose }) {
         </div>
 
         {/* Log viewport */}
-        <div ref={scrollRef} style={{
+        <div ref={scrollRef} onScroll={(e) => {
+          const el = e.currentTarget;
+          atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+        }} style={{
           flex: 1, overflow: "auto", padding: "10px 14px",
           fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
           fontSize: isMobile ? 11 : 12, lineHeight: 1.45,

@@ -534,6 +534,7 @@ function hueXYToRGB(xy, bri) {
   // Convert Hue CIE xy + brightness to RGB
   if (!xy || xy.length < 2) return null;
   const [x, y] = xy;
+  if (!(y > 0)) return null;   // y = 0 would divide by zero below (v3.51.6)
   const z = 1.0 - x - y;
   const Y = (bri || 254) / 254;
   const X = (Y / y) * x;

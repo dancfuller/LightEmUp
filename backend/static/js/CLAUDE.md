@@ -205,6 +205,29 @@ which is the point — a panic button has to be reachable from wherever you are.
 - Keep the region label if you restyle this. The sub-labels are the expendable part; the
   "this is not the page" signal is not.
 
+## Interface fixes from the review (v3.51.6)
+Thirteen small ones, with the rules worth keeping:
+- **Tap-to-place on a floor plan uses the cell-center rule**, `round(p / grid - 0.5)`,
+  the same as dragging (v2.19.5). A line has no offset.
+- **Zone buttons are busy per zone** (`zones.js`). One zone in flight disabled them all.
+- **An unknown brightness reads "—"** (`Slider`'s `valueLabel`), for both vendors, until
+  someone moves it. It read 0% for Hue and 50% for Govee. A Hue level of 0 means the
+  bridge reported none, since Hue levels are 1–254.
+- **Govee light cards are keyed by `goveeSlug`**, not IP — a DHCP change remounted the
+  card and dropped whatever was open on it. Never key a Govee device by IP.
+- **The header ↻ also runs the live Govee scan**, in the background. Its title promised
+  all device states; after the first load `loadAll` only reads the cached Govee list.
+- **The Scenes panel:** Beacon re-picks its source when the vendor filter changes which
+  lights are placed; the per-device segment rows hide while the filter is Hue-only; and
+  a trimmed palette saves `palette_source`, so + regrows its own colors after a reload.
+  **`palette_source` is part of the three-place rule** (snapshot, `RoomColorStateRequest`,
+  hydration). The panel also says that − hides a color and × removes it for good — the
+  preset modes' tap-to-restore swatches made removal look reversible everywhere.
+- **Schedules:** the "days above" note is hidden for a one-off (it has a date, not days),
+  and the location banner counts only enabled sun schedules.
+- **The log viewer follows new lines only while you're at the bottom.**
+- `hueXYToRGB` returns null for y = 0.
+
 ## lightning-panel.js — `StormStopBar`, the app-wide Stop (v3.51.0)
 A storm is the one thing here people start out of curiosity and then want OFF *right
 now* — reported plainly: everyone is fascinated for about ten seconds and then urgently
