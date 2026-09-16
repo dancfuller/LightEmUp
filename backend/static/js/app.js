@@ -1561,6 +1561,13 @@ function App() {
         isMobile={isMobile}
       />
 
+      {/* A storm is started out of curiosity and then wanted OFF immediately
+          (v3.51.0). Its Stop used to live inside that room's drawer — several
+          taps away from wherever you were standing, and invisible from every
+          other tab. This is fixed to the bottom of the screen for as long as any
+          storm runs, and renders nothing when none does. */}
+      <StormStopBar rooms={lightningActiveRooms} onStop={stopLightning} isMobile={isMobile} />
+
       <main style={{ padding: isMobile ? 12 : 24, maxWidth: 1200, margin: "0 auto" }}>
         {error && (
           <div style={{

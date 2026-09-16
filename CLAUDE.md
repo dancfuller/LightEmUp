@@ -165,7 +165,11 @@ backend/
                           # set-level All on/off + live scene progress per row; a row
                           # expands into app.js's renderLightCard (the SAME card All Lights
                           # shows — don't build a second prop list)
-      lightning-panel.js  # LightningPanel — storm scene UI with presets and SSE sync
+      lightning-panel.js  # LightningPanel — storm scene UI with presets and SSE sync.
+                          # Also StormStopBar (v3.51.0): the fixed, app-wide Stop that
+                          # shows on EVERY tab while any storm runs (app chrome, rendered
+                          # from app.js) — a storm is started out of curiosity and then
+                          # wanted off immediately
       room-map.js         # RoomMap — interactive SVG floor plan & linear layout editor
       palette-data.js     # Static color datasets for Teams/NCAA/Flags modes (PRESET_TEAMS/NCAA/FLAGS)
       palette-library.js  # GENERATED (tools/build-palette-library.py) — PALETTE_LIBRARY +

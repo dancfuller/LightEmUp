@@ -205,6 +205,28 @@ which is the point — a panic button has to be reachable from wherever you are.
 - Keep the region label if you restyle this. The sub-labels are the expendable part; the
   "this is not the page" signal is not.
 
+## lightning-panel.js — `StormStopBar`, the app-wide Stop (v3.51.0)
+A storm is the one thing here people start out of curiosity and then want OFF *right
+now* — reported plainly: everyone is fascinated for about ten seconds and then urgently
+wants it to stop. Its Stop lived inside that room's drawer, two taps deep and invisible
+from every other tab.
+- **It is APP CHROME, like the Live bar and the Favorites strip**, rendered from `app.js`
+  above `<main>` — but `position: fixed` at the **bottom** of the viewport, because that
+  is where a thumb already is and the top is full of tabs. `zIndex: 1100` clears the
+  drawers and the full-window map editor (1000). `bottom` adds
+  `env(safe-area-inset-bottom)` so an iPhone's home indicator can't sit on it.
+- **It renders `null` when no storm is running**, so it costs nothing the rest of the
+  time. `rooms` is `lightningActiveRooms` — the backend's own status, refreshed by SSE —
+  so a storm someone ELSE started shows the Stop in every open session.
+- One room ⇒ one wide "Stop the storm". Several ⇒ a "Stop all storms" plus one per room,
+  because stopping the right room has to stay possible. Buttons are ≥48px tall on mobile:
+  this gets pressed in a dark room.
+- Stopping restores what the storm replaced, so it isn't instant — the button reads
+  "Stopping…" until the room leaves `rooms`, and a failed stop hands the button back
+  rather than leaving a dead control.
+- Verified in the harness with the status GET faked (`tools/preview/_shoot_storm.mjs`,
+  scratch) at 1440 and 402px: no real storm is started and no light in the house flashes.
+
 ## zones.js — live zone controls + zone management (v3.15.0)
 A zone is a named group of ROOMS. It shipped in v3.9.0 as a **scheduling target only**,
 with its editor collapsed inside the Schedules tab. That was the wrong shape twice: the

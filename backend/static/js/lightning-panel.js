@@ -489,3 +489,108 @@ function LightningPanel({ roomName, isActive, onStart, onStop, goveeDevices, seg
     </div>
   );
 }
+
+
+// The app-wide Stop for a running storm (v3.51.0).
+//
+// A storm is the one thing in this app people start out of curiosity and then
+// want OFF *right now* — a dark room strobing in a guest's face is not something
+// to go hunting for through a room drawer, two taps deep, on whatever tab you
+// happened to wander to. So while any storm is running, every tab carries a
+// fixed button that stops it, at the bottom of the screen where a thumb already
+// is. Same argument as the Live bar and the Favorites strip: a control you reach
+// for urgently has to be where you already are.
+//
+// It renders NOTHING when no storm is running, so it costs nothing the rest of
+// the time — and `rooms` comes from the backend's status (refreshed by SSE), so
+// a storm someone else started shows the Stop on every open session.
+function StormStopBar({ rooms = [], onStop, isMobile }) {
+  const [stopping, setStopping] = useState([]);
+  const active = rooms.join("|");
+  // Forget anything that has actually stopped, so a room started again is
+  // stoppable at once instead of stuck reading "Stopping…".
+  useEffect(() => {
+    setStopping(prev => prev.filter(r => rooms.includes(r)));
+  }, [active]);
+
+  if (!rooms.length) return null;
+
+  const stop = (room) => {
+    setStopping(prev => (prev.includes(room) ? prev : [...prev, room]));
+    // Stopping restores what the storm replaced, so it isn't instant. If it
+    // fails, hand the button back rather than leaving a dead control.
+    Promise.resolve(onStop?.(room)).catch(() => {
+      setStopping(prev => prev.filter(r => r !== room));
+    });
+  };
+
+  const many = rooms.length > 1;
+  const btnStyle = (busy) => ({
+    padding: isMobile ? "13px 16px" : "10px 18px",
+    minHeight: isMobile ? 48 : 40,          // a thumb target, in the dark
+    borderRadius: 10,
+    border: `1px solid ${busy ? "#7f1d1d" : "#fca5a5"}`,
+    background: busy ? "#7f1d1d" : "#dc2626",
+    color: busy ? "#fca5a5" : "#fff",
+    fontSize: isMobile ? 15 : 14, fontWeight: 800,
+    cursor: busy ? "default" : "pointer",
+    whiteSpace: "nowrap", flex: isMobile ? "1 1 auto" : "0 0 auto",
+  });
+
+  return (
+    <div
+      role="region"
+      aria-label="Lightning storm running"
+      style={{
+        position: "fixed", zIndex: 1100,
+        // Clear of the iPhone home indicator.
+        bottom: `calc(${isMobile ? 10 : 20}px + env(safe-area-inset-bottom, 0px))`,
+        ...(isMobile ? { left: 10, right: 10 } : { left: "50%", transform: "translateX(-50%)" }),
+        maxWidth: isMobile ? "none" : "min(92vw, 720px)",
+        background: "rgba(69,10,10,0.95)",
+        border: "1px solid #f87171", borderRadius: 14,
+        boxShadow: "0 12px 34px rgba(0,0,0,0.55)",
+        padding: isMobile ? 10 : "10px 14px",
+        display: "flex", flexDirection: isMobile ? "column" : "row",
+        alignItems: isMobile ? "stretch" : "center",
+        gap: isMobile ? 8 : 14,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+        <span style={{ fontSize: 18, animation: "pulse 1.2s ease-in-out infinite" }}>⚡</span>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 13, fontWeight: 800, color: "#fecaca" }}>
+            {many ? `${rooms.length} lightning storms running` : "Lightning storm running"}
+          </div>
+          <div style={{
+            fontSize: 11, color: "#fca5a5",
+            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+          }}>{rooms.join(" · ")}</div>
+        </div>
+      </div>
+      <div style={{
+        display: "flex", gap: 8, flexWrap: "wrap",
+        flexDirection: isMobile ? "column" : "row",
+        marginLeft: isMobile ? 0 : "auto",
+      }}>
+        {many && (
+          <button
+            onClick={() => rooms.forEach(stop)}
+            disabled={rooms.every(r => stopping.includes(r))}
+            title="Stop every running storm"
+            style={btnStyle(rooms.every(r => stopping.includes(r)))}
+          >Stop all storms</button>
+        )}
+        {rooms.map(room => (
+          <button
+            key={room}
+            onClick={() => stop(room)}
+            disabled={stopping.includes(room)}
+            title={`Stop the lightning storm in ${room}`}
+            style={btnStyle(stopping.includes(room))}
+          >{stopping.includes(room) ? "Stopping…" : (many ? `Stop · ${room}` : "Stop the storm")}</button>
+        ))}
+      </div>
+    </div>
+  );
+}
