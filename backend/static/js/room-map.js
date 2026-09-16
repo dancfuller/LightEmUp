@@ -957,10 +957,21 @@ function RoomMap({ roomName, hueLights, goveeDevices, onControlHue, onControlGov
       const next = typeof updater === "function" ? updater(prev) : updater;
       // Debounced auto-save
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-      saveTimerRef.current = setTimeout(() => saveLayout(next), 600);
+      saveTimerRef.current = setTimeout(() => { saveTimerRef.current = null; saveLayout(next); }, 600);
       return next;
     });
   };
+
+  // Another browser saved this room's layout (v3.51.4). The map read its layout
+  // once, when it mounted, so a second open session kept the old one — and its next
+  // auto-save wrote it back over the newer layout. Adopt a layout that arrives from
+  // the server, unless a local edit is still waiting to save: then ours is newer.
+  const incomingLayout = roomLayouts?.[roomName];
+  useEffect(() => {
+    if (!incomingLayout || !layout || saveTimerRef.current) return;
+    if (JSON.stringify(incomingLayout) === JSON.stringify(layout)) return;
+    setLayout(incomingLayout);
+  }, [incomingLayout]);
 
   // On opening the editor, fit the layout to its content so the map isn't huge
   // and sparse: a line compacts to consecutive positions; a floor plan crops

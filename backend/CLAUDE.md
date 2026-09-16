@@ -927,7 +927,8 @@ point; don't "improve" this into writing a backup file on the Pi.
   **write `config.json.pre-import-<stamp>.bak`** (aborts with 500 if that fails; the name
   matches the `config.json*.bak` glob so it automatically joins the pool `load_config()`
   restores from) → **quiesce** in-flight work (cancel `_scene_tasks`, stop any active
-  lightning, `razer_keeper.cancel_all()`) so nothing keeps driving devices the import may
+  lightning, `razer_keeper.cancel_all()`, and since v3.51.4 running lightshows, which are then
+  restarted from the imported config) so nothing keeps driving devices the import may
   have removed → **swap the config dict IN PLACE** (`clear()`+`update()`; rebinding the
   global would leave anything holding a reference reading stale settings) →
   `migrate_govee_to_mac` (an old backup may still be IP-keyed) → `save_config` →
@@ -1084,7 +1085,9 @@ caller and the scheduler, so their behavior is bit-identical.
   temporary and the bridge restores the prior state, so we don't touch recorded state.
 - Govee (`ip`): there's no native identify and color/brightness animate slowly, so we
   blink on/off (digital, crisp) 3× then restore the last-known state from
-  `device_state`. Runs inline (~4s) using the existing `govee_lan_*` fire-and-forget
+  `device_state`. Since v3.51.4 the POWER it had comes from the device itself
+  (`govee_lan_get_state`) first: a device LightEmUp had never set used to default
+  to ON, so identifying an unused, switched-off light left it lit. Runs inline (~4s) using the existing `govee_lan_*` fire-and-forget
   helpers. The SKU→name table lives in `discovery.py` (`GOVEE_SKUS`); the frontend
   falls back to backend `device.name` when its small `GOVEE_SKU_NAMES` subset misses.
 
@@ -1782,7 +1785,10 @@ config structure, add it to BOTH `rename_room` and `delete_room`.**
   (`_current_client_id` ContextVar, set by HTTP middleware from the `X-Client-Id`
   header) so clients ignore their own echoes.
 - **When you add a mutating endpoint, call `publish_event("config")`** (or a more
-  specific type) so other open sessions refresh.
+  specific type) so other open sessions refresh. Room layouts, room presets, the
+  lightning segment mode and UI prefs all skipped it until v3.51.4; a second session
+  with the same room's map open then saved its stale layout back over a newer one
+  (the map now also adopts a layout that arrives while it has no unsaved edit).
 - SSE streams are long-lived requests that never complete. uvicorn is configured with
   `timeout_graceful_shutdown=5` (and the unit has `TimeoutStopSec=10`) so a restart
   force-closes them instead of hanging (v2.9.4). Don't remove these.

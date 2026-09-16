@@ -230,7 +230,11 @@ def load_config() -> dict:
             continue
     if CONFIG_PATH.exists():
         log.error("config.json corrupt and no valid backup found; using defaults")
-    return DEFAULT_CONFIG.copy()
+    # A DEEP copy (v3.51.4). A shallow one shares every nested dict and list with
+    # DEFAULT_CONFIG, so on a fresh install the first room or schedule added would
+    # have been written into the defaults themselves.
+    import copy
+    return copy.deepcopy(DEFAULT_CONFIG)
 
 
 def save_config(config: dict):
@@ -4125,13 +4129,24 @@ async def identify_device(req: FlashRequest):
 
     if req.ip:
         prior = config.get("device_state", {}).get(gv_key_for_ip(req.ip, req.mac), {})
+        # Read the device's own power state first (v3.51.4). A device LightEmUp has
+        # never set has no `device_state`, and the restore below defaulted to ON —
+        # so identifying an unused, switched-off device during setup left it lit.
+        # devStatus reports on/off reliably (color it doesn't), so power comes from
+        # the device; level and color still come from our record when there is one.
+        try:
+            live = await govee_lan_get_state(req.ip)
+        except Exception:
+            live = None
+        if live is not None and "on" in live:
+            prior = {**prior, "on": bool(live.get("on"))}
         for _ in range(3):
             await govee_lan_turn(req.ip, True)
             await govee_lan_brightness(req.ip, 100)
             await asyncio.sleep(0.5)
             await govee_lan_turn(req.ip, False)
             await asyncio.sleep(0.5)
-        # Restore last-known state (default: leave it on if we never tracked it).
+        # Restore: the power it had before (read above), else our record, else on.
         restore_on = prior.get("on", True)
         await govee_lan_turn(req.ip, bool(restore_on))
         if restore_on:
@@ -5172,6 +5187,7 @@ async def set_govee_segment_mode(req: GoveeSegmentModeRequest):
         pass  # Count must be set via /api/govee/segment-count
 
     save_config(config)
+    publish_event("config")
     return {"success": True, "segment_mode": req.enabled}
 
 
@@ -6644,6 +6660,15 @@ async def import_config(req: ConfigImportRequest):
         except Exception:
             log.exception("Import: could not stop lightning in %r", room_name)
     razer_keeper.cancel_all()
+    # ...and running lightshows (v3.51.4). A show paints from the OLD config's rooms
+    # and palettes, so left running it kept driving devices the import may have
+    # moved or removed. Stopped without persisting: the imported config says which
+    # shows should run, and those are started again below.
+    for room_name in list(_lightshow_tasks):
+        try:
+            await stop_lightshow(room_name, "config imported", persist=False)
+        except Exception:
+            log.exception("Import: could not stop the lightshow in %r", room_name)
 
     # Swap IN PLACE. Rebinding the global would leave anything holding a reference
     # to the old dict silently reading stale settings.
@@ -6657,6 +6682,7 @@ async def import_config(req: ConfigImportRequest):
     save_config(config)          # write through now, not via the coalescing scheduler
     reload_segment_state()       # in-memory store must match the config we just loaded
     publish_event("config")      # every open browser resyncs
+    asyncio.create_task(_resume_lightshows())   # the imported config's own shows
 
     summary = _config_summary(config)
     log.warning("Config imported (from %s, app %s, exported %s): %d rooms, %d schedules, "
@@ -6812,6 +6838,7 @@ async def set_ui_prefs(req: UiPrefsRequest):
     if req.min_saturation_pct is not None:
         config["ui_prefs"]["min_saturation_pct"] = max(0, min(100, req.min_saturation_pct))
     save_config(config)
+    publish_event("config")
     return {"success": True, "ui_prefs": config["ui_prefs"]}
 
 
@@ -7458,6 +7485,9 @@ async def save_room_layout(req: RoomLayoutRequest):
         "landmarks": req.landmarks,
     }
     save_config(config)
+    # Other open browsers (v3.51.4). None of the settings saves below told them,
+    # so a second session kept a stale layout — and could save it back over this.
+    publish_event("config")
     return {"success": True}
 
 
@@ -7467,6 +7497,7 @@ async def delete_room_layout(room_name: str):
     if room_name in layouts:
         del layouts[room_name]
         save_config(config)
+        publish_event("config")
     return {"success": True}
 
 
@@ -7489,6 +7520,7 @@ async def save_room_presets(req: RoomPresetsRequest):
         config["room_presets"] = {}
     config["room_presets"][req.room_name] = req.presets
     save_config(config)
+    publish_event("config")
     return {"success": True}
 
 
