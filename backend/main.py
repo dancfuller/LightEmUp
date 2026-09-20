@@ -1503,6 +1503,28 @@ def _build_palette_scene(room_name: str, palette: dict, brightness: int = 100,
                              label=f"Palette · {palette['name']}")
 
 
+def _retune_lightshow_brightness(room_name: str, pct: int) -> bool:
+    """A level dragged on a room whose show is RUNNING retunes the show, rather
+    than being quietly undone by it or killing it outright (v3.53.2).
+
+    The show repaints at its own brightness every step, so setting the room to
+    80% while the show sat at 16% showed 80% for a few seconds and then went dim
+    again with nothing to explain it — the room's slider said 80%, the bulbs and
+    the Hue app said otherwise. While a show is running, that slider means "how
+    bright is this animation", so the show keeps running at the new level.
+
+    The loop re-reads its config each step, so this needs no restart."""
+    if not lightshow_running(room_name):
+        return False
+    show = config.setdefault("lightshows", {}).setdefault(room_name, {})
+    show["brightness"] = max(1, min(100, int(pct)))
+    schedule_save()
+    publish_event("lightshow", room=room_name, running=True)
+    log.info("Lightshow %r: brightness retuned to %d%% from the room's level",
+             room_name, show["brightness"])
+    return True
+
+
 async def _stop_lightshow_for_apply(room_name: str, reason: str) -> bool:
     """Stop the room's show for an incoming whole-room apply, and say whether it
     should be brought back once that apply lands (v3.53.0).
@@ -1523,7 +1545,8 @@ async def _stop_lightshow_for_apply(room_name: str, reason: str) -> bool:
 
 
 async def _animate_current(room_name: str, pattern: Optional[str] = None,
-                           reset_order: bool = True) -> str:
+                           reset_order: bool = True,
+                           brightness: Optional[int] = None) -> str:
     """Start `room_name`'s lightshow on the colors it is showing right now.
 
     Deliberately the SAME mechanism as the panel's "What's on now" source rather
@@ -1535,6 +1558,13 @@ async def _animate_current(room_name: str, pattern: Optional[str] = None,
     chosen = (want if want and lightshow.pattern_ok(want, geo)
               else lightshow.fallback_pattern(geo))
     show.update({"enabled": True, "source": "current", "pattern": chosen})
+    if brightness is not None:
+        # "Animate this look" means its BRIGHTNESS too (v3.53.2). The show repaints
+        # at its own stored level every step, so inheriting one set long ago — a
+        # room applied at 80% then animated at a forgotten 16% — dimmed the room
+        # seconds after the apply, with nothing on screen to explain it. That is
+        # the bug this fixes; a RESUME still keeps the level the panel was set to.
+        show["brightness"] = max(1, min(100, int(brightness)))
     if reset_order:
         # A role order indexes a SPECIFIC palette, and this one just changed.
         # A RESUME keeps it: the show was already running on "current", where the
@@ -1997,7 +2027,16 @@ def _room_current_colors(room_name: str) -> tuple:
         cols = [tuple(kelvin_to_rgb(int(entry["kelvin"])))]
     if not cols:
         return [], "Nothing on"
+    # A running show records ITSELF here, so re-resolving wrapped its label again
+    # every restart: "Lightshow · Accent · Lightshow · Accent · My Colors", growing
+    # without bound (v3.53.2). Peel those wrappers off and keep the look the colors
+    # actually came from. (`re` is not imported at module level here.)
     label = entry.get("label") or "What's on now"
+    while label.startswith("Lightshow · "):
+        rest = label[len("Lightshow · "):]
+        if " · " not in rest:
+            break                    # "Lightshow · Walk" — no look name to recover
+        label = rest.split(" · ", 1)[1]
     if len(cols) == 1:
         return [tuple(c) for c in _tonal_shades(*cols[0], LIGHTSHOW_SHADES_FROM_ONE)], label
     return cols, label
@@ -3701,6 +3740,9 @@ async def _defer_room_level(room_name: str, room: dict, pct: int) -> dict:
     bridge says are actually ON, which get it now (v3.50.0). Govee is still
     deferred on the caller's word: its state is a blocking LAN read, not
     something to do on every tick of a drag."""
+    # A room shown as off can still be animating (the caller's view is stale, or
+    # the show lit it). Retune rather than let the next step undo this (v3.53.2).
+    _retune_lightshow_brightness(room_name, pct)
     hue_ids = [str(x) for x in room.get("hue_light_ids", [])]
     live = await _hue_live_on(hue_ids) if hue_ids else {}
     ip, username = config.get("hue_bridge_ip"), config.get("hue_username")
@@ -4422,7 +4464,12 @@ async def control_room(req: RoomStateRequest):
     # driven, so there is no show to retire.
     if req.defer and req.brightness is not None and req.on is None:
         return await _defer_room_level(req.room_name, room, int(req.brightness))
-    await stop_lightshow(req.room_name, "room controlled directly")
+    # A bare LEVEL on a room that is animating retunes the show instead of ending
+    # it (v3.53.2) — dimming an animation is not a request to stop animating.
+    # Anything else (an on/off, a color) is still a look of its own and retires it.
+    level_only = (req.brightness is not None and req.on is None and req.r is None)
+    if not (level_only and _retune_lightshow_brightness(req.room_name, int(req.brightness))):
+        await stop_lightshow(req.room_name, "room controlled directly")
     # ...and so is a lightning storm (v3.50.0), which nothing but its own Stop
     # button used to end. What it replaced is put back only when this command
     # doesn't set a look of its own — a level, a resume. For an off or a color,
@@ -5967,8 +6014,9 @@ async def _run_scene_apply(req: SceneApplyRequest, resume_current: bool = False)
             # After the verifies, not before: the show's first frame rearranges
             # these same lights, and a verify racing it would "repair" the scene
             # back over the animation.
-            await _animate_current(room, req.animate,
-                                   reset_order=not resume_current)
+            await _animate_current(
+                room, req.animate, reset_order=not resume_current,
+                brightness=None if resume_current else req.brightness)
     except asyncio.CancelledError:
         _scene_emit(scope, room, phase="canceled", active=False, label="")
         raise

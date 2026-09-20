@@ -1458,6 +1458,27 @@ room's look genuinely ends that one. A resume passes `reset_order=False`: the
 palette changes under a "current" show by design, so clearing the role order on
 every apply would make roles impossible to keep.
 
+## The show's brightness is not a hidden setting (v3.53.2)
+Reported: the Living Room read 80% in the app, ~30% in the Hue app, and the bulbs
+were visibly dim. The show was running at a stored `brightness` of 16 and repaints
+every Hue light at `bri × level` each step, so it simply undid the room.
+
+- **"Apply & animate" carries the look's BRIGHTNESS**, not just its colors —
+  `_animate_current(..., brightness=)` takes `SceneApplyRequest.brightness`. A
+  **resume** passes none, so a deliberately dim animation is not overwritten by
+  every apply; the panel's slider keeps its meaning.
+- **`_retune_lightshow_brightness(room, pct)`** — a bare LEVEL on a room that is
+  animating retunes the show instead of being undone by it. `control_room` calls
+  it before `stop_lightshow` and only for a level (`on is None and r is None`);
+  an off or a color is a look of its own and still retires the show.
+  `_defer_room_level` calls it too — a room the caller shows as off can still be
+  animating. The loop re-reads its config each step, so no restart is needed.
+- **The show stopped nesting its own label.** `source: "current"` reads
+  `room_last_applied`, which for a whole-room show is the show's OWN record, so
+  each restart wrapped the label again: `Lightshow · Accent · Lightshow · Accent ·
+  My Colors`, growing without bound. `_room_current_colors` peels those wrappers
+  off. (`re` is not imported at module level in main.py — don't reach for it here.)
+
 ## Animating what a room already shows (v3.52.0)
 `source: "current"` resolves a show's palette from `room_last_applied[room]` —
 the same record the "Now showing" strip reads — via `_room_current_colors`. It is
