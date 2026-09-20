@@ -585,6 +585,8 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
         sceneAddress={sceneAddress}
         onSceneAddressChange={onSceneAddressChange}
         savedColorState={savedColorState}
+        lightshow={lightshow}
+        lightshowPatterns={lightshowPatterns}
         onScheduleLook={onScheduleLook ? (plan) => onScheduleLook(name, plan) : null}
         onApply={(applied, colorStateSnapshot) => {
           setColorModeApplied(applied);

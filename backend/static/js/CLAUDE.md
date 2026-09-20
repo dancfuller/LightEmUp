@@ -826,6 +826,17 @@ Two entry points, one mechanism:
   `source: "current"` once the apply completes, so the show animates the scene
   that just landed and a canceled apply animates nothing.
 
+**The button names the pattern it will use (v3.53.1).** It takes its own line
+(`flex: "1 1 100%"`) with a `<select>` of the room's legal patterns beside it and
+that pattern's blurb underneath, and posts the key shown rather than `"auto"`.
+Saying only "animate" and silently inheriting the room's stored pattern produced a
+real bug report: a two-color look plus a stored Accent gave a room of one color
+with a single dot moving, which is Accent working correctly and reads as broken.
+When a roles pattern (Accent / Comet / Sweep) meets a look with fewer than three
+distinct colors, it says so — one of them becomes the background. The count comes
+from the resolved `preview`, so it is what will really be sent.
+`ColorMode` needs `lightshow` + `lightshowPatterns` from `RoomSection` for this.
+
 **Don't add a second way to carry the colors across.** The temptation is to have
 the Scenes panel POST its palette straight to `/api/lightshow`; that creates a
 look that agrees with the room by coincidence and drifts the moment either side

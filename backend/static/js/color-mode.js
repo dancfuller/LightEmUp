@@ -663,7 +663,7 @@ function PresetPicker({ items, value, onChange, placeholder, isMobile,
   );
 }
 
-function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlGovee, favorites, onFavoritesChange, nicknames, segmentInfo, roomLayouts, fixtures, onApply, onScheduleLook, minSatEnabled, minSatPct, segmentFillModes, onSegmentFillModeChange, sceneAddress, onSceneAddressChange, savedColorState }) {
+function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlGovee, favorites, onFavoritesChange, nicknames, segmentInfo, roomLayouts, fixtures, onApply, onScheduleLook, minSatEnabled, minSatPct, segmentFillModes, onSegmentFillModeChange, sceneAddress, onSceneAddressChange, savedColorState, lightshow, lightshowPatterns }) {
   const isMobile = useIsMobile();
   const [mode, setMode] = useState("palette"); // "palette" | "gradient" | "tonal" | "custom" | "beacon"
   // Color space: "color" (RGB, the default) or "white" (tunable color temperature).
@@ -777,6 +777,20 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     if (typeof s.ct_preset === "number") setCtPreset(s.ct_preset);
   }, [roomName, savedColorState]);
 
+  // ─── What "Apply & animate" is about to do (v3.53.1) ─────────────────
+  // It used to just say "animate" and inherit whatever pattern the room had
+  // stored, which could be one nobody remembered choosing — press it on a
+  // two-color scene with Accent stored and the room goes one color with a
+  // single dot moving, which is Accent working correctly and looks like a bug.
+  // Name the pattern, describe it, and let it be changed without leaving.
+  const [animatePattern, setAnimatePattern] = useState(null);
+  const animPatterns = (lightshowPatterns || [])
+    .filter(p => (lightshow?.patterns || []).includes(p.key));
+  const animKey = animatePattern || lightshow?.effective_pattern
+    || (animPatterns[0] && animPatterns[0].key) || null;
+  const animMeta = animPatterns.find(p => p.key === animKey) || null;
+  const animBlurb = animMeta
+    ? ((lightshow?.geometry === "plan" && animMeta.plan_blurb) || animMeta.blurb) : "";
   // Apply progress state
   const [applying, setApplying] = useState(false);
   const [applyPhase, setApplyPhase] = useState(null); // "resetting" | "applying" | null
@@ -1931,12 +1945,27 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
   // "auto" lets the backend keep the room's existing pattern, or fall back to the
   // one its layout suits. The show reads the colors back off the room record, so
   // the animation is of THIS scene rather than a second palette chosen elsewhere.
+  // Distinct colors in the resolved preview — what the show will have to work
+  // with. A roles pattern (Accent / Comet / Sweep) spends one of them on the
+  // background, so with two colors the room is nearly all one color.
+  const previewColorCount = (() => {
+    const seen = new Set();
+    Object.values(preview || {}).forEach(c => {
+      if (!c) return;
+      const r = Array.isArray(c) ? c[0] : c.r;
+      const g = Array.isArray(c) ? c[1] : c.g;
+      const b = Array.isArray(c) ? c[2] : c.b;
+      if ([r, g, b].every(v => typeof v === "number")) seen.add(`${r},${g},${b}`);
+    });
+    return seen.size;
+  })();
+
   const applyColors = (animate = null) => {
     if (!preview || applying) return;
     const plan = buildScenePlan();
     if (!plan) return;
     trackUse("act", { s: "scenes", room: roomName, a: animate ? "apply-animate" : "apply",
-                      detail: { mode } });
+                      detail: animate ? { mode, pattern: animate } : { mode } });
     const { base_seeds, hue, govee_whole, cloud } = plan;
     const applyCount = Object.keys(preview).length;
 
@@ -3002,19 +3031,49 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
             </button>
             {/* The second entry point (v3.52.0): choosing the colors and choosing
                 to animate them is one press, instead of applying here and then
-                rebuilding the same palette in the Lightshow panel. */}
-            {!applying && (
-              <button onClick={() => applyColors("auto")}
-                disabled={!preview}
-                title="Apply this look, then slowly animate it. Pick the pattern in the room's Lightshow panel."
-                style={{
-                  padding: "6px 14px", borderRadius: 8,
-                  border: `1px solid ${preview ? "#a78bfa" : "#334155"}`,
-                  background: "transparent", color: preview ? "#a78bfa" : "#64748b",
-                  fontSize: 12, fontWeight: 700,
-                  cursor: preview ? "pointer" : "default", whiteSpace: "nowrap",
-                }}
-              >{isMobile ? "Animate" : "Apply & animate"}</button>
+                rebuilding the same palette in the Lightshow panel. It takes its
+                own line (flex-basis 100%) so the pattern it will use, and what
+                that pattern does, fit next to it (v3.53.1). */}
+            {!applying && animKey && (
+              <div style={{ flex: "1 1 100%", display: "flex", flexDirection: "column", gap: 5 }}>
+                <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                  <button onClick={() => applyColors(animKey)}
+                    disabled={!preview}
+                    style={{
+                      padding: "6px 14px", borderRadius: 8,
+                      border: `1px solid ${preview ? "#a78bfa" : "#334155"}`,
+                      background: "transparent", color: preview ? "#a78bfa" : "#64748b",
+                      fontSize: 12, fontWeight: 700,
+                      cursor: preview ? "pointer" : "default", whiteSpace: "nowrap",
+                    }}
+                  >{isMobile ? "Animate" : "Apply & animate"}</button>
+                  {animPatterns.length > 1 && (
+                    <select value={animKey} onChange={(e) => setAnimatePattern(e.target.value)}
+                      aria-label="Which pattern the animation uses"
+                      style={{
+                        padding: "6px 8px", borderRadius: 8, border: "1px solid #334155",
+                        background: "#0f172a", color: "#e2e8f0",
+                        fontSize: 12, fontWeight: 700, cursor: "pointer",
+                      }}>
+                      {animPatterns.map(p => (
+                        <option key={p.key} value={p.key}>{p.name}</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+                {animBlurb && (
+                  <div style={{ fontSize: 10, color: "#64748b", lineHeight: 1.45 }}>
+                    {animBlurb}
+                    {animMeta?.roles && previewColorCount > 0 && previewColorCount < 3 && (
+                      <span style={{ color: "#fbbf24" }}>
+                        {" "}This look has {previewColorCount === 1 ? "one color" : "two colors"},
+                        and this pattern spends one of them on the background — so most of the
+                        room will sit on that single color.
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
             )}
             {applying && (
               <button onClick={cancelApply}
