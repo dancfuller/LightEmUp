@@ -791,6 +791,34 @@ add/edit form; `LocationCard` renders in Settings.
   `onRenameRoom` → `POST /api/rooms/rename`; it is NOT gated on `isDefault` (the seed room
   "Outside" is default yet must be renamable — the backend migrates every reference).
 
+## Animating the look a room already has (v3.52.0)
+The panel used to open asking which palette to run, and that was the wrong
+question. Starting a show almost always means "the scene I set earlier should
+move now" — so being asked for a palette meant rebuilding, from memory, a look
+that was already on the walls.
+
+Two entry points, one mechanism:
+- **`lightshow.js`: a `current` color source, labelled "What's on now" and listed
+  FIRST** — it is also `LIGHTSHOW_DEFAULTS["source"]`, so a room that has never
+  had a show opens on itself. The colors come from the backend
+  (`_room_current_colors`), not from anything the browser re-derives, and arrive
+  in the status as `palette_colors` like any other source. `ready` is false when
+  the room has nothing animatable on, and the panel says which case it is.
+- **`color-mode.js`: "Apply & animate"** (just "Animate" on mobile), a secondary
+  button beside Apply in the lightshow's purple. It posts the SAME plan with
+  `animate: "auto"` — it does not start a show itself. The backend starts one on
+  `source: "current"` once the apply completes, so the show animates the scene
+  that just landed and a canceled apply animates nothing.
+
+**Don't add a second way to carry the colors across.** The temptation is to have
+the Scenes panel POST its palette straight to `/api/lightshow`; that creates a
+look that agrees with the room by coincidence and drifts the moment either side
+changes. The room record is the one source — see `backend/CLAUDE.md`.
+
+`applyColors(animate)` takes an argument now, so the plain Apply button must call
+it as `onClick={() => applyColors()}`. Wiring `onClick={applyColors}` passes the
+click EVENT as `animate`, which is truthy — every Apply would start a lightshow.
+
 ## lightshow.js — a room's ambient lightshow (v3.39.0)
 `LightshowPanel` is a room surface (its own opener in the room header + a tab in the
 control drawer). **The show runs on the Pi**; this panel only edits a config object and

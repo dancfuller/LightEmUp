@@ -1497,6 +1497,30 @@ def _build_palette_scene(room_name: str, palette: dict, brightness: int = 100,
                              label=f"Palette · {palette['name']}")
 
 
+async def _animate_current(room_name: str, pattern: Optional[str] = None) -> str:
+    """Start `room_name`'s lightshow on the colors it is showing right now.
+
+    Deliberately the SAME mechanism as the panel's "What's on now" source rather
+    than a second path: the caller has just written `room_last_applied`, so a show
+    with source="current" resolves to the look that landed a moment ago."""
+    show = config.setdefault("lightshows", {}).setdefault(room_name, {})
+    geo = _lightshow_geometry(room_name)
+    want = pattern if pattern and pattern != "auto" else show.get("pattern")
+    chosen = (want if want and lightshow.pattern_ok(want, geo)
+              else lightshow.fallback_pattern(geo))
+    show.update({
+        "enabled": True,
+        "source": "current",
+        "pattern": chosen,
+        # A role order indexes a SPECIFIC palette, and this one just changed.
+        "color_order": [],
+    })
+    schedule_save()
+    await start_lightshow(room_name)
+    publish_event("lightshow", room=room_name, running=lightshow_running(room_name))
+    return chosen
+
+
 async def _start_scene_apply(req):
     """Run a scene in the background, replacing any apply already running in that
     room. Two applies fighting over the same lights is the one thing worse than
@@ -1627,7 +1651,12 @@ LIGHTSHOW_DEFAULTS = {
     # forces every device in the room to one color. A per-device switch here
     # could only disagree with the Scenes panel's.
     "segments": True,
-    "source": "palettes",            # palettes | favorites | custom
+    # current | palettes | favorites | custom. "current" is the default because
+    # of what starting a show actually means (v3.52.0): a scene was set, maybe
+    # hours ago, and the room should now MOVE. Asking for a palette first made
+    # the panel feel like it was starting over from nothing — see
+    # _room_current_colors.
+    "source": "current",
     "palettes": [],                  # library names; one is drawn per run (per STEP for hop)
     "colors": [],                    # source=custom
     "exclude": [],                   # device keys left out of the show entirely
@@ -1898,19 +1927,54 @@ def _lightshow_pattern(show: dict, geometry: str) -> str:
     return lightshow.fallback_pattern(geometry)
 
 
-def _lightshow_pool(show: dict, rt: dict, rng=None) -> tuple:
+# A room showing ONE solid color becomes this many tonal shades when animated.
+# A Walk over a single color is a still picture; the shades are the same ones the
+# Scenes panel's "shades" fill uses, so it still reads as that color.
+LIGHTSHOW_SHADES_FROM_ONE = 5
+
+
+def _room_current_colors(room_name: str) -> tuple:
+    """The colors a room is showing RIGHT NOW, as a palette a show can animate.
+
+    This is the answer to the awkward part of the panel (v3.52.0). The reason to
+    start a show is almost never "pick me a fresh palette" — it's "the look I set
+    earlier should move now". `room_last_applied` already holds what was set,
+    including a scene's resolved swatches, so the show reads the room instead of
+    asking the user to rebuild it.
+
+    A show that is already running recorded ITSELF there, with the pool it drew,
+    so re-resolving mid-run returns the same colors rather than drifting.
+
+    Returns ([], "Nothing on") when there is nothing to animate — a room that is
+    off, or showing a storm. Painting that room would be inventing a look nobody
+    asked for, so the panel refuses to start instead."""
+    entry = (config.get("room_last_applied", {}) or {}).get(room_name) or {}
+    cols = [tuple(int(v) for v in c[:3]) for c in (entry.get("swatches") or [])
+            if isinstance(c, (list, tuple)) and len(c) >= 3]
+    if not cols and entry.get("kelvin"):
+        # A white is recorded as a Kelvin, not swatches; it's still a color.
+        cols = [tuple(kelvin_to_rgb(int(entry["kelvin"])))]
+    if not cols:
+        return [], "Nothing on"
+    label = entry.get("label") or "What's on now"
+    if len(cols) == 1:
+        return [tuple(c) for c in _tonal_shades(*cols[0], LIGHTSHOW_SHADES_FROM_ONE)], label
+    return cols, label
+
+
+def _lightshow_pool(room_name: str, show: dict, rt: dict, rng=None) -> tuple:
     """(colors, label) actually used this step — the palette AFTER the user's
     role ordering (see lightshow.apply_color_order).
 
     Palette hop is exempt: it draws a different palette every step, so an order
     stored against one of them means nothing."""
-    raw, label = _lightshow_palette(show, rt, rng)
+    raw, label = _lightshow_palette(room_name, show, rt, rng)
     if show.get("pattern") == "hop":
         return raw, label
     return lightshow.apply_color_order(raw, show.get("color_order")), label
 
 
-def _lightshow_palette(show: dict, rt: dict, rng=None) -> tuple:
+def _lightshow_palette(room_name: str, show: dict, rt: dict, rng=None) -> tuple:
     """(colors, label) as the palette itself defines them, before any ordering.
     This is what the role editor shows you, so its swatches keep their original
     index no matter how they have been rearranged.
@@ -1920,6 +1984,10 @@ def _lightshow_palette(show: dict, rt: dict, rng=None) -> tuple:
     with one of these tonight" rather than a look that changes underneath the
     pattern you chose."""
     src = show.get("source")
+    if src == "current":
+        # Resolved live rather than frozen into `colors` at save time, so a room
+        # that is restored after a restart animates what it is actually showing.
+        return _room_current_colors(room_name)
     if src == "custom":
         cols = [tuple(int(v) for v in c[:3]) for c in (show.get("colors") or [])
                 if isinstance(c, (list, tuple)) and len(c) >= 3]
@@ -2229,7 +2297,7 @@ async def _lightshow_loop(room_name: str):
         while not stop.is_set():
             show = _lightshow_cfg(room_name)
             cells = _lightshow_cells(room_name, show)
-            colors, pool_label = _lightshow_pool(show, rt)
+            colors, pool_label = _lightshow_pool(room_name, show, rt)
             if not cells or not colors:
                 log.warning("Lightshow %r: %d cells, %d colors — nothing to animate, stopping",
                             room_name, len(cells), len(colors))
@@ -2397,7 +2465,7 @@ async def _start_lightshow_locked(room_name: str):
     show = _lightshow_cfg(room_name)
     geometry = _lightshow_geometry(room_name)
     cells = _lightshow_cells(room_name, show)
-    colors, label = _lightshow_pool(show, {})
+    colors, label = _lightshow_pool(room_name, show, {})
     key = _lightshow_pattern(show, geometry)
     pattern = next((p["name"] for p in lightshow.PATTERNS if p["key"] == key), key)
     # Recorded ONCE, at the start — not per frame. "Now showing" is a claim about
@@ -5590,6 +5658,11 @@ class SceneApplyRequest(BaseModel):
     # make them fight) and no room UI reports itself as applying. Absent = a
     # whole-room apply, which is every pre-v3.34.0 caller and the scheduler.
     scope: Optional[str] = None
+    # The Scenes panel's "Apply & animate" (v3.52.0): a pattern key, or "auto" to
+    # take the room's existing pattern (or its layout's default). The show starts
+    # only once the apply COMPLETES, on source="current" — so it animates the very
+    # scene that just landed, and a canceled apply animates nothing.
+    animate: Optional[str] = None
 
 
 class SceneCancelRequest(BaseModel):
@@ -5846,6 +5919,11 @@ async def _run_scene_apply(req: SceneApplyRequest):
             delay=HUE_LATE_VERIFY_S if req.source == "schedule" else HUE_APPLY_VERIFY_S,
             since=hue_since)
         _scene_emit(scope, room, phase="done", total=apply_total, done=apply_total, label="", active=False)
+        if req.animate:
+            # After the verifies, not before: the show's first frame rearranges
+            # these same lights, and a verify racing it would "repair" the scene
+            # back over the animation.
+            await _animate_current(room, req.animate)
     except asyncio.CancelledError:
         _scene_emit(scope, room, phase="canceled", active=False, label="")
         raise
@@ -7387,7 +7465,7 @@ def _lightshow_status(room_name: str) -> dict:
     rt = _lightshow_runtime.get(room_name) or {}
     geometry = _lightshow_geometry(room_name)
     cells = _lightshow_cells(room_name, show)
-    colors, label = _lightshow_pool(show, dict(rt))
+    colors, label = _lightshow_pool(room_name, show, dict(rt))
     cost = _lightshow_step_cost(cells, len(colors) or 1)
     return {
         **show,
@@ -7406,7 +7484,7 @@ def _lightshow_status(room_name: str) -> dict:
         # panel labels pool[0] as the background. `palette_colors` is the same
         # palette unordered, so the editor can offer the untouched set.
         "pool": [list(c) for c in colors],
-        "palette_colors": [list(c) for c in _lightshow_palette(show, dict(rt))[0]],
+        "palette_colors": [list(c) for c in _lightshow_palette(room_name, show, dict(rt))[0]],
         "has_roles": lightshow.has_roles(_lightshow_pattern(show, geometry)),
         "palette": rt.get("palette") or label,
         "step": rt.get("step"),
@@ -7447,7 +7525,7 @@ async def upsert_lightshow(req: LightshowRequest):
             raise HTTPException(
                 400, f"Pattern '{req.pattern}' needs a different room layout "
                      f"(this room is '{geo}')")
-    if req.source is not None and req.source not in ("palettes", "favorites", "custom"):
+    if req.source is not None and req.source not in ("current", "palettes", "favorites", "custom"):
         raise HTTPException(400, f"Unknown color source '{req.source}'")
     if req.axis is not None and req.axis not in ("x", "y", "diag"):
         raise HTTPException(400, f"Unknown axis '{req.axis}'")

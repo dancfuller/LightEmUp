@@ -1434,6 +1434,33 @@ span which should be running right now, and arms its end.
 - **A one-off re-entered here disables itself** (v3.51.5), as it does when the normal
   loop fires it. Without that it read as enabled for ever afterwards.
 
+## Animating what a room already shows (v3.52.0)
+`source: "current"` resolves a show's palette from `room_last_applied[room]` —
+the same record the "Now showing" strip reads — via `_room_current_colors`. It is
+the DEFAULT source, because the reason to start a show is nearly always that a
+look is already on and should move.
+
+- **Resolved live, per run, not frozen into `colors` at save time.** A show
+  restored after a restart then animates what the room is actually showing. A
+  running show has recorded ITSELF into that record with the pool it drew, so
+  re-resolving mid-run returns the same colors instead of drifting.
+- **One color becomes `LIGHTSHOW_SHADES_FROM_ONE` tonal shades** (`_tonal_shades`,
+  the same helper the Scenes panel's "shades" fill uses). A Walk over a single
+  color is a still picture. A white is recorded as a Kelvin rather than swatches,
+  so it goes through `kelvin_to_rgb` first.
+- **Nothing animatable on ⇒ `([], "Nothing on")`**, which the panel refuses to
+  start from. A room that is off, or running a storm, has no swatches; painting it
+  would invent a look nobody asked for.
+- `_lightshow_pool` / `_lightshow_palette` take `room_name` as their first
+  argument for this. Any new caller must pass it.
+
+`SceneApplyRequest.animate` (a pattern key, or `"auto"`) is the Scenes panel's
+"Apply & animate". `_run_scene_apply` calls `_animate_current` **after the Hue
+verifies are scheduled and only on completion** — a verify racing the show's first
+frame would "repair" the scene back over the animation, and a canceled apply must
+animate nothing. A device-scoped apply (`scope`) never animates: one hexa is not a
+statement about the room, the same rule that stops it writing "Now showing".
+
 ## Room lightshows (v3.39.0)
 "Neat — the last time I looked at the house, these lights were different colors."
 `config["lightshows"][room]` drives a background task that re-arranges the room's colors

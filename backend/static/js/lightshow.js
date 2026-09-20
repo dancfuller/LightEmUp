@@ -28,6 +28,12 @@
 // duplicated here, so the description you read is the one the math implements.
 
 const LIGHTSHOW_SOURCES = [
+  // First, and the default, because of what starting a show usually means
+  // (v3.52.0): a scene was set — maybe hours ago — and the room should now move.
+  // Making the panel ask for a palette first meant rebuilding a look that was
+  // already on the walls. The colors come from the backend's `room_last_applied`,
+  // so this is the same record the room header's "Now showing" strip reads.
+  { key: "current", label: "What's on now" },
   { key: "palettes", label: "Palettes" },
   { key: "favorites", label: "My colors" },
   { key: "custom", label: "Custom" },
@@ -221,8 +227,12 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
       || p.name.toLowerCase().includes(paletteSearch.toLowerCase()));
 
   const colorCount = (s.colors || []).length;
+  // What "current" resolved to on the backend; [] means the room has nothing
+  // animatable on (it's off, or showing a storm).
+  const currentColors = s.source === "current" ? (s.palette_colors || []) : [];
   const ready = s.source === "palettes" ? selected.length > 0
-    : s.source === "custom" ? colorCount >= 2 : true;
+    : s.source === "custom" ? colorCount >= 2
+    : s.source === "current" ? currentColors.length >= 2 : true;
 
   const axisChoices = LIGHTSHOW_AXES[pattern] || LIGHTSHOW_AXES._default;
   const axisValue = s.axis || LIGHTSHOW_AXIS_DEFAULT[pattern] || "x";
@@ -445,11 +455,43 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
         <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
           {LIGHTSHOW_SOURCES.map(src => (
             <button key={src.key} onClick={() => save({ source: src.key })}
-              style={chip((s.source || "palettes") === src.key)}>{src.label}</button>
+              style={chip((s.source || "current") === src.key)}>{src.label}</button>
           ))}
         </div>
 
-        {(s.source || "palettes") === "palettes" && (
+        {s.source === "current" && (
+          <div>
+            <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10, lineHeight: 1.5 }}>
+              {currentColors.length >= 2
+                ? <>Animates the colors this room is already showing — no palette to pick.
+                    Re-read every time the show starts, so setting a new scene and starting
+                    this again follows it.</>
+                : currentColors.length === 1
+                  ? "There's only one color on, so there's nothing to move between."
+                  : "Nothing animatable is on in this room. Set a scene or a color first, or pick a palette below."}
+            </div>
+            {currentColors.length > 0 && (
+              <>
+                <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginBottom: 8 }}>
+                  {currentColors.map((c, i) => (
+                    <div key={i} title={rgbToHex(c[0], c[1], c[2])} style={{
+                      width: 24, height: 24, borderRadius: 6,
+                      background: `rgb(${c[0]},${c[1]},${c[2]})`,
+                      border: "1px solid rgba(255,255,255,0.15)",
+                    }} />
+                  ))}
+                </div>
+                {s.palette && (
+                  <div style={{ fontSize: 11, color: "#94a3b8" }}>
+                    From <strong style={{ color: "#cbd5e1" }}>{s.palette}</strong>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
+        {(s.source || "current") === "palettes" && (
           <>
             <div style={{ fontSize: 11, color: "#64748b", marginBottom: 8, lineHeight: 1.5 }}>
               {pattern === "hop"

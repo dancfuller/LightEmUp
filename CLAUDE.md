@@ -376,7 +376,11 @@ All endpoints are under `/api/`. Key groups:
   **Optional `scope` (v3.34.0)** narrows it to one device: it becomes the task key and
   the SSE channel, so a scene painted on one hexa doesn't cancel its room's scene, no
   room UI reports itself as applying, and nothing is written to "Now showing" (one
-  light isn't the room). Absent = a whole-room apply, which is every other caller
+  light isn't the room). Absent = a whole-room apply, which is every other caller.
+  **Optional `animate` (v3.52.0)** — a pattern key or `"auto"` — starts the room's
+  lightshow on the look this apply just landed, once it COMPLETES. It's the Scenes
+  panel's "Apply & animate", and it runs through the same `source: "current"` the
+  Lightshow panel offers rather than passing colors along a second path
 - `/api/lightshow` — room lightshows (v3.39.0): a slow, ambient re-arrangement of a
   room's colors on a timer. **The pattern set depends on the room's LAYOUT (v3.40.0)**:
   every room gets Walk / Alternate / Shuffle / Swap / Palette hop / Accent, a **line**
@@ -387,8 +391,11 @@ All endpoints are under `/api/`. Key groups:
   step now; `DELETE /api/lightshow/{room}` removes it. Config key `lightshows`,
   room-name-keyed. It runs on the Pi and resumes after a restart. `color_order`
   (v3.42.0) picks which palette color is the BACKGROUND for the patterns that have
-  one (Accent / Comet / Sweep) and, by omission, narrows the palette. See
-  `backend/CLAUDE.md` "Room lightshows"
+  one (Accent / Comet / Sweep) and, by omission, narrows the palette.
+  **`source: "current"` (v3.52.0) is the default**: the show animates the colors the
+  room is already showing, read from `room_last_applied`, so starting one doesn't
+  mean rebuilding a look that's already on. See `backend/CLAUDE.md` "Room lightshows"
+  + "Animating what a room already shows"
 - `/api/govee/segment-*` — per-segment mode and count config (the `segment-mode` one is
   the **lightning** scene's switch, not the color tool's)
 - `/api/govee/scene-address` — per-device "do room scenes paint this as segments or as

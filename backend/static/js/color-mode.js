@@ -1927,11 +1927,16 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     return base;
   }
 
-  const applyColors = () => {
+  // `animate` starts a lightshow on this look once the apply lands (v3.52.0) —
+  // "auto" lets the backend keep the room's existing pattern, or fall back to the
+  // one its layout suits. The show reads the colors back off the room record, so
+  // the animation is of THIS scene rather than a second palette chosen elsewhere.
+  const applyColors = (animate = null) => {
     if (!preview || applying) return;
     const plan = buildScenePlan();
     if (!plan) return;
-    trackUse("act", { s: "scenes", room: roomName, a: "apply", detail: { mode } });
+    trackUse("act", { s: "scenes", room: roomName, a: animate ? "apply-animate" : "apply",
+                      detail: { mode } });
     const { base_seeds, hue, govee_whole, cloud } = plan;
     const applyCount = Object.keys(preview).length;
 
@@ -1954,7 +1959,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     // streams progress back over SSE — so the browser can be closed now.
     api("/scenes/room-apply", {
       method: "POST",
-      body: JSON.stringify(plan),
+      body: JSON.stringify(animate ? { ...plan, animate } : plan),
       headers: { "Content-Type": "application/json" },
     }).catch(e => {
       console.warn("[ColorMode] room-apply failed:", e);
@@ -2969,7 +2974,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
                 fontSize: 12, fontWeight: 600, cursor: applying ? "not-allowed" : "pointer",
               }}
             >{mode === "gradient" || mode === "beacon" ? "Preview" : "Shuffle"}</button>
-            <button onClick={applyColors}
+            <button onClick={() => applyColors()}
               disabled={!preview || applying}
               style={{
                 padding: "6px 16px", borderRadius: 8, border: "none",
@@ -2995,6 +3000,22 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
                 </>
               ) : "Apply"}
             </button>
+            {/* The second entry point (v3.52.0): choosing the colors and choosing
+                to animate them is one press, instead of applying here and then
+                rebuilding the same palette in the Lightshow panel. */}
+            {!applying && (
+              <button onClick={() => applyColors("auto")}
+                disabled={!preview}
+                title="Apply this look, then slowly animate it. Pick the pattern in the room's Lightshow panel."
+                style={{
+                  padding: "6px 14px", borderRadius: 8,
+                  border: `1px solid ${preview ? "#a78bfa" : "#334155"}`,
+                  background: "transparent", color: preview ? "#a78bfa" : "#64748b",
+                  fontSize: 12, fontWeight: 700,
+                  cursor: preview ? "pointer" : "default", whiteSpace: "nowrap",
+                }}
+              >{isMobile ? "Animate" : "Apply & animate"}</button>
+            )}
             {applying && (
               <button onClick={cancelApply}
                 style={{
