@@ -1114,7 +1114,7 @@ async def _apply_room_white(room_name: str, kelvin: int, brightness_pct: int,
     if not room:
         log.warning("Scheduler: white action — room %r not found", room_name)
         return
-    await stop_lightshow(room_name, "room set to white")
+    resume = await _stop_lightshow_for_apply(room_name, "room set to white")
     await stop_room_storm(room_name, "room set to white", restore=False)
     mireds = max(153, min(500, round(1_000_000 / max(1, kelvin))))
     bri254 = max(1, min(254, round(brightness_pct * 254 / 100)))
@@ -1148,6 +1148,10 @@ async def _apply_room_white(room_name: str, kelvin: int, brightness_pct: int,
     # the backend doesn't need discovery's color math just for a label.
     record_room_applied(room_name, "white", _white_label(kelvin), kelvin=kelvin,
                         source=source, source_detail=source_detail, expect=sent)
+    if resume:
+        # A source="current" show follows whatever the room was just set to, a
+        # white included — which it animates as shades of that white.
+        await _animate_current(room_name, reset_order=False)
     # Govee here is a LAN datagram, not a rate-limited cloud call, so nothing
     # above delayed this — but there is still no reason to wait 25s to look at a
     # bulb that was written a second ago. See HUE_COLOR_VERIFY_S.
@@ -1167,7 +1171,7 @@ async def _apply_room_color(room_name: str, r: int, g: int, b: int, brightness_p
     if not room:
         log.warning("Scheduler: color action — room %r not found", room_name)
         return
-    await stop_lightshow(room_name, "room set to a solid color")
+    resume = await _stop_lightshow_for_apply(room_name, "room set to a solid color")
     await stop_room_storm(room_name, "room set to a solid color", restore=False)
     bri254 = max(1, min(254, round(brightness_pct * 254 / 100)))
     sent = {}
@@ -1194,6 +1198,8 @@ async def _apply_room_color(room_name: str, r: int, g: int, b: int, brightness_p
     schedule_govee_verify(govee_sent)
     record_room_applied(room_name, "color", "Solid color", swatches=[[r, g, b]],
                         source=source, source_detail=source_detail, expect=sent)
+    if resume:
+        await _animate_current(room_name, reset_order=False)
     # Govee here is a LAN datagram, not a rate-limited cloud call, so nothing
     # above delayed this — but there is still no reason to wait 25s to look at a
     # bulb that was written a second ago. See HUE_COLOR_VERIFY_S.
@@ -1497,7 +1503,27 @@ def _build_palette_scene(room_name: str, palette: dict, brightness: int = 100,
                              label=f"Palette · {palette['name']}")
 
 
-async def _animate_current(room_name: str, pattern: Optional[str] = None) -> str:
+async def _stop_lightshow_for_apply(room_name: str, reason: str) -> bool:
+    """Stop the room's show for an incoming whole-room apply, and say whether it
+    should be brought back once that apply lands (v3.53.0).
+
+    `source: "current"` is a standing instruction — "this room animates whatever
+    is on it" — so a new scene RE-SEEDS the show rather than ending it. That is
+    what lets one hexa keep moving in an otherwise static room across a re-apply
+    of the room's scene, which used to silently kill it (the stop also
+    `_lightshow_disable`s the show, so it did not even survive as paused).
+
+    Any other source names a palette of its own, and replacing the room's look
+    genuinely does end it — bringing that one back would repaint the room in the
+    old palette seconds after the new one landed."""
+    resume = (lightshow_running(room_name)
+              and _lightshow_cfg(room_name).get("source") == "current")
+    await stop_lightshow(room_name, reason)
+    return resume
+
+
+async def _animate_current(room_name: str, pattern: Optional[str] = None,
+                           reset_order: bool = True) -> str:
     """Start `room_name`'s lightshow on the colors it is showing right now.
 
     Deliberately the SAME mechanism as the panel's "What's on now" source rather
@@ -1508,13 +1534,13 @@ async def _animate_current(room_name: str, pattern: Optional[str] = None) -> str
     want = pattern if pattern and pattern != "auto" else show.get("pattern")
     chosen = (want if want and lightshow.pattern_ok(want, geo)
               else lightshow.fallback_pattern(geo))
-    show.update({
-        "enabled": True,
-        "source": "current",
-        "pattern": chosen,
+    show.update({"enabled": True, "source": "current", "pattern": chosen})
+    if reset_order:
         # A role order indexes a SPECIFIC palette, and this one just changed.
-        "color_order": [],
-    })
+        # A RESUME keeps it: the show was already running on "current", where the
+        # palette changes under it by design, so wiping the roles on every scene
+        # apply would make them impossible to keep.
+        show["color_order"] = []
     schedule_save()
     await start_lightshow(room_name)
     publish_event("lightshow", room=room_name, running=lightshow_running(room_name))
@@ -1526,7 +1552,7 @@ async def _start_scene_apply(req):
     room. Two applies fighting over the same lights is the one thing worse than
     a slow one, so the outgoing task is awaited to completion after cancelling —
     it must have let go of the Govee socket before the new one grabs it."""
-    await stop_lightshow(req.room, "a scene was applied")
+    resume = await _stop_lightshow_for_apply(req.room, "a scene was applied")
     await stop_room_storm(req.room, "a scene was applied", restore=False)
     existing = _scene_tasks.get(req.room)
     if existing and not existing.done():
@@ -1539,7 +1565,8 @@ async def _start_scene_apply(req):
         # that cancelling cannot stop; let that land before the new apply starts
         # writing the same devices. Same reason stop_lightshow settles.
         await asyncio.sleep(LIGHTSHOW_SETTLE_S)
-    _scene_tasks[req.room] = asyncio.create_task(_run_scene_apply(req))
+    _scene_tasks[req.room] = asyncio.create_task(
+        _run_scene_apply(req, resume_current=resume))
     return _scene_tasks[req.room]
 
 
@@ -1812,6 +1839,20 @@ def _lightshow_cells(room_name: str, show: dict) -> list[dict]:
                           "mac": mac or slug, "pos": at(dev_pos.get(key)),
                           "label": label})
     return _lightshow_order(cells, geometry)
+
+
+def _lightshow_is_partial(room_name: str, cells: list[dict]) -> bool:
+    """Does this show animate only SOME of the room's devices? (v3.53.0)
+
+    One hexa moving while the rest of the room holds a scene is the point of
+    leaving lights out, and it is NOT a claim about the room — so it must not
+    overwrite "Now showing", which would replace an accurate record of the scene
+    everything else is still displaying. The room header's own ✨ badge already
+    says a show is running, so nothing is lost by staying quiet here."""
+    room = config.get("rooms", {}).get(room_name) or {}
+    in_room = ({f"hue:{lid}" for lid in room.get("hue_light_ids", [])}
+               | {f"govee:{slug}" for slug in room.get("govee_devices", [])})
+    return bool(in_room - {c["device"] for c in cells})
 
 
 def _lightshow_step_cost(cells: list[dict], palette_size: int) -> float:
@@ -2473,10 +2514,13 @@ async def _start_lightshow_locked(room_name: str):
     # where stamping every frame would be an SD-card write every 30 seconds for a
     # strip that says the same thing. No `expect`: the room genuinely is moving,
     # so /api/rooms/status should answer "unknown" rather than cry divergence.
-    record_room_applied(room_name, "lightshow", f"Lightshow · {pattern} · {label}",
-                        swatches=[list(c) for c in colors])
-    log.info("Lightshow %r started: %s over %d cells (%s layout), %s", room_name,
-             pattern, len(cells), geometry, label)
+    partial = _lightshow_is_partial(room_name, cells)
+    if not partial:
+        record_room_applied(room_name, "lightshow", f"Lightshow · {pattern} · {label}",
+                            swatches=[list(c) for c in colors])
+    log.info("Lightshow %r started: %s over %d cells (%s layout)%s, %s", room_name,
+             pattern, len(cells), geometry,
+             " [partial — room record left alone]" if partial else "", label)
 
 
 def nudge_lightshow(room_name: str) -> bool:
@@ -5683,7 +5727,7 @@ def _scene_emit(scope: str, room: str, **fields):
     publish_event("scene_apply", scope=scope, room=room, **fields)
 
 
-async def _run_scene_apply(req: SceneApplyRequest):
+async def _run_scene_apply(req: SceneApplyRequest, resume_current: bool = False):
     room = req.room
     scope = req.scope or req.room
     # Suppress the noisy per-call device events for this task's context; we emit
@@ -5919,11 +5963,12 @@ async def _run_scene_apply(req: SceneApplyRequest):
             delay=HUE_LATE_VERIFY_S if req.source == "schedule" else HUE_APPLY_VERIFY_S,
             since=hue_since)
         _scene_emit(scope, room, phase="done", total=apply_total, done=apply_total, label="", active=False)
-        if req.animate:
+        if req.animate or resume_current:
             # After the verifies, not before: the show's first frame rearranges
             # these same lights, and a verify racing it would "repair" the scene
             # back over the animation.
-            await _animate_current(room, req.animate)
+            await _animate_current(room, req.animate,
+                                   reset_order=not resume_current)
     except asyncio.CancelledError:
         _scene_emit(scope, room, phase="canceled", active=False, label="")
         raise
@@ -5961,8 +6006,9 @@ async def scene_room_apply(req: SceneApplyRequest):
     scope = req.scope or req.room
     # A WHOLE-room apply retires the room's lightshow and storm; a device-scoped
     # one does not, because painting one hexa isn't a statement about the room.
+    resume = False
     if not req.scope:
-        await stop_lightshow(req.room, "a scene was applied")
+        resume = await _stop_lightshow_for_apply(req.room, "a scene was applied")
         await stop_room_storm(req.room, "a scene was applied", restore=False)
     existing = _scene_tasks.get(scope)
     if existing and not existing.done():
@@ -5972,7 +6018,7 @@ async def scene_room_apply(req: SceneApplyRequest):
         except BaseException:
             pass
         await asyncio.sleep(LIGHTSHOW_SETTLE_S)   # see _start_scene_apply
-    task = asyncio.create_task(_run_scene_apply(req))
+    task = asyncio.create_task(_run_scene_apply(req, resume_current=resume))
     _scene_tasks[scope] = task
     return {"started": True, "room": req.room, "scope": scope}
 

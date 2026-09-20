@@ -791,6 +791,22 @@ add/edit form; `LocationCard` renders in Settings.
   `onRenameRoom` → `POST /api/rooms/rename`; it is NOT gated on `isDefault` (the seed room
   "Outside" is default yet must be renamable — the backend migrates every reference).
 
+## "Which lights move" (lightshow.js, v3.53.0)
+The device list used to read "Leave lights out", which is the wrong way round for
+the thing people actually want: one hexa or rope light drifting while the rest of
+the room holds a scene. Same `exclude` storage, re-framed —
+
+- the header counts what MOVES (`N of M`), not what is left out;
+- each row has an **"Only this"** chip (`onlyDevice` — excludes every other key),
+  because the alternative was a dozen taps in a big room. It is hidden once one
+  light is selected, where it would be a no-op;
+- the copy states the consequence: the other lights **keep whatever they're
+  showing**. That is the whole mental model, and it was nowhere on screen before;
+- **"Animate all"** clears the list again.
+
+Pair this with `source: "current"` and it survives re-applying the room's scene —
+see `backend/CLAUDE.md`.
+
 ## Animating the look a room already has (v3.52.0)
 The panel used to open asking which palette to run, and that was the wrong
 question. Starting a show almost always means "the scene I set earlier should

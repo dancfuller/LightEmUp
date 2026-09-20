@@ -1434,6 +1434,30 @@ span which should be running right now, and arms its end.
 - **A one-off re-entered here disables itself** (v3.51.5), as it does when the normal
   loop fires it. Without that it read as enabled for ever afterwards.
 
+## One light moving in an otherwise static room (v3.53.0)
+The `exclude` list always allowed this; two things stopped it working in practice.
+
+- **A PARTIAL show no longer writes "Now showing".** `_lightshow_is_partial`
+  compares the room's device keys against the show's cells. One hexa moving while
+  eleven lights hold a scene is not a claim about the room, and stamping
+  "Lightshow · Walk · …" over the scene record replaced an accurate description of
+  what the other eleven are displaying. The room header's ✨ badge (`showRunning`
+  in `room-section.js`) already says a show is running, so nothing is lost.
+  It also keeps `source: "current"` resolving to the SCENE rather than to the
+  show's own record — which is the right answer for a partial show.
+- **A scene apply re-seeds a `source: "current"` show instead of killing it.**
+  `_stop_lightshow_for_apply` returns whether to bring it back; `_run_scene_apply`
+  takes `resume_current` and calls `_animate_current` at the end, and the white
+  and solid-color paths do the same after their own records. Note the stop also
+  `_lightshow_disable`s the show, so before this the animation did not even
+  survive as paused — re-applying the room's scene ended it silently.
+
+**Only `source: "current"` resumes.** A show naming its own palette would repaint
+the room in the old colors seconds after the new ones landed, so replacing the
+room's look genuinely ends that one. A resume passes `reset_order=False`: the
+palette changes under a "current" show by design, so clearing the role order on
+every apply would make roles impossible to keep.
+
 ## Animating what a room already shows (v3.52.0)
 `source: "current"` resolves a show's palette from `room_last_applied[room]` —
 the same record the "Now showing" strip reads — via `_room_current_colors`. It is

@@ -191,6 +191,8 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
   };
 
   const excluded = s.exclude || [];
+  const deviceKeys = (devices || []).map(d => d.key);
+  const movingCount = deviceKeys.filter(k => !excluded.includes(k)).length;
   const toggleDevice = (key) => {
     save({
       exclude: excluded.includes(key)
@@ -198,6 +200,11 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
         : [...excluded, key],
     });
   };
+  // Animating ONE light in an otherwise static room means leaving out every
+  // other one, which is a dozen taps in a big room (v3.53.0). "Only this"
+  // appears on each row and makes it one.
+  const onlyDevice = (key) => save({ exclude: deviceKeys.filter(k => k !== key) });
+  const allDevices = () => save({ exclude: [] });
 
   const pad = isMobile ? 12 : 16;
   const card = {
@@ -737,9 +744,27 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
           background: "none", border: "none", color: "#94a3b8", cursor: "pointer",
           fontSize: 12, fontWeight: 600, padding: 0,
         }}>
-          {showLights ? "▾" : "▸"} Leave lights out
-          {excluded.length > 0 && <span style={{ color: "#fbbf24" }}> · {excluded.length} left out</span>}
+          {showLights ? "▾" : "▸"} Which lights move
+          {excluded.length > 0 && (
+            <span style={{ color: "#fbbf24" }}>
+              {" "}· {movingCount} of {deviceKeys.length}
+            </span>
+          )}
         </button>
+        {showLights && (
+          <div style={{ fontSize: 11, color: "#64748b", marginTop: 8, lineHeight: 1.5 }}>
+            {excluded.length > 0
+              ? <>The {excluded.length === 1 ? "other light keeps" : `other ${excluded.length} lights keep`} whatever
+                  {" "}they're showing — only the ticked ones animate.</>
+              : "Everything in the room animates. Untick a light, or use \u201cOnly this\u201d, to leave the rest of the room still."}
+            {excluded.length > 0 && (
+              <button onClick={allDevices} style={{
+                marginLeft: 6, background: "none", border: "none", padding: 0,
+                color: "#a78bfa", fontSize: 11, fontWeight: 700, cursor: "pointer",
+              }}>Animate all</button>
+            )}
+          </div>
+        )}
         {showLights && (
           <div style={{ display: "grid", gap: 5, marginTop: 10 }}>
             {(devices || []).map(d => {
@@ -757,6 +782,21 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
                   <span style={{ flex: 1, fontSize: 12, color: "#e2e8f0", minWidth: 0 }}>{d.label}</span>
                   {d.segments > 1 && (
                     <span style={{ fontSize: 10, color: "#64748b" }}>{d.segments} seg</span>
+                  )}
+                  {movingCount !== 1 && (
+                    <span role="button" tabIndex={0}
+                      onClick={(e) => { e.stopPropagation(); onlyDevice(d.key); }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault(); e.stopPropagation(); onlyDevice(d.key);
+                        }
+                      }}
+                      title={`Animate only ${d.label}, and leave the rest of the room as it is`}
+                      style={{
+                        fontSize: 10, fontWeight: 700, color: "#a78bfa", cursor: "pointer",
+                        border: "1px solid #334155", borderRadius: 6, padding: "2px 6px",
+                        whiteSpace: "nowrap",
+                      }}>Only this</span>
                   )}
                 </button>
               );
