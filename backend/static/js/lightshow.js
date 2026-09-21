@@ -325,8 +325,8 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
         ) : (
           <div style={{ marginTop: 10, fontSize: 11, color: "#64748b", lineHeight: 1.5 }}>
             {isPlan
-              ? "Laid out as a floor plan, so patterns run across real coordinates and this room gets the two-dimensional ones."
-              : "Laid out as a line, so patterns run along the strip and this room gets the ones that need a direction to travel."}
+              ? "Laid out as a floor plan, which sets the order colors travel through the room. Every pattern is available."
+              : "Laid out as a line, so colors travel along it end to end. Every pattern is available."}
           </div>
         )}
 
@@ -716,7 +716,7 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
             </span>
             <span style={{ display: "block", fontSize: 11, color: "#64748b", marginTop: 2, lineHeight: 1.4 }}>
               {s.segments !== false
-                ? "Each device is addressed the way the Scenes panel addresses it. Slower, but the pattern runs along a strip."
+                ? "Each light is addressed the way the Scenes panel addresses it. Slower, but colors move segment by segment within a light."
                 : "Every device is one color. Much faster steps."}
             </span>
           </span>

@@ -119,7 +119,7 @@ def patterns_for(geometry: str = "none") -> list:
     only as 2D map effects. Judged against what an animation is FOR — colors
     changing places, with no two neighbors alike — a stripe that is geometrically
     a stripe in the room buys nothing anybody perceives, and the coordinate math
-    it needed is what broke segmented strips (see `_ranks`). Ripple and Sweep are
+    it needed is what broke segmented lights (see `_ranks`). Ripple and Sweep are
     gone; a room still holding one falls back through `fallback_pattern`.
 
     `geometry` is kept in the signature because every caller passes it, and
@@ -219,17 +219,17 @@ def _ranks(cells: list, geometry: str = "none", axis=None) -> list:
     sequence, for every room (v3.54.0).
 
     A floor plan used to rank by rounded coordinate, and that is the bug that made
-    segmented strips useless. A segment inherits its parent device's position
+    segmented lights useless. A segment inherits its parent device's position
     unless someone has individually dragged it onto the map — so every segment of
-    a strip rounded to the SAME rank, took the SAME color, and the whole device
+    a light rounded to the SAME rank, took the SAME color, and the whole device
     flipped as a unit instead of the palette sliding along it. Eleven of the
     twelve devices in the reporting room had no segment positions placed.
 
-    Indexing instead makes a strip its own line, which is the premise
-    `light-scene.js` has always used (segment index IS position): the room's cells
-    are already ordered so a device's segments are consecutive and in index order,
-    so A B C A B C A becomes B C A B C A B along the strip and across the room in
-    one continuous sequence. `cells` (the positions) is unused now and kept only
+    Indexing instead gives a segmented light its own internal order, which is the
+    premise `light-scene.js` has always used (segment index IS position): the
+    room's cells are already ordered so a device's segments are consecutive and in
+    index order, so A B C A B C A becomes B C A B C A B along that light and
+    across the room in one continuous sequence. `cells` (the positions) is unused now and kept only
     so the signature stays stable for callers."""
     return list(range(len(cells)))
 

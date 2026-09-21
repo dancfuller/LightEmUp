@@ -445,7 +445,7 @@ def migrate_lightshow_segments(cfg: dict) -> bool:
 
     `segments` is a room-level narrowing — False forces every device in the room
     to one flat color — and it has always DEFAULTED to True. But a show carrying
-    an explicit False from an earlier experiment made every segmented strip
+    an explicit False from an earlier experiment made every segmented light
     animate as a single block, which is indistinguishable from the engine being
     broken, and was reported as such. Until v3.54.0 it also genuinely was broken
     on a floor plan, so a False stored before then says nothing about what anyone
@@ -462,7 +462,7 @@ def migrate_lightshow_segments(cfg: dict) -> bool:
         cfg["lightshows"][room].pop("segments", None)
     if cleared:
         log.info("Lightshow: cleared a stored 'whole devices only' from %s — "
-                 "segmented strips animate per segment again", ", ".join(cleared))
+                 "segmented lights animate per segment again", ", ".join(cleared))
     return True
 
 
@@ -1593,7 +1593,7 @@ async def _animate_current(room_name: str, pattern: Optional[str] = None,
         # "Animate this look" means addressing each device the way the SCENE
         # addressed it (v3.54.0) — `segments: True` is exactly that, "use each
         # device's own gv_scene_address". Inheriting a stored False turned every
-        # segmented strip into one flat color, which is the third setting Animate
+        # segmented light into one flat color, which is the third setting Animate
         # was silently carrying over from a show nobody remembered configuring.
         show["segments"] = True
     if brightness is not None:
@@ -2142,12 +2142,12 @@ def _lightshow_units(cells: list[dict]) -> list[list[int]]:
     """Cell indices grouped by DEVICE, in room order (v3.55.0).
 
     The room's pattern runs over UNITS — one Hue light, one whole Govee device,
-    or one segmented strip ENTIRE — not over every segment. A strip is one thing
-    in the room, not seven things: Shuffle dealing its segments independently
-    reads as noise rather than a pattern, and Accent spends seven steps inside
-    one rope before it moves on. Grouping by device key (rather than assuming
-    segments are contiguous) also survives a strip whose segments were dragged
-    apart on the map."""
+    or one segmented light ENTIRE — not over every segment. A segmented light is
+    one thing in the room, not seven things: Shuffle dealing its segments
+    independently reads as noise rather than a pattern, and Accent spends seven
+    steps inside one light before it moves on. Grouping by device key (rather
+    than assuming segments are contiguous) also survives a light whose segments
+    were dragged apart on the map."""
     units: list[list[int]] = []
     seen: dict = {}
     for i, c in enumerate(cells):
@@ -2166,17 +2166,17 @@ def _lightshow_expand(cells: list[dict], units: list[list[int]], unit_frame: lis
 
     A single light takes its unit's color. A SEGMENTED device ignores that color
     and shows the palette repeating along its segments, sliding one segment per
-    step — `colors[(u + j + step) % k]`. So a strip always reads as a strip
-    (A B C A B C A becoming B C A B C A B) no matter which pattern is running,
-    while the single lights do whatever the pattern says. That is the rule this
-    room was asked for.
+    step — `colors[(u + j + step) % k]`. So a segmented light always shows that
+    repeat (A B C A B C A becoming B C A B C A B) no matter which pattern is
+    running, while single lights do whatever the pattern says. That is the rule
+    this room was asked for.
 
-    It keeps the unit's LEVEL, so the pattern still controls the strip's
+    It keeps the unit's LEVEL, so the pattern still controls that light's
     brightness — Alternate can rest it, Comet can hold it at the base level.
 
     Under Walk the two halves agree exactly rather than merely coexisting: Walk
     gives unit `u` the color `(u + step)`, so `(u + j + step)` continues the
-    room's own sequence straight through the strip."""
+    room's own sequence straight through its segments."""
     k = len(colors)
     out: list = [None] * len(cells)
     for u, idxs in enumerate(units):

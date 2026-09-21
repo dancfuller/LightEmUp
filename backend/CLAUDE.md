@@ -1468,7 +1468,7 @@ a deliberately-configured show is not overwritten by every apply:
 |---|---|---|
 | `pattern` | a two-color look ran Accent: room one color, one dot moving | v3.53.1 |
 | `brightness` | a 80% scene animated at a stored 16% | v3.53.2 |
-| `segments` | every segmented strip animated as one flat color | v3.54.0 |
+| `segments` | every segmented light animated as one flat color | v3.54.0 |
 
 A stored `segments: False` from before any of this is cleared once by
 `migrate_lightshow_segments` — see below.
@@ -1544,44 +1544,44 @@ deliberate at a standstill rather than to animate.
 - **A CELL is one Hue light, one whole Govee device, or ONE SEGMENT of one**, and it
   carries its `pos` from the room layout. The patterns need POSITIONS, not just indices.
 
-### A strip is ONE thing in the room (v3.55.0)
+### A segmented light is ONE thing in the room (v3.55.0)
 The pattern runs over **units** — one Hue light, one whole Govee device, or one
 segmented strip ENTIRE — and `_lightshow_expand` then paints each strip's
 segments itself:
 
     segment j of unit u  =  colors[(u + j + step) % k]   at the unit's level
 
-So a strip **always** shows the palette repeating along it, sliding one segment
-per step (`A B C A B C A` → `B C A B C A B`), whatever pattern is running, while
+So a segmented light **always** shows the palette repeating along it, sliding one
+segment per step (`A B C A B C A` → `B C A B C A B`), whatever pattern is running, while
 the single lights do whatever the pattern says.
 
 **Why not leave every segment as its own cell** (which is what v3.54.0 did):
-Walk reads identically either way, but nothing else does. Shuffle dealt a strip's
+Walk reads identically either way, but nothing else does. Shuffle dealt a light's
 seven segments independently, which reads as noise rather than a pattern; Accent
 put its one travelling color on one segment out of forty, so it spent seven steps
-inside a single rope. A strip is one thing in the room, not seven.
+inside a single light. A segmented light is one thing in the room, not seven.
 
-- **The unit keeps its LEVEL**, so the pattern still controls a strip's
+- **The unit keeps its LEVEL**, so the pattern still controls that light's
   brightness — Alternate rests it whole, Comet holds it at the base level.
 - **Under Walk the two halves agree exactly** rather than merely coexisting: Walk
   gives unit `u` the color `(u + step)`, so `(u + j + step)` continues the room's
-  own sequence straight through the strip.
-- **A room that is only one strip now animates.** It used to be a single cell
-  taking a single color.
+  own sequence straight through its segments.
+- **A room with a single segmented light now animates.** It used to be one cell
+  taking one color.
 - `_lightshow_units` groups by DEVICE key rather than assuming segments are
-  contiguous, so a strip whose segments were dragged apart on the map still holds
+  contiguous, so a light whose segments were dragged apart on the map still holds
   together. `rt["frame_list"]` is the UNIT frame, because Swap mutates the
   previous arrangement and its arrangement is the one over units.
 
 **Trade-off, stated:** a roles pattern's background is no longer flat across a
-strip — a background strip shows the palette repeating rather than one color.
+segmented light — it shows the palette repeating rather than one color.
 That was the explicit instruction ("strips always repeat and shift"), and it is
 the reason Accent looks different on a room with strips than on one without.
 
 **`migrate_lightshow_segments`** clears a stored `segments: False` once, guarded
 by the marker key `lightshow_segments_reset` (declared in `DEFAULT_CONFIG`, listed
 in `_SETTING_INTERNAL`). `segments` has always defaulted to True; an explicit
-False forced every device to one flat color, which is indistinguishable from the
+False forces every device to one flat color, which is indistinguishable from the
 engine being broken and was reported as such. Guarded on the KEY, not its
 contents, so turning it off again in the panel sticks.
 
@@ -1597,18 +1597,18 @@ unit. In the reporting room, **eleven of twelve devices had no segment positions
 placed**; only one did.
 
 `_ranks` now returns the cell's INDEX in the room's sequence, for every geometry.
-That makes a strip its own line — the premise `light-scene.js` has always used,
-that segment index IS position — and because `_lightshow_order` already puts a
+That gives a segmented light its own internal order — the premise
+`light-scene.js` has always used, that segment index IS position — and because `_lightshow_order` already puts a
 device's segments consecutively and in index order, `A B C A B C A` becomes
-`B C A B C A B` along the strip and across the room as one continuous sequence.
+`B C A B C A B` along that light and across the room as one continuous sequence.
 
 **Ripple and Sweep are gone, and no pattern is gated by layout any more.** The
 judgment behind that, worth keeping: an animation's job is colors changing places
 with no two neighbors alike. Whether a stripe is geometrically a stripe *in the
 room* is not something anyone perceives, and the coordinate math it needed is
-what broke the strips. `patterns_for` returns the whole catalog whatever the
+what broke segmented lights. `patterns_for` returns the whole catalog whatever the
 geometry, so a floor-plan room can finally run Comet — which is the best of them
-along a rope. A room still holding Ripple or Sweep falls back through
+along a segmented light. A room still holding Ripple or Sweep falls back through
 `fallback_pattern`; the API refuses those keys outright.
 
 The `axis` option went with them (`default_axis`, `_project` and the panel's
@@ -1618,7 +1618,7 @@ field remain so an old config or client still validates; nothing reads them.
 **Geometry still does one job:** it sets `_lightshow_order`, the order the colors
 travel in. That is the "adjacency" half, and it stays.
 
-Covered by `test_sequence.py` (30 assertions): the reported strip reproduced at
+Covered by `test_sequence.py` (30 assertions): the reported light reproduced at
 one shared coordinate, the `ABCABCA → BCABCAB` shift, plan and line producing
 identical frames for every pattern, scattered lights still striping, the catalog,
 and the patterns that stayed still behaving.

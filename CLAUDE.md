@@ -13,6 +13,21 @@ being re-told. Nested `CLAUDE.md` files document subsystem internals:
 `backend/CLAUDE.md` (server) and `backend/static/js/CLAUDE.md` (frontend). Read those
 instead of spelunking, and **update them when you change how something works.**
 
+### Vocabulary — use the app's own nouns, don't invent new ones
+The domain has exactly these: **lights**, **segments**, **rooms**, **zones**,
+**fixtures**, plus **favorites** (colors) and **favorite lights**. A Govee hexa or
+rope is a *light* that has *segments*. Say "a segmented light", not a strip, a
+bar, a run, a panel set or a chain.
+
+**"Strip" is already taken** and means a horizontal UI band — the Favorites strip,
+the "Now showing" strip, `PaletteStrip`. Using it for a device overloads a word
+the codebase already spends, which is worse than a merely unfamiliar term.
+
+This applies to UI copy, commit messages, comments and these CLAUDE.md files
+alike: docs are where a stray word gets learned and repeated. If a concept
+genuinely has no name yet, say so and ask rather than coining one — a new noun in
+a shipped string is a decision the user should make.
+
 ### Versioning
 - SemVer `X.Y.Z`. Single source of truth: `backend/version.py` (`__version__`).
 - **Bump the version on every functional commit.** Claude decides the bump:
