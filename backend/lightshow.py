@@ -41,7 +41,6 @@ declares which layouts it belongs to:
   which never look at a position.
 """
 
-import math
 import random
 from typing import Optional
 
@@ -56,39 +55,33 @@ PATTERNS = [
     {
         "key": "walk",
         "name": "Walk",
-        "blurb": "The palette repeats along the room (A B C A B C) and slides one place each step.",
-        "plan_blurb": "Stripes of the palette march across the room, one step at a time.",
-        "opts": ["direction", "axis"],
-        "layouts": ["line", "plan"],
+        "blurb": "The palette repeats along the room (A B C A B C) and slides one place "
+                 "each step. Inside a segmented light it slides segment by segment.",
+        "opts": ["direction"],
     },
     {
         "key": "alternate",
         "name": "Alternate",
         "blurb": "Every other light takes its turn lit; the ones in between rest — dimmed, or off.",
-        "plan_blurb": "A checkerboard across the room takes turns being lit; the rest dim or go off.",
-        "opts": ["groups", "rest", "axis"],
-        "layouts": ["line", "plan"],
+        "opts": ["groups", "rest"],
     },
     {
         "key": "shuffle",
         "name": "Shuffle",
         "blurb": "The same palette, re-dealt across the room each step. Never two neighbors alike.",
         "opts": [],
-        "layouts": ["line", "plan"],
     },
     {
         "key": "swap",
         "name": "Swap",
         "blurb": "A couple of lights trade colors each step. The subtlest one — the room barely moves.",
         "opts": ["swaps"],
-        "layouts": ["line", "plan"],
     },
     {
         "key": "hop",
         "name": "Palette hop",
         "blurb": "A different palette from your set each step. The biggest change per step — give it room.",
         "opts": [],
-        "layouts": ["line", "plan"],
         "needs_set": True,       # only interesting with 2+ palettes to draw from
     },
     {
@@ -96,42 +89,21 @@ PATTERNS = [
         "name": "Accent",
         "blurb": "The room holds one color while a single accent travels from light to light.",
         "opts": [],
-        "layouts": ["line", "plan"],
         "roles": ["background", "accent"],
     },
-    # ── Line only ────────────────────────────────────────────────────────────
     {
         "key": "wipe",
         "name": "Wipe",
         "blurb": "A new color creeps in from one end, covering the last one. Only one light changes "
                  "per step, so it's the cheapest pattern there is — and the slowest-looking.",
         "opts": ["direction"],
-        "layouts": ["line"],
     },
     {
         "key": "comet",
         "name": "Comet",
         "blurb": "A bright head travels the run with a fading tail behind it, over a dim base.",
         "opts": ["tail", "rest_pct"],
-        "layouts": ["line"],
         "roles": ["background", "comet"],
-    },
-    # ── Floor plan only ──────────────────────────────────────────────────────
-    {
-        "key": "ripple",
-        "name": "Ripple",
-        "blurb": "Rings of color spread out from the middle of the room — or fall inward.",
-        "opts": ["direction"],
-        "layouts": ["plan"],
-    },
-    {
-        "key": "sweep",
-        "name": "Sweep",
-        "blurb": "A band of color crosses the room over a dim base — left to right, front to back, "
-                 "or on the diagonal.",
-        "opts": ["axis", "band", "rest_pct"],
-        "layouts": ["plan"],
-        "roles": ["background", "band"],
     },
 ]
 
@@ -140,25 +112,31 @@ DEFAULT_PATTERN = "walk"
 GEOMETRIES = ("line", "plan", "none")
 
 
-def patterns_for(geometry: str) -> list:
-    """The catalog a room of this geometry is offered.
+def patterns_for(geometry: str = "none") -> list:
+    """The catalog — every room is offered every pattern (v3.54.0).
 
-    "none" (no layout yet) gets exactly the patterns that never read a position,
-    which is the honest answer rather than offering a Ripple with no coordinates
-    to ripple through."""
-    if geometry == "none":
-        return [p for p in PATTERNS if set(p["layouts"]) == {"line", "plan"}]
-    return [p for p in PATTERNS if geometry in p["layouts"]]
+    Patterns used to be gated by layout, and two of them (Ripple, Sweep) existed
+    only as 2D map effects. Judged against what an animation is FOR — colors
+    changing places, with no two neighbors alike — a stripe that is geometrically
+    a stripe in the room buys nothing anybody perceives, and the coordinate math
+    it needed is what broke segmented strips (see `_ranks`). Ripple and Sweep are
+    gone; a room still holding one falls back through `fallback_pattern`.
+
+    `geometry` is kept in the signature because every caller passes it, and
+    because the room's ORDER still comes from its layout — see `_lightshow_order`
+    in main.py. Nothing here reads it any more, and `layouts` is gone from the
+    catalog entries."""
+    return list(PATTERNS)
 
 
 def pattern_ok(pattern: str, geometry: str) -> bool:
     return any(p["key"] == pattern for p in patterns_for(geometry))
 
 
-def fallback_pattern(geometry: str) -> str:
-    """What to run when the stored pattern doesn't suit the room's geometry —
-    which happens for free when someone switches a room from Line to Floor Plan.
-    Walk is in every set, so this always resolves."""
+def fallback_pattern(geometry: str = "none") -> str:
+    """What to run when the stored pattern isn't one we have. Since v3.54.0 that
+    means a room still holding the removed Ripple or Sweep; it used to mean a
+    layout change had invalidated a geometry-only pattern."""
     return DEFAULT_PATTERN if pattern_ok(DEFAULT_PATTERN, geometry) else patterns_for(geometry)[0]["key"]
 
 
@@ -194,7 +172,7 @@ class ColorDealer:
 def has_roles(pattern: str) -> bool:
     """Does this pattern treat colors[0] as a distinguished BACKGROUND?
 
-    Accent, Comet and Sweep all hold the room at one color and move a second one
+    Accent and Comet both hold the room at one color and move a second one
     across it. That makes them the patterns where "which color is which" is a
     real question — and where a six-color palette can look like a two-color one,
     because only colors[0] and the current traveller are ever on screen at once."""
@@ -236,34 +214,23 @@ def _clamp(v, lo, hi, default):
         return default
 
 
-DEFAULT_AXIS = {"alternate": "diag"}     # everything else runs along x
+def _ranks(cells: list, geometry: str = "none", axis=None) -> list:
+    """The integer 'position' each cell occupies — its INDEX in the room's cell
+    sequence, for every room (v3.54.0).
 
+    A floor plan used to rank by rounded coordinate, and that is the bug that made
+    segmented strips useless. A segment inherits its parent device's position
+    unless someone has individually dragged it onto the map — so every segment of
+    a strip rounded to the SAME rank, took the SAME color, and the whole device
+    flipped as a unit instead of the palette sliding along it. Eleven of the
+    twelve devices in the reporting room had no segment positions placed.
 
-def default_axis(pattern: str) -> str:
-    """The axis a pattern uses when the show hasn't stored one. The panel needs
-    this too, so the chip it highlights is the one actually in effect."""
-    return DEFAULT_AXIS.get(pattern, "x")
-
-
-def _project(cell, axis: str) -> float:
-    """A cell's coordinate along one axis of a floor plan."""
-    x, y = cell[0], cell[1]
-    if axis == "y":
-        return y
-    if axis == "diag":
-        return x + y
-    return x
-
-
-def _ranks(cells: list, geometry: str, axis: str) -> list:
-    """The integer 'position' each cell occupies for the striping patterns.
-
-    On a LINE that's the cell's index — a strip is expected to read color 1,
-    color 2, color 3 along its length, not to inherit the physical gaps between
-    fixtures. On a FLOOR PLAN it's the real coordinate, which is the whole point:
-    a stripe has to be a stripe in the room, not in a reading order."""
-    if geometry == "plan":
-        return [int(round(_project(c, axis))) for c in cells]
+    Indexing instead makes a strip its own line, which is the premise
+    `light-scene.js` has always used (segment index IS position): the room's cells
+    are already ordered so a device's segments are consecutive and in index order,
+    so A B C A B C A becomes B C A B C A B along the strip and across the room in
+    one continuous sequence. `cells` (the positions) is unused now and kept only
+    so the signature stays stable for callers."""
     return list(range(len(cells)))
 
 
@@ -306,25 +273,17 @@ def plan_frame(pattern: str, cells: list, colors: list, step: int,
     if n <= 0 or not colors:
         return []
     k = len(colors)
-    # `axis` is deliberately ABSENT rather than defaulted in the config: each
-    # pattern's natural axis is different, and a stored "x" would mean Alternate
-    # could never resolve to the checkerboard that is its whole point on a floor
-    # plan. Absent means "whatever suits this pattern"; a stored value is the
-    # user overriding that.
-    axis = opts.get("axis")
-
     if pattern == "walk":
         off = _walk_offset(step, k, opts.get("direction") or "forward")
-        ranks = _ranks(cells, geometry, axis or "x")
+        ranks = _ranks(cells)
         return [(*colors[(r + off) % k], 1.0) for r in ranks]
 
     if pattern == "alternate":
         groups = _clamp(opts.get("groups"), 2, 4, 2)
         rest = _rest_level(opts)
-        # A checkerboard is the 2D reading of "every other one", so a floor plan
-        # alternates on x+y parity unless told otherwise. A line has one axis and
-        # the question doesn't arise.
-        ranks = _ranks(cells, geometry, axis or "diag")
+        # "Every other one" along the room's own sequence — which inside a
+        # segmented light means every other SEGMENT.
+        ranks = _ranks(cells)
         lit = step % groups
         return [(*colors[i % k], 1.0 if ranks[i] % groups == lit else rest)
                 for i in range(n)]
@@ -382,32 +341,6 @@ def plan_frame(pattern: str, cells: list, colors: list, step: int,
                 out.append((*base, rest))
         return out
 
-    if pattern == "ripple":
-        cx = sum(c[0] for c in cells) / n
-        cy = sum(c[1] for c in cells) / n
-        inward = (opts.get("direction") == "backward")
-        out = []
-        for c in cells:
-            ring = int(round(math.hypot(c[0] - cx, c[1] - cy)))
-            idx = (ring - step) if inward else (ring + step)
-            out.append((*colors[idx % k], 1.0))
-        return out
-
-    if pattern == "sweep":
-        proj = [_project(c, axis or "x") for c in cells]
-        lo = min(proj)
-        span = max(1, int(round(max(proj) - lo)) + 1)
-        width = max(1, min(span, _clamp(opts.get("band"), 1, 12, 2)))
-        rest = _rest_level(opts)
-        pos = step % span
-        base = colors[0]
-        accent = _accent_color(colors, step // span)
-        out = []
-        for p in proj:
-            d = (int(round(p - lo)) - pos) % span
-            out.append((*accent, 1.0) if d < width else (*base, rest))
-        return out
-
     # Unknown pattern (a config written by a newer build, or a typo): deal
     # something valid rather than leaving the room mid-frame.
     return [(*c, 1.0) for c in deal(colors, n, rng)]
@@ -421,7 +354,7 @@ def _rest_level(opts: dict) -> float:
 
 
 def _accent_color(colors: list, lap: int):
-    """The travelling color for Comet / Accent / Sweep: colors[0] is the base,
+    """The travelling color for Comet / Accent: colors[0] is the base,
     and the accent walks the rest of the palette one lap at a time so a
     five-color palette is used rather than reduced to two."""
     k = len(colors)

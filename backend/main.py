@@ -1546,7 +1546,8 @@ async def _stop_lightshow_for_apply(room_name: str, reason: str) -> bool:
 
 async def _animate_current(room_name: str, pattern: Optional[str] = None,
                            reset_order: bool = True,
-                           brightness: Optional[int] = None) -> str:
+                           brightness: Optional[int] = None,
+                           segments: bool = False) -> str:
     """Start `room_name`'s lightshow on the colors it is showing right now.
 
     Deliberately the SAME mechanism as the panel's "What's on now" source rather
@@ -1558,6 +1559,13 @@ async def _animate_current(room_name: str, pattern: Optional[str] = None,
     chosen = (want if want and lightshow.pattern_ok(want, geo)
               else lightshow.fallback_pattern(geo))
     show.update({"enabled": True, "source": "current", "pattern": chosen})
+    if brightness is not None or segments:
+        # "Animate this look" means addressing each device the way the SCENE
+        # addressed it (v3.54.0) — `segments: True` is exactly that, "use each
+        # device's own gv_scene_address". Inheriting a stored False turned every
+        # segmented strip into one flat color, which is the third setting Animate
+        # was silently carrying over from a show nobody remembered configuring.
+        show["segments"] = True
     if brightness is not None:
         # "Animate this look" means its BRIGHTNESS too (v3.53.2). The show repaints
         # at its own stored level every step, so inheriting one set long ago — a
@@ -6016,7 +6024,8 @@ async def _run_scene_apply(req: SceneApplyRequest, resume_current: bool = False)
             # back over the animation.
             await _animate_current(
                 room, req.animate, reset_order=not resume_current,
-                brightness=None if resume_current else req.brightness)
+                brightness=None if resume_current else req.brightness,
+                segments=not resume_current)
     except asyncio.CancelledError:
         _scene_emit(scope, room, phase="canceled", active=False, label="")
         raise

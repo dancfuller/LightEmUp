@@ -789,8 +789,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
   const animKey = animatePattern || lightshow?.effective_pattern
     || (animPatterns[0] && animPatterns[0].key) || null;
   const animMeta = animPatterns.find(p => p.key === animKey) || null;
-  const animBlurb = animMeta
-    ? ((lightshow?.geometry === "plan" && animMeta.plan_blurb) || animMeta.blurb) : "";
+  const animBlurb = animMeta ? animMeta.blurb : "";
   // Apply progress state
   const [applying, setApplying] = useState(false);
   const [applyPhase, setApplyPhase] = useState(null); // "resetting" | "applying" | null

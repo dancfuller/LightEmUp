@@ -63,17 +63,6 @@ function nearestIntervalIndex(seconds) {
   return best;
 }
 
-// Axis labels are per PATTERN, because one stored value means a different thing
-// depending on what reads it: for a Walk or a Sweep it's the direction of
-// travel, for Alternate it's the shape of the grouping. One key, honest names.
-const LIGHTSHOW_AXES = {
-  alternate: [["diag", "checkerboard"], ["x", "columns"], ["y", "rows"]],
-  _default: [["x", "left → right"], ["y", "front → back"], ["diag", "diagonal"]],
-};
-// Mirrors lightshow.default_axis on the Pi: absent means "whatever suits this
-// pattern", so the chip we highlight has to resolve it the same way.
-const LIGHTSHOW_AXIS_DEFAULT = { alternate: "diag" };
-
 // Role-order helpers. `order` is a list of indices into the palette; index 0 is
 // the background. Kept pure and tiny so the editor stays declarative.
 function promoteColor(order, i) {
@@ -241,8 +230,6 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
     : s.source === "custom" ? colorCount >= 2
     : s.source === "current" ? currentColors.length >= 2 : true;
 
-  const axisChoices = LIGHTSHOW_AXES[pattern] || LIGHTSHOW_AXES._default;
-  const axisValue = s.axis || LIGHTSHOW_AXIS_DEFAULT[pattern] || "x";
   const intervalIdx = nearestIntervalIndex(s.interval_s ?? 30);
   // The role order, always as an explicit index list so the editor has one shape
   // to reason about: an empty stored order means "the palette as it comes".
@@ -254,6 +241,8 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
   // starts sentences with them.
   const roleWords = (lightshowPattern(patterns, pattern)?.roles || ["background", "accent"])
     .map(w => w.charAt(0).toUpperCase() + w.slice(1));
+  // The layout no longer decides WHICH patterns a room is offered (v3.54.0) —
+  // it only sets the order the colors travel in, so this is context, not a gate.
   const geometryLabel = isPlan ? "Floor plan"
     : geometry === "line" ? "Line layout" : "No layout";
 
@@ -314,7 +303,7 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
                 <div style={{ fontSize: 11, color: "#64748b", marginTop: 3, lineHeight: 1.4 }}>
                   {/* A pattern can read differently in 2D — Walk is a sliding
                       cycle along a strip but marching stripes across a room. */}
-                  {(isPlan && p.plan_blurb) || p.blurb}
+                  {p.blurb}
                 </div>
               </button>
             );
@@ -353,13 +342,6 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
           )))}
 
         {/* Axis is a floor-plan question: a line has only one. */}
-        {opts.includes("axis") && isPlan && optRow(
-          pattern === "alternate" ? "Grouping" : "Across",
-          axisChoices.map(([k, label]) => (
-            <button key={k} onClick={() => save({ axis: k })}
-              style={chip(axisValue === k)}>{label}</button>
-          )))}
-
         {opts.includes("groups") && optRow("Take turns in",
           [2, 3, 4].map(g => (
             <button key={g} onClick={() => save({ groups: g })}

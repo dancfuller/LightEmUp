@@ -382,10 +382,11 @@ All endpoints are under `/api/`. Key groups:
   panel's "Apply & animate", and it runs through the same `source: "current"` the
   Lightshow panel offers rather than passing colors along a second path
 - `/api/lightshow` — room lightshows (v3.39.0): a slow, ambient re-arrangement of a
-  room's colors on a timer. **The pattern set depends on the room's LAYOUT (v3.40.0)**:
-  every room gets Walk / Alternate / Shuffle / Swap / Palette hop / Accent, a **line**
-  also gets Wipe + Comet, a **floor plan** also gets Ripple + Sweep, and a room with no
-  layout gets only the six that never read a position. `GET` returns every room's show
+  room's colors on a timer. **Every room is offered all eight patterns** — Walk /
+  Alternate / Shuffle / Swap / Palette hop / Accent / Wipe / Comet (v3.54.0). The
+  layout no longer gates them; it only sets the ORDER the colors travel in. Colors
+  move along the room's cell sequence, so inside a segmented light they slide
+  segment by segment. Ripple and Sweep were removed. `GET` returns every room's show
   (with its `geometry` and the patterns it may run) plus the full catalog; `POST` PATCHes
   one room's show (and starts/stops/restarts it); `POST /api/lightshow/step` advances a
   step now; `DELETE /api/lightshow/{room}` removes it. Config key `lightshows`,

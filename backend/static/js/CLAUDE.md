@@ -807,6 +807,16 @@ the room holds a scene. Same `exclude` storage, re-framed —
 Pair this with `source: "current"` and it survives re-applying the room's scene —
 see `backend/CLAUDE.md`.
 
+## The pattern list stopped depending on the layout (v3.54.0)
+`LIGHTSHOW_AXES` / `LIGHTSHOW_AXIS_DEFAULT` and the "Across" / "Grouping" chips are
+gone — `axis` only ever meant something for the removed floor-plan patterns. A
+pattern now shows one `blurb`; `plan_blurb` no longer exists, so neither the panel
+nor the Scenes panel's Animate hint chooses between two.
+
+The layout line in the run/stop card stays, but it is CONTEXT now, not a gate: it
+says which order the colors travel in, not which patterns the room may use. Every
+room is offered all eight. See `backend/CLAUDE.md` for why.
+
 ## Animating the look a room already has (v3.52.0)
 The panel used to open asking which palette to run, and that was the wrong
 question. Starting a show almost always means "the scene I set earlier should

@@ -1458,6 +1458,23 @@ room's look genuinely ends that one. A resume passes `reset_order=False`: the
 palette changes under a "current" show by design, so clearing the role order on
 every apply would make roles impossible to keep.
 
+## Three settings Animate used to inherit silently
+Each was found the same way — the user pressed "Apply & animate" and got behavior
+from a show they had configured once and forgotten. `_animate_current` now carries
+all three from the look being animated, and a **resume** carries none of them, so
+a deliberately-configured show is not overwritten by every apply:
+
+| setting | symptom when inherited | since |
+|---|---|---|
+| `pattern` | a two-color look ran Accent: room one color, one dot moving | v3.53.1 |
+| `brightness` | a 80% scene animated at a stored 16% | v3.53.2 |
+| `segments` | every segmented strip animated as one flat color | v3.54.0 |
+
+`segments: True` means "address each device the way `gv_scene_address` already
+does", so setting it is exactly "animate this look as it was applied".
+**If you add another show setting that changes how a look is rendered, decide
+which column it is in — and say so on the button.**
+
 ## The show's brightness is not a hidden setting (v3.53.2)
 Reported: the Living Room read 80% in the app, ~30% in the Hue app, and the bulbs
 were visibly dim. The show was running at a stored `brightness` of 16 and repaints
@@ -1524,7 +1541,45 @@ deliberate at a standstill rather than to animate.
 - **A CELL is one Hue light, one whole Govee device, or ONE SEGMENT of one**, and it
   carries its `pos` from the room layout. The patterns need POSITIONS, not just indices.
 
-### Geometry: a line and a floor plan are different spaces (v3.40.0)
+### The room is a SEQUENCE of cells, not a coordinate field (v3.54.0)
+**This supersedes the geometry section below.** Read it first.
+
+Reported: on a floor plan the Govee strips changed color as whole devices instead
+of the palette sliding along their segments. `_ranks` ranked a plan room by
+**rounded map coordinate** — and a segment inherits its parent device's position
+unless someone has individually dragged it onto the map. So every segment of a
+strip rounded to the same rank, took the same color, and the device flipped as a
+unit. In the reporting room, **eleven of twelve devices had no segment positions
+placed**; only one did.
+
+`_ranks` now returns the cell's INDEX in the room's sequence, for every geometry.
+That makes a strip its own line — the premise `light-scene.js` has always used,
+that segment index IS position — and because `_lightshow_order` already puts a
+device's segments consecutively and in index order, `A B C A B C A` becomes
+`B C A B C A B` along the strip and across the room as one continuous sequence.
+
+**Ripple and Sweep are gone, and no pattern is gated by layout any more.** The
+judgment behind that, worth keeping: an animation's job is colors changing places
+with no two neighbors alike. Whether a stripe is geometrically a stripe *in the
+room* is not something anyone perceives, and the coordinate math it needed is
+what broke the strips. `patterns_for` returns the whole catalog whatever the
+geometry, so a floor-plan room can finally run Comet — which is the best of them
+along a rope. A room still holding Ripple or Sweep falls back through
+`fallback_pattern`; the API refuses those keys outright.
+
+The `axis` option went with them (`default_axis`, `_project` and the panel's
+`LIGHTSHOW_AXES` are all deleted). `LIGHTSHOW_DEFAULTS["axis"]` and the request
+field remain so an old config or client still validates; nothing reads them.
+
+**Geometry still does one job:** it sets `_lightshow_order`, the order the colors
+travel in. That is the "adjacency" half, and it stays.
+
+Covered by `test_sequence.py` (30 assertions): the reported strip reproduced at
+one shared coordinate, the `ABCABCA → BCABCAB` shift, plan and line producing
+identical frames for every pattern, scattered lights still striping, the catalog,
+and the patterns that stayed still behaving.
+
+### Geometry: a line and a floor plan are different spaces (v3.40.0, superseded)
 `_lightshow_geometry(room)` reads `room_layouts[room].mode` and returns
 **`"line"` | `"plan"` | `"none"`** (no layout at all). It decides three things:
 
