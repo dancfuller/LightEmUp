@@ -1470,6 +1470,9 @@ a deliberately-configured show is not overwritten by every apply:
 | `brightness` | a 80% scene animated at a stored 16% | v3.53.2 |
 | `segments` | every segmented strip animated as one flat color | v3.54.0 |
 
+A stored `segments: False` from before any of this is cleared once by
+`migrate_lightshow_segments` — see below.
+
 `segments: True` means "address each device the way `gv_scene_address` already
 does", so setting it is exactly "animate this look as it was applied".
 **If you add another show setting that changes how a look is rendered, decide
@@ -1540,6 +1543,47 @@ deliberate at a standstill rather than to animate.
   the drift this codebase keeps paying for elsewhere.
 - **A CELL is one Hue light, one whole Govee device, or ONE SEGMENT of one**, and it
   carries its `pos` from the room layout. The patterns need POSITIONS, not just indices.
+
+### A strip is ONE thing in the room (v3.55.0)
+The pattern runs over **units** — one Hue light, one whole Govee device, or one
+segmented strip ENTIRE — and `_lightshow_expand` then paints each strip's
+segments itself:
+
+    segment j of unit u  =  colors[(u + j + step) % k]   at the unit's level
+
+So a strip **always** shows the palette repeating along it, sliding one segment
+per step (`A B C A B C A` → `B C A B C A B`), whatever pattern is running, while
+the single lights do whatever the pattern says.
+
+**Why not leave every segment as its own cell** (which is what v3.54.0 did):
+Walk reads identically either way, but nothing else does. Shuffle dealt a strip's
+seven segments independently, which reads as noise rather than a pattern; Accent
+put its one travelling color on one segment out of forty, so it spent seven steps
+inside a single rope. A strip is one thing in the room, not seven.
+
+- **The unit keeps its LEVEL**, so the pattern still controls a strip's
+  brightness — Alternate rests it whole, Comet holds it at the base level.
+- **Under Walk the two halves agree exactly** rather than merely coexisting: Walk
+  gives unit `u` the color `(u + step)`, so `(u + j + step)` continues the room's
+  own sequence straight through the strip.
+- **A room that is only one strip now animates.** It used to be a single cell
+  taking a single color.
+- `_lightshow_units` groups by DEVICE key rather than assuming segments are
+  contiguous, so a strip whose segments were dragged apart on the map still holds
+  together. `rt["frame_list"]` is the UNIT frame, because Swap mutates the
+  previous arrangement and its arrangement is the one over units.
+
+**Trade-off, stated:** a roles pattern's background is no longer flat across a
+strip — a background strip shows the palette repeating rather than one color.
+That was the explicit instruction ("strips always repeat and shift"), and it is
+the reason Accent looks different on a room with strips than on one without.
+
+**`migrate_lightshow_segments`** clears a stored `segments: False` once, guarded
+by the marker key `lightshow_segments_reset` (declared in `DEFAULT_CONFIG`, listed
+in `_SETTING_INTERNAL`). `segments` has always defaulted to True; an explicit
+False forced every device to one flat color, which is indistinguishable from the
+engine being broken and was reported as such. Guarded on the KEY, not its
+contents, so turning it off again in the panel sticks.
 
 ### The room is a SEQUENCE of cells, not a coordinate field (v3.54.0)
 **This supersedes the geometry section below.** Read it first.

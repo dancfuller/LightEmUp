@@ -385,8 +385,9 @@ All endpoints are under `/api/`. Key groups:
   room's colors on a timer. **Every room is offered all eight patterns** — Walk /
   Alternate / Shuffle / Swap / Palette hop / Accent / Wipe / Comet (v3.54.0). The
   layout no longer gates them; it only sets the ORDER the colors travel in. Colors
-  move along the room's cell sequence, so inside a segmented light they slide
-  segment by segment. Ripple and Sweep were removed. `GET` returns every room's show
+  move along the room's cell sequence. A segmented light is ONE unit for the
+  pattern and always shows the palette repeating along its segments, sliding one
+  per step, whatever pattern is running (v3.55.0). Ripple and Sweep were removed. `GET` returns every room's show
   (with its `geometry` and the patterns it may run) plus the full catalog; `POST` PATCHes
   one room's show (and starts/stops/restarts it); `POST /api/lightshow/step` advances a
   step now; `DELETE /api/lightshow/{room}` removes it. Config key `lightshows`,

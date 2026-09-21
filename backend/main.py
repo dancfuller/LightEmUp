@@ -185,6 +185,8 @@ DEFAULT_CONFIG = {
                                  # OFF, applied the next time it is turned on and
                                  # then cleared (v3.45.0). Dragging a level must
                                  # never be what switches a light on.
+    # One-shot marker for migrate_lightshow_segments (v3.55.0), not a setting.
+    "lightshow_segments_reset": False,
     "lightshows": {},            # room name → the room's ambient lightshow (v3.39.0):
                                  #   { enabled, pattern, interval_s, brightness, segments,
                                  #     source, palettes, colors, exclude, + per-pattern opts }
@@ -438,6 +440,32 @@ def migrate_govee_to_mac(cfg: dict) -> bool:
     return True
 
 
+def migrate_lightshow_segments(cfg: dict) -> bool:
+    """One-time: clear a stored `segments: False` from every lightshow (v3.55.0).
+
+    `segments` is a room-level narrowing — False forces every device in the room
+    to one flat color — and it has always DEFAULTED to True. But a show carrying
+    an explicit False from an earlier experiment made every segmented strip
+    animate as a single block, which is indistinguishable from the engine being
+    broken, and was reported as such. Until v3.54.0 it also genuinely was broken
+    on a floor plan, so a False stored before then says nothing about what anyone
+    wanted.
+
+    Guarded by the KEY's presence, not its contents, so turning it off again in
+    the panel sticks."""
+    if cfg.get("lightshow_segments_reset"):
+        return False
+    cfg["lightshow_segments_reset"] = True
+    cleared = [room for room, show in (cfg.get("lightshows") or {}).items()
+               if isinstance(show, dict) and show.get("segments") is False]
+    for room in cleared:
+        cfg["lightshows"][room].pop("segments", None)
+    if cleared:
+        log.info("Lightshow: cleared a stored 'whole devices only' from %s — "
+                 "segmented strips animate per segment again", ", ".join(cleared))
+    return True
+
+
 def migrate_scene_address(cfg: dict) -> bool:
     """One-time: turn the old ROOM-level "address segmented devices individually /
     as a unit" scene setting into the per-device `govee_scene_address` map.
@@ -472,6 +500,8 @@ config = load_config()
 if migrate_govee_to_mac(config):
     save_config(config)
 if migrate_scene_address(config):
+    save_config(config)
+if migrate_lightshow_segments(config):
     save_config(config)
 
 
@@ -2108,6 +2138,58 @@ def _lightshow_dim(rgb, level: float):
                          max(1, int(round(level * 100))))[0]
 
 
+def _lightshow_units(cells: list[dict]) -> list[list[int]]:
+    """Cell indices grouped by DEVICE, in room order (v3.55.0).
+
+    The room's pattern runs over UNITS — one Hue light, one whole Govee device,
+    or one segmented strip ENTIRE — not over every segment. A strip is one thing
+    in the room, not seven things: Shuffle dealing its segments independently
+    reads as noise rather than a pattern, and Accent spends seven steps inside
+    one rope before it moves on. Grouping by device key (rather than assuming
+    segments are contiguous) also survives a strip whose segments were dragged
+    apart on the map."""
+    units: list[list[int]] = []
+    seen: dict = {}
+    for i, c in enumerate(cells):
+        dev = c["device"]
+        if dev in seen:
+            units[seen[dev]].append(i)
+        else:
+            seen[dev] = len(units)
+            units.append([i])
+    return units
+
+
+def _lightshow_expand(cells: list[dict], units: list[list[int]], unit_frame: list,
+                      colors: list, step: int) -> list:
+    """The per-cell frame, from the per-unit one (v3.55.0).
+
+    A single light takes its unit's color. A SEGMENTED device ignores that color
+    and shows the palette repeating along its segments, sliding one segment per
+    step — `colors[(u + j + step) % k]`. So a strip always reads as a strip
+    (A B C A B C A becoming B C A B C A B) no matter which pattern is running,
+    while the single lights do whatever the pattern says. That is the rule this
+    room was asked for.
+
+    It keeps the unit's LEVEL, so the pattern still controls the strip's
+    brightness — Alternate can rest it, Comet can hold it at the base level.
+
+    Under Walk the two halves agree exactly rather than merely coexisting: Walk
+    gives unit `u` the color `(u + step)`, so `(u + j + step)` continues the
+    room's own sequence straight through the strip."""
+    k = len(colors)
+    out: list = [None] * len(cells)
+    for u, idxs in enumerate(units):
+        r, g, b, level = unit_frame[u]
+        if cells[idxs[0]]["kind"] != "segment":
+            out[idxs[0]] = (r, g, b, level)
+            continue
+        for j, ci in enumerate(idxs):
+            c = colors[(u + j + step) % k]
+            out[ci] = (c[0], c[1], c[2], level)
+    return out
+
+
 async def _lightshow_paint(room_name: str, show: dict, cells: list[dict],
                            frame: list, write: set, seed: bool = False) -> set:
     """Put one frame on the lights. Returns the cell keys that FAILED to send.
@@ -2410,18 +2492,22 @@ async def _lightshow_loop(room_name: str):
             # the first paint of a run only — not to every resync.
             seed = rt.get("frame_map") is None or rt.get("cells") != keys
             geometry = _lightshow_geometry(room_name)
-            frame = lightshow.plan_frame(
+            units = _lightshow_units(cells)
+            unit_frame = lightshow.plan_frame(
                 _lightshow_pattern(show, geometry),
-                [c.get("pos") or (0.0, 0.0) for c in cells],
+                [cells[ix[0]].get("pos") or (0.0, 0.0) for ix in units],
                 colors, step, opts=show, prev=rt.get("frame_list"),
                 geometry=geometry)
+            # `frame_list` stays the UNIT frame: Swap mutates the previous
+            # arrangement, and its arrangement is the one over units.
+            frame = _lightshow_expand(cells, units, unit_frame, colors, step)
             desired = {c["key"]: tuple(frame[i]) for i, c in enumerate(cells)}
             write, changed = _lightshow_write_set(
                 desired, rt.get("frame_map") or {}, rt.get("changed") or set(), full)
             failed = await _lightshow_paint(room_name, show, cells, frame, write, seed)
 
             rt.update({
-                "frame_list": frame,
+                "frame_list": unit_frame,
                 # A cell we could not send is NOT recorded as painted, so the next
                 # frame's diff retries it rather than trusting an intent.
                 "frame_map": {k: v for k, v in desired.items() if k not in failed},
@@ -6694,6 +6780,7 @@ def _export_envelope(include_credentials: bool = True) -> dict:
 # to "it's invisible".
 
 _SETTING_INTERNAL = {
+    "lightshow_segments_reset",  # a one-shot migration marker, not a choice
     "repair_log",         # diagnostic history, not a setting; noise in a restore
     "pending_brightness", # a level waiting for the next power-on; consumed in
                           # minutes and meaningless in a year-old backup
@@ -6959,6 +7046,7 @@ async def import_config(req: ConfigImportRequest):
     # scene-addressing setting (pre-v3.18.0); migrate it like a boot would.
     migrate_govee_to_mac(config)
     migrate_scene_address(config)
+    migrate_lightshow_segments(config)
     save_config(config)          # write through now, not via the coalescing scheduler
     reload_segment_state()       # in-memory store must match the config we just loaded
     publish_event("config")      # every open browser resyncs
