@@ -841,6 +841,12 @@ renders `lookState`. "Start Light Show" posts the plan with `animate_only: true`
 and a 409 re-asks rather than guessing. See `backend/CLAUDE.md` "Apply, or start a light show". `ColorMode` now takes `onLightshowSave` and
 `lastApplied` from `RoomSection`.
 
+When a light show stopped ITSELF because something outside LightEmUp changed the
+room (v3.56.1), the show's `stopped_reason` is shown in amber: here as "The last
+light show stopped by itself: …", and in the Light Show panel's run card with how
+long ago (`relativeTime`, from room-section.js, which loads later but is only called
+at render time). The backend clears it when a show starts.
+
 The line also names the segmented lights that will hold still
 (`lightshow.held`), and says plainly when every light in the room is segmented
 and there is nothing to move.

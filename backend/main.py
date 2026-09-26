@@ -1780,6 +1780,11 @@ LIGHTSHOW_DEFAULTS = {
     # Comet / Sweep. Empty = use the palette as it comes. Reset whenever the
     # palette selection changes, since the indices point into THAT palette.
     "color_order": [],
+    # Why the show stopped ITSELF, and when (v3.56.1): turned off or changed
+    # outside LightEmUp. Written by the loop, cleared when a run starts; the
+    # panels show it so a show that stopped doesn't just look broken.
+    "stopped_reason": None,
+    "stopped_at": None,
 }
 
 _lightshow_tasks: "dict[str, asyncio.Task]" = {}
@@ -2212,7 +2217,8 @@ def _lightshow_expand(cells: list[dict], units: list[list[int]], unit_frame: lis
 
 
 async def _lightshow_paint(room_name: str, show: dict, cells: list[dict],
-                           frame: list, write: set, seed: bool = False) -> set:
+                           frame: list, write: set, seed: bool = False,
+                           hue_sent: Optional[dict] = None) -> set:
     """Put one frame on the lights. Returns the cell keys that FAILED to send.
 
     The caller drops those from its record of what's painted, so the next frame
@@ -2250,6 +2256,13 @@ async def _lightshow_paint(room_name: str, show: dict, cells: list[dict],
                             brightness=max(1, min(254, round(bri * level * 254 / 100)))))
                     if not (res or {}).get("success"):
                         failed.add(c["key"])
+                        if hue_sent is not None:
+                            hue_sent.pop(str(c["light_id"]), None)
+                    elif hue_sent is not None:
+                        # Exactly what went to the bridge, and the light's write
+                        # count right after it — see _lightshow_outside_change.
+                        hue_sent[str(c["light_id"])] = (
+                            (res or {}).get("state") or {}, hue_write_seq(c["light_id"]))
                 except Exception as e:
                     log.warning("Lightshow %r: hue %s failed: %s", room_name, c["light_id"], e)
                     failed.add(c["key"])
@@ -2461,6 +2474,168 @@ async def _lightshow_restore_off(room_name: str, cells: list[dict], painted):
                         room_name, c["key"], e)
 
 
+def _lightshow_light_changed(sent: dict, cur: dict, seen: dict, lid: str) -> Optional[str]:
+    """Why a light no longer shows what the light show last sent it, or None.
+
+    Color is judged against what the bridge REPORTED after our send, not against
+    what we sent: the bridge clamps xy into each bulb's gamut, so a pure green on
+    an older bulb reads back far from the xy we asked for. The first read after a
+    send records that settled value (`seen`) and only later reads are compared
+    with it. The other signals need no baseline and are decisive on their own:
+    on/off flipped, the bulb in color-temperature mode (a light show only ever
+    sends colors, so that is someone choosing a white), or a different level."""
+    want_on = sent.get("on", True)
+    if bool(cur.get("on")) != bool(want_on):
+        return "turned off" if want_on else "turned on"
+    if not want_on:
+        return None
+    # A white is checked before the level: "Incandescent" changes both, and
+    # "set to a white" is the reason a person recognizes.
+    if "xy" in sent and cur.get("color_mode") == "ct":
+        return "set to a white"
+    if "bri" in sent and cur.get("brightness") is not None:
+        if abs(int(cur["brightness"]) - int(sent["bri"])) > HUE_VERIFY_BRI_TOLERANCE:
+            return "brightness changed"
+    if "xy" in sent:
+        mode = cur.get("color_mode")
+        cxy = cur.get("xy")
+        if mode == "xy" and isinstance(cxy, (list, tuple)) and len(cxy) == 2:
+            key = (float(sent["xy"][0]), float(sent["xy"][1]))
+            base = seen.get(lid)
+            if base and base[0] == key:
+                if max(abs(cxy[0] - base[1][0]), abs(cxy[1] - base[1][1])) > HUE_XY_TOLERANCE:
+                    return "color changed"
+            else:
+                seen[lid] = (key, (float(cxy[0]), float(cxy[1])))
+    return None
+
+
+async def _lightshow_outside_change(room_name: str, cells: list[dict], rt: dict,
+                                    skip: Optional[set] = None) -> list:
+    """Hue lights in this show that something OUTSIDE LightEmUp has changed (v3.56.1).
+
+    Reported: the Living Room was running a red/yellow light show when Google Home
+    set it to Incandescent. The show only ever checked for an OFF, so it carried
+    on, and every 15 minutes its full resync repainted every bulb red or yellow
+    again. The rule now is the one asked for: **any light proven changed from
+    outside stops the show.** One bridge GET covers the whole house.
+
+    A light is judged only against the show's OWN last send to it
+    (`rt["hue_sent"]`: the state dict and the light's `hue_write_seq` just after).
+    If LightEmUp has written that light since — the room's brightness slider, a
+    verify repair — the count has moved, so it is skipped rather than blamed:
+    something inside the app is never evidence of something outside it.
+
+    `skip` leaves out the lights this frame just wrote. A read four seconds after a
+    send can't tell a Zigbee drop (which the next step re-asserts) from an outside
+    command, and stopping a show on a dropped packet would be the worse mistake.
+    Unreachable lights and an unreadable bridge prove nothing and return nothing.
+
+    Govee lights can't be read back (see _lightshow_external_off), so a change that
+    touches ONLY Govee lights is still invisible here."""
+    sent_by = rt.get("hue_sent") or {}
+    judged = [c for c in cells if c["kind"] == "hue"
+              and str(c["light_id"]) in sent_by
+              and not (skip and c["key"] in skip)]
+    if not judged:
+        return []
+    lights = await _hue_states_by_id()
+    if not lights:
+        return []
+    seen = rt.setdefault("hue_seen", {})
+    changed = []
+    for c in judged:
+        lid = str(c["light_id"])
+        sent, seq = sent_by[lid]
+        if hue_write_seq(lid) != seq:
+            sent_by.pop(lid, None)        # LightEmUp wrote it since; not ours to judge
+            seen.pop(lid, None)
+            continue
+        cur = lights.get(lid)
+        if not cur or cur.get("reachable") is False:
+            continue
+        why = _lightshow_light_changed(sent, cur, seen, lid)
+        if why:
+            changed.append({"light_id": lid, "name": cur.get("name") or c["label"],
+                            "why": why, "state": cur})
+    return changed
+
+
+async def _lightshow_adopt_outside(room_name: str, cells: list[dict], wrote: set,
+                                   changed: list):
+    """Put the outside command back on the lights this frame just painted over.
+
+    A command that lands while a frame is painting is overwritten on every light
+    the frame reaches afterwards. The lights the frame did NOT touch show what was
+    asked for, so when they all agree — "Incandescent" on the whole room — copy
+    that onto the Hue lights we just wrote. If they disagree we can't know what was
+    meant for the others, and they are left alone rather than guessed at."""
+    ip, username = config.get("hue_bridge_ip"), config.get("hue_username")
+    if not (ip and username) or not wrote:
+        return
+    def look(st):
+        if not st.get("on"):
+            return ("off",)
+        if st.get("color_mode") == "ct" and st.get("color_temp") is not None:
+            return ("ct", int(st["color_temp"]), int(st.get("brightness") or 254))
+        xy = st.get("xy") or []
+        if len(xy) == 2:
+            return ("xy", round(xy[0], 2), round(xy[1], 2), int(st.get("brightness") or 254))
+        return None
+    looks = {look(ch["state"]) for ch in changed}
+    if len(looks) != 1 or None in looks:
+        log.info("Lightshow %r: the outside change differs light to light — "
+                 "leaving the lights this frame painted as they are", room_name)
+        return
+    kind = next(iter(looks))
+    changed_ids = {ch["light_id"] for ch in changed}
+    body = ({"on": False} if kind[0] == "off"
+            else {"on": True, "ct": kind[1], "bri": kind[2]} if kind[0] == "ct"
+            else {"on": True, "xy": list(changed[0]["state"]["xy"]), "bri": kind[3]})
+    for c in cells:
+        if c["kind"] != "hue" or c["key"] not in wrote or str(c["light_id"]) in changed_ids:
+            continue
+        state = hue_supported_state(c["light_id"], dict(body))
+        if not state:
+            continue
+        try:
+            if await set_hue_light_state(ip, username, c["light_id"], state):
+                record_hue_state(c["light_id"], state)
+        except Exception as e:
+            log.warning("Lightshow %r: could not put the outside setting back on %s: %s",
+                        room_name, c["light_id"], e)
+
+
+def _lightshow_note_outside_stop(room_name: str, reason: str):
+    """Say WHY a show stopped itself, and give the room's status back its eyes.
+
+    The reason is stored on the show and served in its status, so the panel can
+    say "stopped: changed outside LightEmUp" instead of the show simply not
+    running. The scene record's `animated` exemption (v3.56.0) is dropped: it
+    told /api/rooms/status to ignore these lights because the show was moving
+    them, and now something else is — the room should read "Changed since"."""
+    show = config.setdefault("lightshows", {}).setdefault(room_name, {})
+    show["stopped_reason"] = reason
+    show["stopped_at"] = _now_iso()
+    entry = (config.get("room_last_applied", {}) or {}).get(room_name)
+    if entry:
+        entry.pop("animated", None)
+    schedule_save()
+
+
+async def _lightshow_stop_for_outside(room_name: str, cells: list[dict], changed: list,
+                                      wrote: Optional[set] = None):
+    names = ", ".join(sorted({ch["name"] for ch in changed})[:4])
+    whys = ", ".join(sorted({ch["why"] for ch in changed}))
+    log.info("Lightshow %r: %s changed outside LightEmUp (%s) — stopping the show "
+             "and leaving the lights as they were set", room_name, names, whys)
+    if wrote:
+        await _lightshow_adopt_outside(room_name, cells, wrote, changed)
+    _lightshow_note_outside_stop(room_name, f"{names} changed outside LightEmUp ({whys})")
+    _lightshow_disable(room_name)
+    publish_event("lightshow", room=room_name, running=False)
+
+
 def _lightshow_disable(room_name: str) -> bool:
     """Flip the persisted `enabled` flag off. Separate from stopping the task so
     the loop can retire itself (nothing left to animate) and have that survive a
@@ -2502,8 +2677,17 @@ async def _lightshow_loop(room_name: str):
                 log.info("Lightshow %r: room was turned off outside LightEmUp "
                          "(voice assistant / vendor app) — stopping the show",
                          room_name)
+                _lightshow_note_outside_stop(room_name, "The room was turned off outside LightEmUp")
                 _lightshow_disable(room_name)
                 publish_event("lightshow", room=room_name, running=False)
+                return
+            # ANY light changed from outside — a white, a level, a color, one
+            # light switched off — stops the show too (v3.56.1). Before this only
+            # a whole-room OFF did, so "set the living room to Incandescent"
+            # was painted back over, a light at a time.
+            outside = await _lightshow_outside_change(room_name, cells, rt)
+            if outside:
+                await _lightshow_stop_for_outside(room_name, cells, outside)
                 return
 
             keys = [c["key"] for c in cells]
@@ -2525,7 +2709,8 @@ async def _lightshow_loop(room_name: str):
             desired = {c["key"]: tuple(frame[i]) for i, c in enumerate(cells)}
             write, changed = _lightshow_write_set(
                 desired, rt.get("frame_map") or {}, rt.get("changed") or set(), full)
-            failed = await _lightshow_paint(room_name, show, cells, frame, write, seed)
+            failed = await _lightshow_paint(room_name, show, cells, frame, write, seed,
+                                            hue_sent=rt.setdefault("hue_sent", {}))
 
             rt.update({
                 "frame_list": unit_frame,
@@ -2577,8 +2762,15 @@ async def _lightshow_loop(room_name: str):
                     # We overrode a command the user actually gave. Stopping is
                     # necessary but not sufficient; the lights we lit are still lit.
                     await _lightshow_restore_off(room_name, cells, rt.get("frame_map"))
+                    _lightshow_note_outside_stop(room_name, "The room was turned off outside LightEmUp")
                     _lightshow_disable(room_name)
                     publish_event("lightshow", room=room_name, running=False)
+                    return
+                # The same for any other outside change landing mid-paint; the
+                # lights this frame painted over it get the outside setting back.
+                outside = await _lightshow_outside_change(room_name, cells, rt, skip=write)
+                if outside:
+                    await _lightshow_stop_for_outside(room_name, cells, outside, wrote=write)
                     return
                 woke = await _lightshow_wait(stop, nudge, max(0.0, interval - watch))
             elif not watch:
@@ -2652,6 +2844,10 @@ async def start_lightshow(room_name: str):
 
 async def _start_lightshow_locked(room_name: str):
     await _stop_lightshow_locked(room_name, persist=False)
+    stored = (config.get("lightshows", {}) or {}).get(room_name) or {}
+    if stored.pop("stopped_reason", None) is not None:
+        stored.pop("stopped_at", None)       # a new run; the old reason no longer applies
+        schedule_save()
     _lightshow_stops[room_name] = asyncio.Event()
     _lightshow_nudges[room_name] = asyncio.Event()
     _lightshow_runtime[room_name] = {}

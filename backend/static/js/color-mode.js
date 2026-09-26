@@ -3208,6 +3208,13 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
                       {reasonText}
                     </div>
                   )}
+                  {/* The last light show stopped ITSELF — something outside
+                      LightEmUp changed the room (v3.56.1). */}
+                  {!running && lightshow?.stopped_reason && (
+                    <div style={{ fontSize: 11, color: "#fbbf24", lineHeight: 1.45 }}>
+                      The last light show stopped by itself: {lightshow.stopped_reason}.
+                    </div>
+                  )}
                 </div>
               );
             })()}

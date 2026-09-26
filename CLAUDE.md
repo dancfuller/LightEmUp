@@ -418,6 +418,9 @@ All endpoints are under `/api/`. Key groups:
   because a moving one flashes a single color on every step. When set to
   `segments`, a segmented light is ONE unit for the pattern and shows the palette
   repeating along its segments, sliding one per step (v3.55.0).
+  **A light show stops itself when any Hue light in it is changed outside
+  LightEmUp (v3.56.1)**, e.g. Google Home setting a white, and says why
+  (`stopped_reason`). See `backend/CLAUDE.md` "Something else CHANGED the room".
   `GET /api/lightshow/previews` is each pattern's little animated preview, computed
   by the real pattern math and fetched once per page. Ripple and Sweep were removed. `GET` returns every room's show
   (with its `geometry` and the patterns it may run) plus the full catalog; `POST` PATCHes

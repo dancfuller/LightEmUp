@@ -296,6 +296,16 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
               {" · "}every {humanInterval(s.effective_interval_s)}
               {s.running && <> · <LightshowCountdown nextAt={s.next_at} running={s.running} /></>}
             </div>
+            {/* The show stopped ITSELF because something outside LightEmUp
+                changed the room (v3.56.1). Said, so it doesn't just look broken.
+                relativeTime lives in room-section.js, which loads later — it's
+                only called at render, by which point every file has loaded. */}
+            {!s.running && s.stopped_reason && (
+              <div style={{ fontSize: 11, color: "#fbbf24", marginTop: 4, lineHeight: 1.45 }}>
+                Stopped by itself: {s.stopped_reason}
+                {s.stopped_at && typeof relativeTime === "function" && <> · {relativeTime(s.stopped_at)}</>}
+              </div>
+            )}
           </div>
           {s.running && (
             <button onClick={onStep} style={chip(false, "#94a3b8")}>Next step ▸</button>

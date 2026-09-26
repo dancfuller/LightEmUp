@@ -1855,6 +1855,48 @@ keeping written down:
 - **`enabled` is the RUNNING flag and it is persisted on purpose**, so a show survives a
   restart. `_resume_lightshows` restarts them **behind `_recovery_done`**, like everything
   else that drives lights at startup.
+### Something else CHANGED the room — any light, any way (v3.56.1)
+Reported: a red/yellow light show was running in the Living Room when Google Home
+set the room to Incandescent. The show carried on, and within 15 minutes every bulb
+was red or yellow again: the off check below was the ONLY outside-change check, and
+the 900s full resync (`LIGHTSHOW_RESYNC_S`) repaints every light even under Swap.
+**The rule now: any light proven changed from outside stops the show.**
+
+- `_lightshow_outside_change` reads the bridge once per check and judges each Hue
+  light against the show's OWN last send, `rt["hue_sent"][id] = (state,
+  hue_write_seq)`, which `_lightshow_paint` fills from what `control_hue_light`
+  returned. It runs at the top of every frame and again at the post-paint check.
+- **`hue_write_seq` keeps LightEmUp from blaming itself.** If the count has moved
+  since the show's send, something inside the app wrote that light (the room's
+  brightness slider, a verify repair), so it is dropped from judging rather than
+  counted. Without this the room slider would stop every show.
+- **Color is compared with what the bridge SETTLED on, not what we sent.** The
+  bridge clamps xy into each bulb's gamut (a pure green on an older bulb reads back
+  ~0.2 away), which is why this file used to say "comparing color re-repairs
+  forever". The first read after a send records the settled xy in `rt["hue_seen"]`;
+  only later reads are compared with it (`HUE_XY_TOLERANCE`). The other signals need
+  no baseline: on/off flipped, the bulb in `ct` mode (a light show only sends
+  colors, so that is someone choosing a white — checked first, because it is the
+  reason people recognize), or the level off by more than `HUE_VERIFY_BRI_TOLERANCE`.
+- **The post-paint check skips the lights this frame just wrote.** Four seconds
+  after a send it can't tell a Zigbee drop (which the next step re-asserts) from
+  an outside command, and stopping a show on a dropped packet is the worse mistake.
+- **Mid-paint:** `_lightshow_adopt_outside` copies the outside setting onto the Hue
+  lights the frame painted over — but only when every changed light agrees
+  (Incandescent on the whole room). If they disagree it leaves them alone rather
+  than guess.
+- **On stopping** it leaves the lights as they were set, disables the show,
+  stores `stopped_reason` / `stopped_at` on it (both panels show them; cleared
+  when a run starts), and drops the scene record's `animated` exemption so the
+  room header reads "Changed since" again. The off paths below store a reason too.
+- **Known gap, unchanged:** Govee lights can't be read back, so a change that
+  touches ONLY Govee lights is still invisible to a running show.
+
+Covered by a throwaway loop test (20 assertions, 4 clean runs) that drives the
+real `_lightshow_loop` against a fake bridge. It covers Incandescent between frames,
+one bulb changed, the room slider's own write NOT stopping it, gamut clamping NOT
+stopping it, and a command landing mid-paint.
+
 ### Something else turned the room off (v3.40.2)
 "Turn off the living room lights" to a Google Home turned them off — and a few
 seconds later the show turned them back on. Google talks to the bridge directly, so
