@@ -1576,26 +1576,23 @@ async def _stop_lightshow_for_apply(room_name: str, reason: str) -> bool:
 
 async def _animate_current(room_name: str, pattern: Optional[str] = None,
                            reset_order: bool = True,
-                           brightness: Optional[int] = None,
-                           segments: bool = False) -> str:
+                           brightness: Optional[int] = None) -> str:
     """Start `room_name`'s lightshow on the colors it is showing right now.
 
     Deliberately the SAME mechanism as the panel's "What's on now" source rather
     than a second path: the caller has just written `room_last_applied`, so a show
-    with source="current" resolves to the look that landed a moment ago."""
+    with source="current" resolves to the look that landed a moment ago.
+
+    What segmented lights do is the show's own `segmented` setting and is NOT
+    overridden here (v3.56.0): it defaults to holding still, and the Scenes panel
+    says which lights will hold before you press anything. v3.54.0 forced
+    per-segment animation from this path, which is what made them flash."""
     show = config.setdefault("lightshows", {}).setdefault(room_name, {})
     geo = _lightshow_geometry(room_name)
     want = pattern if pattern and pattern != "auto" else show.get("pattern")
     chosen = (want if want and lightshow.pattern_ok(want, geo)
               else lightshow.fallback_pattern(geo))
     show.update({"enabled": True, "source": "current", "pattern": chosen})
-    if brightness is not None or segments:
-        # "Animate this look" means addressing each device the way the SCENE
-        # addressed it (v3.54.0) — `segments: True` is exactly that, "use each
-        # device's own gv_scene_address". Inheriting a stored False turned every
-        # segmented light into one flat color, which is the third setting Animate
-        # was silently carrying over from a show nobody remembered configuring.
-        show["segments"] = True
     if brightness is not None:
         # "Animate this look" means its BRIGHTNESS too (v3.53.2). The show repaints
         # at its own stored level every step, so inheriting one set long ago — a
@@ -1745,7 +1742,18 @@ LIGHTSHOW_DEFAULTS = {
     # way this room already addresses them" (gv_scene_address per device), False
     # forces every device in the room to one color. A per-device switch here
     # could only disagree with the Scenes panel's.
+    # SUPERSEDED by `segmented` (v3.56.0); kept so an old config or client still
+    # validates. Nothing reads it.
     "segments": True,
+    # What a light the Scenes panel paints PER SEGMENT does during a show:
+    #   hold     — nothing; it keeps the scene (the default, v3.56.0)
+    #   segments — the palette slides along its segments
+    #   whole    — it animates as one color, like a bulb
+    # Hold is the default because a moving segmented light FLASHES. Its segments
+    # can only be changed one color per rate-limited cloud call (~2s apart), and
+    # the half-done state between two calls is the whole light in one color —
+    # in a two-color look, a solid red or blue flash on every single step.
+    "segmented": "hold",
     # current | palettes | favorites | custom. "current" is the default because
     # of what starting a show actually means (v3.52.0): a scene was set, maybe
     # hours ago, and the room should now MOVE. Asking for a palette first made
@@ -1851,16 +1859,22 @@ def _lightshow_order(cells: list[dict], geometry: str) -> list[dict]:
     return [c for _, c in sorted(enumerate(cells), key=sort_key)]
 
 
-def _lightshow_cells(room_name: str, show: dict) -> list[dict]:
+def _lightshow_cells(room_name: str, show: dict,
+                     held: Optional[list] = None) -> list[dict]:
     """The addressable units of a room's show, in the order they physically run.
 
     A cell is one Hue light, one whole Govee device, or ONE SEGMENT of one, and
     each carries its `pos` from the room layout — the patterns need positions,
     not just indices, or a Walk on a floor plan is only a rotation of an
     arbitrary reading order. Excluded devices drop out entirely (and take their
-    segments with them), which is the point of excluding them."""
+    segments with them), which is the point of excluding them.
+
+    A light the Scenes panel paints per segment is left out too unless the show
+    says otherwise (`segmented`, v3.56.0) — it HOLDS the scene. Pass a list as
+    `held` to be told which ones those were, as `{key, label}`."""
     room = config.get("rooms", {}).get(room_name) or {}
     exclude = set(show.get("exclude") or [])
+    segmented = show.get("segmented") or "hold"
     geometry = _lightshow_geometry(room_name)
     dev_pos, seg_pos = _lightshow_positions(room_name)
 
@@ -1892,9 +1906,13 @@ def _lightshow_cells(room_name: str, show: dict) -> list[dict]:
         label = _device_label(key, (info or {}).get("name") or slug)
         count = gv_segment_count(slug, sku)
         protocol = (GOVEE_SEGMENT_INFO.get(sku) or {}).get("protocol")
-        per_segment = (bool(show.get("segments", True))
-                       and gv_scene_address(slug, sku) == "segments"
-                       and count > 1 and bool(protocol))
+        scene_segmented = (gv_scene_address(slug, sku) == "segments"
+                           and count > 1 and bool(protocol))
+        if scene_segmented and segmented == "hold":
+            if held is not None:
+                held.append({"key": key, "label": label})
+            continue
+        per_segment = scene_segmented and segmented == "segments"
         if per_segment:
             for idx in range(count):
                 cells.append({"kind": "segment", "key": f"{key}#{idx}", "device": key,
@@ -2070,11 +2088,14 @@ def _room_current_colors(room_name: str) -> tuple:
     # without bound (v3.53.2). Peel those wrappers off and keep the look the colors
     # actually came from. (`re` is not imported at module level here.)
     label = entry.get("label") or "What's on now"
-    while label.startswith("Lightshow · "):
-        rest = label[len("Lightshow · "):]
+    # "Light Show · " since v3.56.0; records written before that say "Lightshow · ".
+    prefix = next((p for p in ("Light Show · ", "Lightshow · ") if label.startswith(p)), None)
+    while prefix:
+        rest = label[len(prefix):]
         if " · " not in rest:
-            break                    # "Lightshow · Walk" — no look name to recover
+            break                    # "Light Show · Walk" — no look name to recover
         label = rest.split(" · ", 1)[1]
+        prefix = next((p for p in ("Light Show · ", "Lightshow · ") if label.startswith(p)), None)
     if len(cols) == 1:
         return [tuple(c) for c in _tonal_shades(*cols[0], LIGHTSHOW_SHADES_FROM_ONE)], label
     return cols, label
@@ -2648,9 +2669,25 @@ async def _start_lightshow_locked(room_name: str):
     # strip that says the same thing. No `expect`: the room genuinely is moving,
     # so /api/rooms/status should answer "unknown" rather than cry divergence.
     partial = _lightshow_is_partial(room_name, cells)
+    prior = (config.get("room_last_applied", {}) or {}).get(room_name)
+    # Animating what's on keeps the look's fingerprint (v3.56.0): the room is still
+    # showing that look, only moving, so the Scenes panel can offer "Start
+    # animation" again later without re-applying anything.
+    carried = None
+    if prior and show.get("source") == "current":
+        carried = prior.get("look_fp") or _look_fingerprint(prior.get("payload"))
     if not partial:
-        record_room_applied(room_name, "lightshow", f"Lightshow · {pattern} · {label}",
-                            swatches=[list(c) for c in colors])
+        record_room_applied(room_name, "lightshow", f"Light Show · {pattern} · {label}",
+                            swatches=[list(c) for c in colors], look_fp=carried)
+    elif prior is not None:
+        # The scene record stays, but the lights this show moves no longer match
+        # it — and that is us, not a Google Home routine. Mark them, so
+        # /api/rooms/status doesn't call our own animation "changed since". Cleared
+        # the moment anything records a new look (record_room_applied rebuilds the
+        # entry from scratch).
+        prior["animated"] = sorted(set(prior.get("animated") or [])
+                                   | {c["device"] for c in cells})
+        schedule_save()
     log.info("Lightshow %r started: %s over %d cells (%s layout)%s, %s", room_name,
              pattern, len(cells), geometry,
              " [partial — room record left alone]" if partial else "", label)
@@ -5848,6 +5885,11 @@ class SceneApplyRequest(BaseModel):
     # only once the apply COMPLETES, on source="current" — so it animates the very
     # scene that just landed, and a canceled apply animates nothing.
     animate: Optional[str] = None
+    # "Start animation" (v3.56.0): the room is already showing this look, so
+    # apply NOTHING and only start the show. The backend re-checks rather than
+    # trusting the button — if the room changed in the meantime this is refused
+    # (409) and the panel falls back to offering "Apply & animate".
+    animate_only: bool = False
 
 
 class SceneCancelRequest(BaseModel):
@@ -6110,8 +6152,7 @@ async def _run_scene_apply(req: SceneApplyRequest, resume_current: bool = False)
             # back over the animation.
             await _animate_current(
                 room, req.animate, reset_order=not resume_current,
-                brightness=None if resume_current else req.brightness,
-                segments=not resume_current)
+                brightness=None if resume_current else req.brightness)
     except asyncio.CancelledError:
         _scene_emit(scope, room, phase="canceled", active=False, label="")
         raise
@@ -6147,6 +6188,16 @@ async def scene_room_apply(req: SceneApplyRequest):
     task, so painting a hexa no longer cancels its ROOM's in-flight scene — one
     task per room would make the two fight over devices that don't overlap."""
     scope = req.scope or req.room
+    if req.animate_only:
+        if req.scope:
+            raise HTTPException(400, "A one-light scene can't start a room's light show")
+        state = await _scene_look_state(req)
+        if not state["showing"]:
+            raise HTTPException(409, {"message": "The room isn't showing this look, so the light show can't start without applying it", **state})
+        chosen = await _animate_current(req.room, req.animate or "auto",
+                                        brightness=req.brightness)
+        return {"started": True, "room": req.room, "scope": scope,
+                "animate_only": True, "pattern": chosen}
     # A WHOLE-room apply retires the room's lightshow and storm; a device-scoped
     # one does not, because painting one hexa isn't a statement about the room.
     resume = False
@@ -6343,6 +6394,41 @@ def _scene_swatches(req: "SceneApplyRequest") -> list:
     return _dedupe_swatches(colors)
 
 
+# Fields of a scene plan that say nothing about what the lights SHOW: names,
+# who asked, what to do afterwards, and the DHCP address (identity is the mac).
+_LOOK_IGNORED_KEYS = {"label", "source", "source_detail", "animate", "animate_only",
+                      "scope", "room", "ip"}
+
+
+def _look_canonical(v):
+    if isinstance(v, dict):
+        return {k: _look_canonical(x) for k, x in v.items()
+                if k not in _LOOK_IGNORED_KEYS and x is not None}
+    if isinstance(v, list):
+        items = [_look_canonical(x) for x in v]
+        # Lists of TARGETS are sets; a list of numbers (a razer color, segment
+        # indices) is data whose order is the look.
+        if items and all(isinstance(x, dict) for x in items):
+            items.sort(key=lambda x: json.dumps(x, sort_keys=True))
+        return items
+    return v
+
+
+def _look_fingerprint(payload: Optional[dict]) -> Optional[str]:
+    """One string that is equal for two scene plans exactly when they put the same
+    colors and brightness on the same lights (v3.56.0).
+
+    It is how the backend answers "is this room already showing the look in the
+    Scenes panel's preview?" — the question that decides whether an animation can
+    simply START, or has to apply the look first. The preview is deterministic
+    (seeded), so the same settings produce the same plan and the same print."""
+    if not payload:
+        return None
+    import hashlib
+    blob = json.dumps(_look_canonical(payload), sort_keys=True, separators=(",", ":"))
+    return hashlib.sha1(blob.encode()).hexdigest()
+
+
 def record_room_applied(room: str, kind: str, label: str,
                         swatches: Optional[list] = None,
                         kelvin: Optional[int] = None,
@@ -6350,7 +6436,8 @@ def record_room_applied(room: str, kind: str, label: str,
                         source_detail: Optional[str] = None,
                         expect: Optional[dict] = None,
                         payload: Optional[dict] = None,
-                        on: Optional[bool] = None):
+                        on: Optional[bool] = None,
+                        look_fp: Optional[str] = None):
     """Record what `room` was just set to. Best-effort display metadata — it must
     never break a light command, so callers don't need to guard it.
 
@@ -6379,6 +6466,11 @@ def record_room_applied(room: str, kind: str, label: str,
             entry["expect_hue"] = {str(k): v for k, v in expect.items()}
         if payload:
             entry["payload"] = payload
+            entry["look_fp"] = _look_fingerprint(payload)
+        if look_fp:
+            # A show animating this look carries the look's print forward, so
+            # "is the room showing it?" still answers yes while it moves.
+            entry["look_fp"] = look_fp
         if on is not None:
             entry["on"] = bool(on)    # a power record's state, for "Set here" (v3.51.5)
         config.setdefault("room_last_applied", {})[room] = entry
@@ -6470,7 +6562,13 @@ async def _room_status(room_name: str, lights_by_id: dict) -> dict:
 
     matched = changed = unknown = 0
     changed_names = []
+    # Lights a lightshow has moved since this look was set (v3.56.0). They differ
+    # from the record because WE changed them, so they are not evidence of
+    # anything else touching the room.
+    animated = set(entry.get("animated") or [])
     for light_id, sent in expect.items():
+        if f"hue:{light_id}" in animated:
+            continue
         verdict = _hue_state_matches(sent, lights_by_id.get(str(light_id)))
         if verdict is True:
             matched += 1
@@ -6518,6 +6616,15 @@ async def rooms_status():
     Govee POWER is different — `onOff` is reported reliably — but it's judged from
     what the power verify already proved (`govee_failed` on the room record), not
     by asking again now. See `_govee_verify_repair`."""
+    lights_by_id = await _hue_states_by_id()
+    out = {}
+    for room_name in config.get("rooms", {}):
+        out[room_name] = await _room_status(room_name, lights_by_id)
+    return {"rooms": out}
+
+
+async def _hue_states_by_id() -> dict:
+    """{light id: state + name} from ONE bridge read; empty if it can't be read."""
     ip = config.get("hue_bridge_ip")
     username = config.get("hue_username")
     lights_by_id = {}
@@ -6527,10 +6634,52 @@ async def rooms_status():
                 lights_by_id[str(l["id"])] = {**(l.get("state") or {}), "name": l.get("name")}
         except Exception:
             log.warning("Room status: could not read the bridge", exc_info=True)
-    out = {}
-    for room_name in config.get("rooms", {}):
-        out[room_name] = await _room_status(room_name, lights_by_id)
-    return {"rooms": out}
+    return lights_by_id
+
+
+async def _scene_look_state(req: SceneApplyRequest) -> dict:
+    """Is `req.room` showing exactly the look `req` describes, right now? (v3.56.0)
+
+    This decides what the Scenes panel's animation button does. If the room is
+    showing it, an animation can simply START on it; if not, the look has to be
+    applied first — and on a room with segmented lights that apply is a 30-second,
+    visibly rate-limited repaint, which is exactly what nobody wants to sit through
+    just to make a look they already have move.
+
+    "Showing" means all three:
+      - the room's record is this look — a scene, or a show animating one
+        (`look_fp` carried forward) — and not a white, a power change or a storm;
+      - it is the SAME look: same colors and brightness on the same lights, which
+        the fingerprint compares, so a Shuffle since then is a different look;
+      - nothing has provably changed it since (`_room_status` not diverged).
+    The last can only ever be "not proven otherwise": Govee color can't be read
+    back, so a Govee-only room reads as showing on LightEmUp's own record. That is
+    the same limit "Now showing" has always had, and `verified` says which case
+    this is."""
+    entry = (config.get("room_last_applied", {}) or {}).get(req.room) or {}
+    base = {"showing": False, "current_label": entry.get("label"),
+            "current_kind": entry.get("kind")}
+    have = entry.get("look_fp") or _look_fingerprint(entry.get("payload"))
+    if entry.get("kind") not in ("scene", "lightshow") or not have:
+        return {**base, "reason": "other_look" if entry else "nothing_recorded"}
+    if have != _look_fingerprint(req.model_dump(exclude_none=True)):
+        return {**base, "reason": "different"}
+    status = await _room_status(req.room, await _hue_states_by_id())
+    if status.get("state") == "diverged":
+        return {**base, "reason": status.get("reason") or "changed_since",
+                "changed_names": status.get("changed_names") or []}
+    return {**base, "showing": True, "reason": "showing",
+            "verified": status.get("state") == "match"}
+
+
+@app.post("/api/scenes/room-apply/check")
+async def scene_room_apply_check(req: SceneApplyRequest):
+    """Would applying this plan change anything? The Scenes panel asks whenever
+    its preview changes, and offers "Start animation" (no apply) only when the
+    answer is no. See `_scene_look_state`."""
+    if req.room not in config.get("rooms", {}):
+        raise HTTPException(404, f"Room '{req.room}' not found")
+    return await _scene_look_state(req)
 
 
 class RoomReapplyRequest(BaseModel):
@@ -7633,6 +7782,7 @@ class LightshowRequest(BaseModel):
     interval_s: Optional[int] = None
     brightness: Optional[int] = None
     segments: Optional[bool] = None
+    segmented: Optional[str] = None
     source: Optional[str] = None
     palettes: Optional[list] = None
     colors: Optional[list] = None
@@ -7655,13 +7805,18 @@ def _lightshow_status(room_name: str) -> dict:
     show = _lightshow_cfg(room_name)
     rt = _lightshow_runtime.get(room_name) or {}
     geometry = _lightshow_geometry(room_name)
-    cells = _lightshow_cells(room_name, show)
+    held: list = []
+    cells = _lightshow_cells(room_name, show, held)
     colors, label = _lightshow_pool(room_name, show, dict(rt))
     cost = _lightshow_step_cost(cells, len(colors) or 1)
     return {
         **show,
         "room": room_name,
         "running": lightshow_running(room_name),
+        # Segmented lights sitting this show out, keeping the scene (v3.56.0).
+        # Named so both panels can say WHICH lights hold still rather than
+        # leaving a light that never moves to read as broken.
+        "held": held,
         # The room's SHAPE, and therefore which patterns it's offered. A line has
         # ends and a direction; a floor plan has a middle and two axes; a room
         # with no layout has neither, so it only gets the position-blind ones.
@@ -7704,6 +7859,28 @@ async def get_lightshows():
     }
 
 
+_LIGHTSHOW_PREVIEWS: Optional[dict] = None
+
+
+@app.get("/api/lightshow/previews")
+async def get_lightshow_previews():
+    """Each pattern's little animated preview: `{key: {"2"|"3"|"4": frames}}`,
+    where a frame is `[color_index, level]` per cell (v3.56.0).
+
+    Its own endpoint, fetched once per page load, because GET /api/lightshow is
+    re-read on every frame of every running show and this never changes. Built
+    from `lightshow.plan_frame` itself, so it cannot drift from the real thing.
+    Keyed by palette size so the browser can draw it in the look's own colors."""
+    global _LIGHTSHOW_PREVIEWS
+    if _LIGHTSHOW_PREVIEWS is None:
+        _LIGHTSHOW_PREVIEWS = {
+            p["key"]: {str(k): lightshow.preview_frames(p["key"], k)
+                       for k in lightshow.PREVIEW_PALETTE_SIZES}
+            for p in lightshow.PATTERNS
+        }
+    return {"cells": lightshow.PREVIEW_CELLS, "previews": _LIGHTSHOW_PREVIEWS}
+
+
 @app.post("/api/lightshow")
 async def upsert_lightshow(req: LightshowRequest):
     if req.room not in config.get("rooms", {}):
@@ -7720,6 +7897,8 @@ async def upsert_lightshow(req: LightshowRequest):
         raise HTTPException(400, f"Unknown color source '{req.source}'")
     if req.axis is not None and req.axis not in ("x", "y", "diag"):
         raise HTTPException(400, f"Unknown axis '{req.axis}'")
+    if req.segmented is not None and req.segmented not in ("hold", "segments", "whole"):
+        raise HTTPException(400, f"Unknown segmented mode '{req.segmented}'")
 
     shows = config.setdefault("lightshows", {})
     show = shows.setdefault(req.room, {})

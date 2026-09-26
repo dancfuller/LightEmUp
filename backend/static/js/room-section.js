@@ -388,7 +388,7 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
     { key: "controls", label: "Controls", accent: "#a5b4fc" },
   ];
   if (canLightshow) {
-    views.push({ key: "lightshow", label: showRunning ? "✨ Show ●" : "✨ Lightshow",
+    views.push({ key: "lightshow", label: showRunning ? "✨ Light Show ●" : "✨ Light Show",
                  accent: "#a78bfa" });
   }
   if (canMap) views.push({ key: "map", label: "🗺 Room Map", accent: "#22d3ee" });
@@ -587,6 +587,10 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
         savedColorState={savedColorState}
         lightshow={lightshow}
         lightshowPatterns={lightshowPatterns}
+        // Stop / switch pattern from the Scenes panel, and the room record the
+        // panel re-checks "is this look already on?" against (v3.56.0).
+        onLightshowSave={onLightshowSave ? (patch) => onLightshowSave(name, patch) : null}
+        lastApplied={lastApplied}
         onScheduleLook={onScheduleLook ? (plan) => onScheduleLook(name, plan) : null}
         onApply={(applied, colorStateSnapshot) => {
           setColorModeApplied(applied);
@@ -705,7 +709,7 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
           {/* A running show is a state of the ROOM, so it has to be visible from
               the room header — not only once you've opened the panel. */}
           {canLightshow && openerBtn("lightshow",
-            showRunning ? "✨ Show running" : "✨ Lightshow",
+            showRunning ? "✨ Light Show running" : "✨ Light Show",
             showRunning ? "#a78bfa" : "#94a3b8")}
           {canMap && openerBtn("map", "🗺 Room Map", "#22d3ee")}
           {anySegmented && openerBtn("debug", "Debug", "#64748b", true)}

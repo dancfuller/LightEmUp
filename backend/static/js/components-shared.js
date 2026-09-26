@@ -1,5 +1,53 @@
 // ─── Shared Color Picker & Controls ────────────────────────────────────────
 
+// ─── PatternPreview — a lightshow pattern, drawn small (v3.56.0) ──────────
+// A row of dots that plays a pattern next to its description, so choosing one
+// doesn't mean starting a show and waiting a minute to see what it does. The
+// frames come from the Pi (GET /api/lightshow/previews), computed by the SAME
+// plan_frame the room runs — never re-implement the pattern math here. They are
+// color INDICES, so it draws in whatever colors it's handed: the look's own in
+// the Scenes panel, the show's in the Lightshow panel. `preview` is
+// `{"2"|"3"|"4": frames}` and a frame is `[colorIndex, level]` per dot.
+const PATTERN_PREVIEW_FALLBACK = [[167, 139, 250], [56, 189, 248], [251, 191, 36], [244, 114, 182]];
+
+function PatternPreview({ preview, colors, width = 112, stepMs = 750 }) {
+  const given = (colors || []).map(c => Array.isArray(c) ? c : [c.r, c.g, c.b])
+    .filter(c => c.every(v => typeof v === "number"));
+  const pal = (given.length >= 2 ? given : PATTERN_PREVIEW_FALLBACK).slice(0, 4);
+  const frames = preview ? preview[String(Math.max(2, Math.min(4, pal.length)))] : null;
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    if (!frames || frames.length < 2) return;
+    // Someone who has asked for less motion gets the first frame, still.
+    try {
+      if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    } catch (e) { /* no matchMedia — animate */ }
+    const id = setInterval(() => setTick(t => t + 1), stepMs);
+    return () => clearInterval(id);
+  }, [frames, stepMs]);
+  if (!frames || !frames.length) return null;
+  const frame = frames[tick % frames.length];
+  const gap = width / frame.length;
+  const r = Math.min(gap * 0.36, 7);
+  const h = Math.round(r * 2 + 4);
+  return (
+    <svg width={width} height={h} viewBox={`0 0 ${width} ${h}`} aria-hidden="true"
+      style={{ display: "block", flexShrink: 0 }}>
+      {frame.map(([ci, lvl], j) => {
+        const c = pal[ci % pal.length];
+        const lit = lvl > 0;
+        return (
+          <circle key={j} cx={gap * (j + 0.5)} cy={h / 2} r={r}
+            fill={lit ? `rgb(${c[0]},${c[1]},${c[2]})` : "#0f172a"}
+            fillOpacity={lit ? 0.2 + 0.8 * lvl : 1}
+            stroke={lit ? "rgba(255,255,255,0.22)" : "#334155"} strokeWidth={1}
+            style={{ transition: "fill 0.4s ease, fill-opacity 0.4s ease" }} />
+        );
+      })}
+    </svg>
+  );
+}
+
 // Scene fill: how a room scene paints a device that scenes address by segment.
 // Shared by the LightCard control and the scenes panel's mirror of it (v3.36.0)
 // so the two can never drift into describing the same setting differently.

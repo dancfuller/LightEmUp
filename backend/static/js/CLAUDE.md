@@ -817,6 +817,48 @@ The layout line in the run/stop card stays, but it is CONTEXT now, not a gate: i
 says which order the colors travel in, not which patterns the room may use. Every
 room is offered all eight. See `backend/CLAUDE.md` for why.
 
+## The Scenes panel's light show line: three actions, one button (v3.56.0)
+Reported: on mobile the button read "Animate" beside "Apply", so it was unclear
+whether it applied anything; a running show had no Stop there; and starting a light
+show on a look the room already had re-applied it first, a jarring 30 seconds on
+segmented lights. **All UI copy says "light show" / "light show mode"** — see the
+vocabulary rule in the root `CLAUDE.md`. The line reads top to bottom as: a
+**"Choose Light Show Mode"** label over the mode `<select>` (with its preview dots
+beside it), the mode's description, which lights hold still, then exactly one of:
+- **Apply & Start Light Show** — colors + brightness, then the light show. Never
+  shortened.
+- **Start Light Show** (filled) — the light show only. Shown when the backend says
+  the room is already showing this exact look.
+- **Stop Light Show** — one is running; the label reads "✨ Light Show running ·
+  change its mode" and the select switches the RUNNING show's mode
+  (`pickPattern` → `onLightshowSave({pattern})`).
+
+A caption under it says which case it is and why (e.g. "The room isn't showing
+this exact look (it was changed or shuffled since)…"). **The browser doesn't decide
+this.** It POSTs the plan to `/scenes/room-apply/check` (debounced 400ms, keyed on
+the plan JSON, the room's `lastApplied`, the show's `running` and applying) and
+renders `lookState`. "Start Light Show" posts the plan with `animate_only: true`,
+and a 409 re-asks rather than guessing. See `backend/CLAUDE.md` "Apply, or start a light show". `ColorMode` now takes `onLightshowSave` and
+`lastApplied` from `RoomSection`.
+
+The line also names the segmented lights that will hold still
+(`lightshow.held`), and says plainly when every light in the room is segmented
+and there is nothing to move.
+
+**`PatternPreview`** (components-shared.js) sits beside the blurb here and on every
+Lightshow pattern card: a row of 7 dots playing the pattern, drawn from frames the
+Pi computed with the real `plan_frame` (`GET /api/lightshow/previews`, fetched
+once in app.js and merged into the pattern objects as `preview`). Frames are color
+indices, so it draws in the look's own colors here and the show's pool in the
+Lightshow panel, with a fallback set when there are none. It holds the first frame
+still under `prefers-reduced-motion`. **Don't add pattern math in JS to draw it.**
+
+`lightshow.js` replaced the "Animate segments" checkbox with **Segmented lights:
+Hold still / Join in, segment by segment / One color each** (`LIGHTSHOW_SEGMENTED`, the
+backend's `segmented`), each with a line saying what it costs. Held lights show in
+"Which lights move" as a dashed "holds still" row that the exclude list doesn't
+toggle, and they don't count as moving.
+
 ## Animating the look a room already has (v3.52.0)
 The panel used to open asking which palette to run, and that was the wrong
 question. Starting a show almost always means "the scene I set earlier should
@@ -830,8 +872,9 @@ Two entry points, one mechanism:
   (`_room_current_colors`), not from anything the browser re-derives, and arrive
   in the status as `palette_colors` like any other source. `ready` is false when
   the room has nothing animatable on, and the panel says which case it is.
-- **`color-mode.js`: "Apply & animate"** (just "Animate" on mobile), a secondary
-  button beside Apply in the lightshow's purple. It posts the SAME plan with
+- **`color-mode.js`: "Apply & animate"**, a secondary
+  button beside Apply in the lightshow's purple (see v3.56.0 below — it is now one
+  of three actions, and never shortens on a phone). It posts the SAME plan with
   `animate: "auto"` — it does not start a show itself. The backend starts one on
   `source: "current"` once the apply completes, so the show animates the scene
   that just landed and a canceled apply animates nothing.

@@ -19,6 +19,14 @@ The domain has exactly these: **lights**, **segments**, **rooms**, **zones**,
 rope is a *light* that has *segments*. Say "a segmented light", not a strip, a
 bar, a run, a panel set or a chain.
 
+**"Light show" and "light show mode" (v3.56.0).** A room's timed re-arrangement of
+its colors is a **light show** (two words), and Walk / Swap / Accent… are its
+**light show modes**. In UI copy never say "animate", "animation" or "lightshow",
+and don't call a mode a "pattern". Buttons and labels are title case: "Start Light
+Show", "Stop Light Show", "Apply & Start Light Show", "Choose Light Show Mode", the
+"✨ Light Show" panel. Code identifiers (`lightshow`, `/api/lightshow`, `pattern`,
+`animate_only`) keep their names; this rule is about what a person reads.
+
 **"Strip" is already taken** and means a horizontal UI band — the Favorites strip,
 the "Now showing" strip, `PaletteStrip`. Using it for a device overloads a word
 the codebase already spends, which is worse than a merely unfamiliar term.
@@ -394,15 +402,24 @@ All endpoints are under `/api/`. Key groups:
   light isn't the room). Absent = a whole-room apply, which is every other caller.
   **Optional `animate` (v3.52.0)** — a pattern key or `"auto"` — starts the room's
   lightshow on the look this apply just landed, once it COMPLETES. It's the Scenes
-  panel's "Apply & animate", and it runs through the same `source: "current"` the
-  Lightshow panel offers rather than passing colors along a second path
+  panel's "Apply & Start Light Show", and it runs through the same `source: "current"` the
+  Lightshow panel offers rather than passing colors along a second path.
+  **`animate_only: true` (v3.56.0)** applies NOTHING and just starts the show — the
+  Scenes panel's "Start Light Show". The backend re-checks that the room is showing
+  this exact look and answers 409 if not. `POST /api/scenes/room-apply/check` asks
+  that question without acting (the panel calls it whenever its preview changes).
+  See `backend/CLAUDE.md` "Apply, or start a light show"
 - `/api/lightshow` — room lightshows (v3.39.0): a slow, ambient re-arrangement of a
   room's colors on a timer. **Every room is offered all eight patterns** — Walk /
   Alternate / Shuffle / Swap / Palette hop / Accent / Wipe / Comet (v3.54.0). The
   layout no longer gates them; it only sets the ORDER the colors travel in. Colors
-  move along the room's cell sequence. A segmented light is ONE unit for the
-  pattern and always shows the palette repeating along its segments, sliding one
-  per step, whatever pattern is running (v3.55.0). Ripple and Sweep were removed. `GET` returns every room's show
+  move along the room's cell sequence. **Segmented lights HOLD STILL by default
+  (v3.56.0)** — the show's `segmented` setting (`hold` / `segments` / `whole`),
+  because a moving one flashes a single color on every step. When set to
+  `segments`, a segmented light is ONE unit for the pattern and shows the palette
+  repeating along its segments, sliding one per step (v3.55.0).
+  `GET /api/lightshow/previews` is each pattern's little animated preview, computed
+  by the real pattern math and fetched once per page. Ripple and Sweep were removed. `GET` returns every room's show
   (with its `geometry` and the patterns it may run) plus the full catalog; `POST` PATCHes
   one room's show (and starts/stops/restarts it); `POST /api/lightshow/step` advances a
   step now; `DELETE /api/lightshow/{room}` removes it. Config key `lightshows`,

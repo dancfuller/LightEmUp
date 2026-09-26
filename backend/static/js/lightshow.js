@@ -39,6 +39,17 @@ const LIGHTSHOW_SOURCES = [
   { key: "custom", label: "Custom" },
 ];
 
+// What a light the Scenes panel paints per segment does during a show — the
+// backend's `segmented` setting (v3.56.0). Hold is first and the default.
+const LIGHTSHOW_SEGMENTED = [
+  { key: "hold", label: "Hold still",
+    help: "They keep the scene while the rest of the room runs the light show. The default: their segments change one color at a time, a couple of seconds apart, so a moving one flashes through a single color on every step." },
+  { key: "segments", label: "Join in, segment by segment",
+    help: "The colors slide along each one, segment by segment. Expect a brief flash of one color each step while the segments catch up — the Govee rate limit, not us — and slower steps." },
+  { key: "whole", label: "One color each",
+    help: "Each one joins the light show as a single color, like a bulb — fast and smooth, but its segment pattern is replaced during the light show." },
+];
+
 // Every interval the slider can land on, 10 seconds to an hour. A plain linear
 // 10-3600 slider is unusable (a pixel is 12 seconds at the top end) and a
 // 10-300 one can't express "change it every half hour", which is a perfectly
@@ -180,8 +191,13 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
   };
 
   const excluded = s.exclude || [];
+  const segmented = s.segmented || "hold";
+  // Segmented lights holding the scene — from the Pi, which knows which lights
+  // scenes paint per segment (v3.56.0).
+  const heldKeys = (s.held || []).map(h => h.key);
+  const heldCount = heldKeys.length;
   const deviceKeys = (devices || []).map(d => d.key);
-  const movingCount = deviceKeys.filter(k => !excluded.includes(k)).length;
+  const movingCount = deviceKeys.filter(k => !excluded.includes(k) && !heldKeys.includes(k)).length;
   const toggleDevice = (key) => {
     save({
       exclude: excluded.includes(key)
@@ -226,9 +242,11 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
   // What "current" resolved to on the backend; [] means the room has nothing
   // animatable on (it's off, or showing a storm).
   const currentColors = s.source === "current" ? (s.palette_colors || []) : [];
-  const ready = s.source === "palettes" ? selected.length > 0
+  // A room whose every light is segmented and holding has nothing to move.
+  const nothingMoves = (s.cells ?? 1) === 0 && heldCount > 0;
+  const ready = !nothingMoves && (s.source === "palettes" ? selected.length > 0
     : s.source === "custom" ? colorCount >= 2
-    : s.source === "current" ? currentColors.length >= 2 : true;
+    : s.source === "current" ? currentColors.length >= 2 : true);
 
   const intervalIdx = nearestIntervalIndex(s.interval_s ?? 30);
   // The role order, always as an explicit index list so the editor has one shape
@@ -262,16 +280,19 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
               color: s.enabled ? "#1e1b4b" : (ready ? "#c7d2fe" : "#475569"),
               fontSize: isMobile ? 13 : 14, fontWeight: 800, whiteSpace: "nowrap",
             }}
-          >{s.enabled ? "Stop lightshow" : "Start lightshow"}</button>
+          >{s.enabled ? "Stop Light Show" : "Start Light Show"}</button>
           <div style={{ flex: "1 1 160px", minWidth: 0 }}>
             <div style={{ fontSize: isMobile ? 12 : 13, color: s.running ? "#e2e8f0" : "#64748b", fontWeight: 600 }}>
               {s.running
                 ? <>Running · {s.palette} · step {(s.step ?? 0) + 1}</>
-                : (ready ? "Not running" : "Pick some colors below")}
+                : (ready ? "Not running"
+                  : nothingMoves ? "Every light here is segmented, and they're set to hold still"
+                  : "Pick some colors below")}
             </div>
             <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>
               {geometryLabel} · {s.cells || 0} {s.cells === 1 ? "light" : "lights"}
               {s.segment_cells > 0 && <> ({s.segment_cells} segments)</>}
+              {heldCount > 0 && <> · {heldCount} holding still</>}
               {" · "}every {humanInterval(s.effective_interval_s)}
               {s.running && <> · <LightshowCountdown nextAt={s.next_at} running={s.running} /></>}
             </div>
@@ -284,7 +305,7 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
 
       {/* ── Pattern ─────────────────────────────────────────────────────── */}
       <div style={card}>
-        <div style={heading}>Pattern</div>
+        <div style={heading}>Light Show Mode</div>
         <div style={{
           display: "grid", gap: 8,
           gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fill, minmax(168px, 1fr))",
@@ -297,8 +318,12 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
                 border: `1px solid ${active ? "#a78bfa" : "#1e293b"}`,
                 background: active ? "rgba(167,139,250,0.12)" : "#0a0f1e",
               }}>
-                <div style={{ fontSize: 13, fontWeight: 700, color: active ? "#c4b5fd" : "#e2e8f0" }}>
-                  {p.name}
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: active ? "#c4b5fd" : "#e2e8f0" }}>
+                    {p.name}
+                  </span>
+                  {/* Drawn in the show's own colors when it has some (v3.56.0). */}
+                  <PatternPreview preview={p.preview} colors={s.pool || s.palette_colors} width={84} />
                 </div>
                 <div style={{ fontSize: 11, color: "#64748b", marginTop: 3, lineHeight: 1.4 }}>
                   {/* A pattern can read differently in 2D — Walk is a sliding
@@ -325,8 +350,8 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
         ) : (
           <div style={{ marginTop: 10, fontSize: 11, color: "#64748b", lineHeight: 1.5 }}>
             {isPlan
-              ? "Laid out as a floor plan, which sets the order colors travel through the room. Every pattern is available."
-              : "Laid out as a line, so colors travel along it end to end. Every pattern is available."}
+              ? "Laid out as a floor plan, which sets the order colors travel through the room. Every light show mode is available."
+              : "Laid out as a line, so colors travel along it end to end. Every light show mode is available."}
           </div>
         )}
 
@@ -452,12 +477,12 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
           <div>
             <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10, lineHeight: 1.5 }}>
               {currentColors.length >= 2
-                ? <>Animates the colors this room is already showing — no palette to pick.
+                ? <>Uses the colors this room is already showing — no palette to pick.
                     Re-read every time the show starts, so setting a new scene and starting
                     this again follows it.</>
                 : currentColors.length === 1
                   ? "There's only one color on, so there's nothing to move between."
-                  : "Nothing animatable is on in this room. Set a scene or a color first, or pick a palette below."}
+                  : "Nothing a light show can use is on in this room. Set a scene or a color first, or pick a palette below."}
             </div>
             {currentColors.length > 0 && (
               <>
@@ -486,8 +511,8 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
               {pattern === "hop"
                 ? "Palette hop draws a different one of these every step — pick several."
                 : multi
-                  ? "One of these is drawn at random when the show starts, and held for the run."
-                  : "Pick the palette this show runs on."}
+                  ? "One of these is drawn at random when the light show starts, and held until it stops."
+                  : "Pick the palette this light show runs on."}
               {multi && selected.length > 0 && (
                 <> <b style={{ color: "#c4b5fd" }}>{selected.length} selected.</b></>
               )}
@@ -620,7 +645,7 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
             <ColorPicker
               size={130} compact={true} favorites={favorites}
               onFavoritesChange={onFavoritesChange}
-              sourceLabel={`${roomName} lightshow`}
+              sourceLabel={`${roomName} light show`}
               stageApply={true} applyLabel="Add color"
               currentColor={{ r: 255, g: 120, b: 40 }}
               onColorSelect={() => {}}
@@ -701,33 +726,35 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
       {/* ── Which lights ────────────────────────────────────────────────── */}
       <div style={card}>
         <div style={heading}>Lights</div>
-        <button onClick={() => save({ segments: !(s.segments !== false) })} style={{
-          display: "flex", alignItems: "center", gap: 10, width: "100%", textAlign: "left",
-          padding: 10, borderRadius: 10, cursor: "pointer", marginBottom: 10,
-          border: `1px solid ${s.segments !== false ? "#a78bfa" : "#1e293b"}`,
-          background: s.segments !== false ? "rgba(167,139,250,0.12)" : "#0a0f1e",
-        }}>
-          <span style={{ fontSize: 14, color: s.segments !== false ? "#c4b5fd" : "#475569" }}>
-            {s.segments !== false ? "☑" : "☐"}
-          </span>
-          <span style={{ flex: 1 }}>
-            <span style={{ display: "block", fontSize: 12, fontWeight: 700, color: "#e2e8f0" }}>
-              Animate segments
-            </span>
-            <span style={{ display: "block", fontSize: 11, color: "#64748b", marginTop: 2, lineHeight: 1.4 }}>
-              {s.segments !== false
-                ? "Each light is addressed the way the Scenes panel addresses it. Slower, but colors move segment by segment within a light."
-                : "Every device is one color. Much faster steps."}
-            </span>
-          </span>
-        </button>
+        {/* What a segmented light does during the show (v3.56.0). HOLD is the
+            default: its segments change one color per rate-limited cloud call,
+            ~2s apart, and in between the light shows the half-done state — in a
+            two-color look that is the whole light in one color, a solid flash on
+            every step. Only shown when the room has a segmented light. */}
+        {(heldCount > 0 || s.segment_cells > 0 || segmented !== "hold"
+          || (devices || []).some(d => d.segments > 1)) && (
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: "#e2e8f0", marginBottom: 6 }}>
+              Segmented lights
+            </div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {LIGHTSHOW_SEGMENTED.map(o => (
+                <button key={o.key} onClick={() => save({ segmented: o.key })}
+                  style={chip(segmented === o.key)}>{o.label}</button>
+              ))}
+            </div>
+            <div style={{ fontSize: 11, color: "#64748b", marginTop: 6, lineHeight: 1.45 }}>
+              {(LIGHTSHOW_SEGMENTED.find(o => o.key === segmented) || LIGHTSHOW_SEGMENTED[0]).help}
+            </div>
+          </div>
+        )}
 
         <button onClick={() => setShowLights(v => !v)} style={{
           background: "none", border: "none", color: "#94a3b8", cursor: "pointer",
           fontSize: 12, fontWeight: 600, padding: 0,
         }}>
           {showLights ? "▾" : "▸"} Which lights move
-          {excluded.length > 0 && (
+          {(excluded.length > 0 || heldCount > 0) && (
             <span style={{ color: "#fbbf24" }}>
               {" "}· {movingCount} of {deviceKeys.length}
             </span>
@@ -738,18 +765,34 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
             {excluded.length > 0
               ? <>The {excluded.length === 1 ? "other light keeps" : `other ${excluded.length} lights keep`} whatever
                   {" "}they're showing — only the ticked ones animate.</>
-              : "Everything in the room animates. Untick a light, or use \u201cOnly this\u201d, to leave the rest of the room still."}
+              : heldCount > 0
+                ? "Every light except the segmented ones is in the light show. Untick a light, or use \u201cOnly this\u201d, to leave more of the room still."
+                : "Every light in the room is in the light show. Untick a light, or use \u201cOnly this\u201d, to leave the rest of the room still."}
             {excluded.length > 0 && (
               <button onClick={allDevices} style={{
                 marginLeft: 6, background: "none", border: "none", padding: 0,
                 color: "#a78bfa", fontSize: 11, fontWeight: 700, cursor: "pointer",
-              }}>Animate all</button>
+              }}>Include all</button>
             )}
           </div>
         )}
         {showLights && (
           <div style={{ display: "grid", gap: 5, marginTop: 10 }}>
             {(devices || []).map(d => {
+              // A held segmented light isn't the exclude list's to change — it
+              // follows "Segmented lights" above, and says so.
+              if (heldKeys.includes(d.key) && !excluded.includes(d.key)) {
+                return (
+                  <div key={d.key} style={{
+                    display: "flex", alignItems: "center", gap: 8, padding: "7px 9px",
+                    borderRadius: 8, border: "1px dashed #334155", background: "#0a0f1e",
+                  }}>
+                    <span style={{ fontSize: 13, color: "#475569" }}>⏸</span>
+                    <span style={{ flex: 1, fontSize: 12, color: "#94a3b8", minWidth: 0 }}>{d.label}</span>
+                    <span style={{ fontSize: 10, color: "#64748b", whiteSpace: "nowrap" }}>holds still</span>
+                  </div>
+                );
+              }
               const out = excluded.includes(d.key);
               return (
                 <button key={d.key} onClick={() => toggleDevice(d.key)} style={{
@@ -773,7 +816,7 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
                           e.preventDefault(); e.stopPropagation(); onlyDevice(d.key);
                         }
                       }}
-                      title={`Animate only ${d.label}, and leave the rest of the room as it is`}
+                      title={`Put only ${d.label} in the light show, and leave the rest of the room as it is`}
                       style={{
                         fontSize: 10, fontWeight: 700, color: "#a78bfa", cursor: "pointer",
                         border: "1px solid #334155", borderRadius: 6, padding: "2px 6px",
@@ -807,8 +850,9 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
             fontSize: 14, fontWeight: 800,
             boxShadow: "0 -2px 14px rgba(2,6,15,0.6)",
           }}
-        >{s.enabled ? "Stop lightshow"
-          : ready ? `Start lightshow · ${humanInterval(s.effective_interval_s)}`
+        >{s.enabled ? "Stop Light Show"
+          : ready ? `Start Light Show · ${humanInterval(s.effective_interval_s)}`
+          : nothingMoves ? "Nothing to move — see Segmented lights"
           : "Pick some colors to start"}</button>
       </div>
 

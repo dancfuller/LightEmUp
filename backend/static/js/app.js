@@ -330,6 +330,16 @@ function App() {
   // the description in the panel is the one the math implements.
   const [lightshows, setLightshows] = useState({});
   const [lightshowPatterns, setLightshowPatterns] = useState([]);
+  // Each pattern's animated preview (v3.56.0). Fetched ONCE: /api/lightshow is
+  // re-read on every frame of every running show, and these never change.
+  const [lightshowPreviews, setLightshowPreviews] = useState({});
+  useEffect(() => {
+    api("/lightshow/previews")
+      .then(r => setLightshowPreviews(r?.previews || {}))
+      .catch(e => console.warn("Lightshow previews failed:", e));
+  }, []);
+  const patternsWithPreviews = lightshowPatterns.map(p =>
+    lightshowPreviews[p.key] ? { ...p, preview: lightshowPreviews[p.key] } : p);
   const [segmentInfo, setSegmentInfo] = useState({ sku_table: {}, configured_counts: {}, segment_mode: {} });
   // segmentState: server-side last-known per-segment colors for any Govee
   // device currently in segment mode. Shape: { ip: { segIdx: {r,g,b} } }.
@@ -1674,7 +1684,7 @@ function App() {
                   onScheduleLook={handleScheduleLook}
                   onRoomWhite={roomWhite}
                   lightshow={lightshows[roomName]}
-                  lightshowPatterns={lightshowPatterns}
+                  lightshowPatterns={patternsWithPreviews}
                   onLightshowSave={saveLightshow}
                   onLightshowStep={stepLightshow}
                 />

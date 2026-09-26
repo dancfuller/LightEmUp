@@ -663,7 +663,7 @@ function PresetPicker({ items, value, onChange, placeholder, isMobile,
   );
 }
 
-function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlGovee, favorites, onFavoritesChange, nicknames, segmentInfo, roomLayouts, fixtures, onApply, onScheduleLook, minSatEnabled, minSatPct, segmentFillModes, onSegmentFillModeChange, sceneAddress, onSceneAddressChange, savedColorState, lightshow, lightshowPatterns }) {
+function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlGovee, favorites, onFavoritesChange, nicknames, segmentInfo, roomLayouts, fixtures, onApply, onScheduleLook, minSatEnabled, minSatPct, segmentFillModes, onSegmentFillModeChange, sceneAddress, onSceneAddressChange, savedColorState, lightshow, lightshowPatterns, onLightshowSave, lastApplied }) {
   const isMobile = useIsMobile();
   const [mode, setMode] = useState("palette"); // "palette" | "gradient" | "tonal" | "custom" | "beacon"
   // Color space: "color" (RGB, the default) or "white" (tunable color temperature).
@@ -1958,6 +1958,71 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     });
     return seen.size;
   })();
+  // The same distinct colors as a list, for the pattern preview to draw in.
+  const previewPalette = (() => {
+    const seen = new Map();
+    Object.values(preview || {}).forEach(c => {
+      if (!c || c.kelvin != null) return;
+      const rgb = Array.isArray(c) ? c.slice(0, 3) : [c.r, c.g, c.b];
+      if (rgb.every(v => typeof v === "number")) seen.set(rgb.join(","), rgb);
+    });
+    return [...seen.values()];
+  })();
+
+  // ─── Is the room ALREADY showing this look? (v3.56.0) ─────────────────
+  // That decides what the animation button does. Showing it ⇒ "Start
+  // animation": nothing is re-applied, the show just starts on what's on. Not
+  // showing it ⇒ "Apply & animate". Re-applying a look the room already has is
+  // a 30-second, visibly rate-limited repaint of every segmented light — the
+  // thing nobody wants to sit through just to make a look move.
+  // The BACKEND answers (POST /scenes/room-apply/check): it holds the record of
+  // what was applied, compares this exact plan against it, and knows whether
+  // anything has changed the room since. Asked again whenever the preview, the
+  // room's record or the show's state changes.
+  const planKey = preview ? JSON.stringify(buildScenePlan()) : null;
+  const showRunning = !!lightshow?.running;
+  const [lookState, setLookState] = useState(null);
+  const [lookRecheck, setLookRecheck] = useState(0);
+  const [animBusy, setAnimBusy] = useState(false);
+  useEffect(() => {
+    if (!planKey || applying) { setLookState(null); return; }
+    let live = true;
+    const t = setTimeout(() => {
+      api("/scenes/room-apply/check", {
+        method: "POST", body: planKey, headers: { "Content-Type": "application/json" },
+      }).then(r => { if (live) setLookState(r); })
+        .catch(() => { if (live) setLookState(null); });
+    }, 400);
+    return () => { live = false; clearTimeout(t); };
+  }, [planKey, applying, showRunning, lastApplied?.at, lastApplied?.kind, lookRecheck]);
+
+  // Animation ONLY. The backend checks again rather than trusting this button,
+  // and refuses (409) if the room changed in the meantime — then we re-ask, and
+  // the button becomes "Apply & animate".
+  const startAnimationOnly = () => {
+    const plan = buildScenePlan();
+    if (!plan || !animKey || animBusy) return;
+    trackUse("act", { s: "scenes", room: roomName, a: "animate-only",
+                      detail: { mode, pattern: animKey } });
+    setAnimBusy(true);
+    api("/scenes/room-apply", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...plan, animate: animKey, animate_only: true }),
+    }).catch(e => {
+      console.warn("[ColorMode] animate-only refused:", e);
+      setLookRecheck(n => n + 1);
+    }).finally(() => setAnimBusy(false));
+  };
+  const stopAnimation = () => {
+    if (!onLightshowSave) return;
+    trackUse("act", { s: "scenes", room: roomName, a: "stop-animation" });
+    onLightshowSave({ enabled: false });
+  };
+  // While a show runs, the pattern picker changes the RUNNING show.
+  const pickPattern = (key) => {
+    setAnimatePattern(key);
+    if (showRunning && onLightshowSave) onLightshowSave({ pattern: key });
+  };
 
   const applyColors = (animate = null) => {
     if (!preview || applying) return;
@@ -3028,52 +3093,124 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
                 </>
               ) : "Apply"}
             </button>
-            {/* The second entry point (v3.52.0): choosing the colors and choosing
-                to animate them is one press, instead of applying here and then
-                rebuilding the same palette in the Lightshow panel. It takes its
-                own line (flex-basis 100%) so the pattern it will use, and what
-                that pattern does, fit next to it (v3.53.1). */}
-            {!applying && animKey && (
-              <div style={{ flex: "1 1 100%", display: "flex", flexDirection: "column", gap: 5 }}>
-                <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-                  <button onClick={() => applyColors(animKey)}
-                    disabled={!preview}
-                    style={{
-                      padding: "6px 14px", borderRadius: 8,
-                      border: `1px solid ${preview ? "#a78bfa" : "#334155"}`,
-                      background: "transparent", color: preview ? "#a78bfa" : "#64748b",
-                      fontSize: 12, fontWeight: 700,
-                      cursor: preview ? "pointer" : "default", whiteSpace: "nowrap",
-                    }}
-                  >{isMobile ? "Animate" : "Apply & animate"}</button>
+            {/* The light show line (v3.52.0, reworked v3.56.0). The words are
+                "light show" and "light show mode" throughout — never "animate",
+                which read as a fourth thing next to Apply. First you choose the
+                mode (labelled like the palette selector), then ONE button names
+                what it will do:
+                  - Apply & Start Light Show — colors + brightness, then the show
+                  - Start Light Show — the show only; the room already shows this
+                    look (the backend said so), nothing re-applied
+                  - Stop Light Show  — a show is running in this room
+                Labels never shorten on a phone: a bare "Animate" beside "Apply"
+                hid which of these it was. Its own line (flex-basis 100%). */}
+            {!applying && animKey && (() => {
+              const running = showRunning;
+              const showing = !running && !!lookState?.showing;
+              const held = lightshow?.held || [];
+              const nothingMoves = lightshow && lightshow.cells === 0;
+              const reasonText = running ? null
+                : showing
+                  ? "This room is already showing this look, so only the light show starts — nothing is re-applied."
+                  : !lookState ? "Applies this look first, then starts the light show."
+                  : lookState.reason === "different"
+                    ? "The room isn't showing this exact look (it was changed or shuffled since), so it's applied first, then the light show starts."
+                  : lookState.reason === "changed_since"
+                    ? "Something outside LightEmUp has changed this room since, so the look is applied again first."
+                  : lookState.reason === "not_applied"
+                    ? "Part of this look didn't take last time, so it's applied again first."
+                  : lookState.reason === "other_look" && lookState.current_label
+                    ? `The room is showing ${lookState.current_label} right now, so this look is applied first.`
+                  : "Applies this look first, then starts the light show.";
+              const btn = (label, onClick, { filled = false, danger = false, disabled = false } = {}) => (
+                <button onClick={onClick} disabled={disabled}
+                  style={{
+                    padding: isMobile ? "8px 14px" : "6px 14px", borderRadius: 8,
+                    border: `1px solid ${disabled ? "#334155" : danger ? "#ef4444" : "#a78bfa"}`,
+                    background: disabled ? "transparent" : filled ? "#a78bfa" : "transparent",
+                    color: disabled ? "#64748b" : danger ? "#f87171" : filled ? "#1e1b4b" : "#a78bfa",
+                    fontSize: 12, fontWeight: 700, whiteSpace: "nowrap",
+                    cursor: disabled ? "default" : "pointer",
+                  }}>{label}</button>
+              );
+              return (
+                <div style={{
+                  flex: "1 1 100%", display: "flex", flexDirection: "column", gap: 6,
+                  marginTop: 4, paddingTop: 10, borderTop: "1px solid #1e293b",
+                }}>
                   {animPatterns.length > 1 && (
-                    <select value={animKey} onChange={(e) => setAnimatePattern(e.target.value)}
-                      aria-label="Which pattern the animation uses"
-                      style={{
-                        padding: "6px 8px", borderRadius: 8, border: "1px solid #334155",
-                        background: "#0f172a", color: "#e2e8f0",
-                        fontSize: 12, fontWeight: 700, cursor: "pointer",
+                    <>
+                      <label htmlFor={`ls-mode-${roomName}`} style={{
+                        fontSize: 11, fontWeight: 700, letterSpacing: 0.4, color: "#94a3b8",
                       }}>
-                      {animPatterns.map(p => (
-                        <option key={p.key} value={p.key}>{p.name}</option>
-                      ))}
-                    </select>
+                        {running ? "✨ Light Show running · change its mode" : "Choose Light Show Mode"}
+                      </label>
+                      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                        <select id={`ls-mode-${roomName}`} value={animKey}
+                          onChange={(e) => pickPattern(e.target.value)}
+                          style={{
+                            flex: isMobile ? "1 1 140px" : "0 1 200px",
+                            padding: "7px 8px", borderRadius: 8, border: "1px solid #334155",
+                            background: "#0f172a", color: "#e2e8f0",
+                            fontSize: 12, fontWeight: 700, cursor: "pointer",
+                          }}>
+                          {animPatterns.map(p => (
+                            <option key={p.key} value={p.key}>{p.name}</option>
+                          ))}
+                        </select>
+                        <PatternPreview preview={animMeta?.preview} colors={previewPalette}
+                          width={isMobile ? 84 : 112} />
+                      </div>
+                    </>
+                  )}
+                  {animBlurb && (
+                    <div style={{ fontSize: 11, color: "#64748b", lineHeight: 1.45 }}>
+                      {animBlurb}
+                      {animMeta?.roles && previewColorCount > 0 && previewColorCount < 3 && (
+                        <span style={{ color: "#fbbf24" }}>
+                          {" "}This look has {previewColorCount === 1 ? "one color" : "two colors"},
+                          and this mode spends one of them on the background — so most of the
+                          room will sit on that single color.
+                        </span>
+                      )}
+                    </div>
+                  )}
+                  {/* Segmented lights sit light shows out by default (v3.56.0) —
+                      said here, before anyone presses anything, rather than
+                      discovered as "that light never moves". */}
+                  {nothingMoves ? (
+                    <div style={{ fontSize: 11, color: "#fbbf24", lineHeight: 1.45 }}>
+                      Every light in this room is a segmented light, and those hold still
+                      during a light show — so there's nothing to move. Change that under
+                      Segmented lights in the Light Show panel.
+                    </div>
+                  ) : held.length > 0 && (
+                    <div style={{ fontSize: 11, color: "#64748b", lineHeight: 1.45 }}>
+                      <span style={{ color: "#94a3b8" }}>
+                        {held.map(h => h.label).join(", ")}
+                      </span>
+                      {held.length === 1 ? " holds" : " hold"} still and
+                      {held.length === 1 ? " keeps" : " keep"} this look — segmented lights change one
+                      color at a time, so they flash in a light show. Change that in the Light Show panel.
+                    </div>
+                  )}
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 2 }}>
+                    {running
+                      ? btn("Stop Light Show", stopAnimation, { danger: true, disabled: !onLightshowSave })
+                      : showing
+                        ? btn(animBusy ? "Starting…" : "Start Light Show", startAnimationOnly,
+                              { filled: true, disabled: animBusy || nothingMoves })
+                        : btn("Apply & Start Light Show", () => applyColors(animKey),
+                              { disabled: !preview || nothingMoves })}
+                  </div>
+                  {reasonText && (
+                    <div style={{ fontSize: 11, color: showing ? "#a7f3d0" : "#94a3b8", lineHeight: 1.45 }}>
+                      {reasonText}
+                    </div>
                   )}
                 </div>
-                {animBlurb && (
-                  <div style={{ fontSize: 10, color: "#64748b", lineHeight: 1.45 }}>
-                    {animBlurb}
-                    {animMeta?.roles && previewColorCount > 0 && previewColorCount < 3 && (
-                      <span style={{ color: "#fbbf24" }}>
-                        {" "}This look has {previewColorCount === 1 ? "one color" : "two colors"},
-                        and this pattern spends one of them on the background — so most of the
-                        room will sit on that single color.
-                      </span>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
+              );
+            })()}
             {applying && (
               <button onClick={cancelApply}
                 style={{

@@ -1434,6 +1434,74 @@ span which should be running right now, and arms its end.
 - **A one-off re-entered here disables itself** (v3.51.5), as it does when the normal
   loop fires it. Without that it read as enabled for ever afterwards.
 
+## Segmented lights hold still during a show (v3.56.0)
+Reported on the Living Room (a red/blue scene, segmented lights alternating
+R-B-R-B): on every step the segmented lights went **solid red or solid blue**, then
+back to the pattern — a flash every step. The seed was not the cause (the log shows
+no whole-device command after the first frame). **The cause is the rate limit
+itself.** A step is painted one COLOR per cloud call, ~2s apart. With two colors,
+sliding one place changes every segment, so the first call ("these segments →
+red") leaves the whole light red until the second call lands. Any update that is
+only half done shows as a solid color, and there is no call ordering that avoids
+it.
+
+So the show's `segmented` setting now decides what a light that scenes paint per
+segment does, and **`hold` is the default**:
+
+| `segmented` | the light… |
+|---|---|
+| `hold` | sits the show out and keeps the scene |
+| `segments` | slides the palette along its segments (v3.55.0 behavior, flashes) |
+| `whole` | animates as one color, like a bulb (fast, loses its segment pattern) |
+
+- `_lightshow_cells(room, show, held)` skips held lights and reports them in `held`
+  as `{key, label}`, which `_lightshow_status` serves as `held` — both panels name
+  the lights that hold still rather than leaving them to read as broken.
+- A room with held lights is PARTIAL, so the show leaves "Now showing" alone and
+  `source: "current"` keeps resolving to the scene.
+- A room whose every light is held has `cells: 0`; both panels say so and refuse
+  to start rather than starting a show that stops itself.
+- The old `segments` bool is superseded and unread (kept in defaults and the
+  request model so an old config or client still validates, like `axis`).
+  `_animate_current` no longer forces anything about segments — the v3.54.0 row
+  in the table below is what made them flash.
+
+## Apply, or start a light show (v3.56.0)
+Reported: animating a look the room already had meant re-applying it first, and on a
+room with segmented lights that is a 30-second, visibly rate-limited repaint. The
+Scenes panel's animation line now offers exactly one of three actions, and the
+**backend** decides which:
+
+- **Apply & Start Light Show** — the room isn't showing this look (or we can't tell).
+- **Start Light Show** — it is; `animate_only: true` applies nothing and calls
+  `_animate_current`.
+- **Stop Light Show** — one is running (the panel also switches the running
+  show's pattern from its select).
+
+`_scene_look_state(req)` is the judge, behind `POST /api/scenes/room-apply/check`
+and re-run inside `animate_only` (409 if it no longer holds — never trust the
+button). "Showing" needs all three:
+1. the record is a `scene`, or a `lightshow` that carried the scene's print;
+2. **`_look_fingerprint`** of the record equals this plan's — a sha1 of the plan
+   with names, source, `animate*`, `room`, `scope` and `ip` stripped, and lists of
+   targets sorted (a list of numbers keeps its order: that's a razer color). It is
+   stored as `look_fp` by `record_room_applied` for every scene, and computed from
+   `payload` for records older than that. The preview is seeded, so the same
+   settings produce the same plan and the same print; a Shuffle is a new look.
+3. `_room_status` is not `diverged`.
+
+**The app's own animation must not count as "changed since".** A partial show
+marks the scene record `animated: [device keys]` when it starts (a whole-room show
+writes its own `lightshow` record and carries `look_fp` forward instead), and
+`_room_status` skips those Hue lights. The mark lasts until the next record, so
+after "Stop Light Show" the room still offers "Start Light Show" rather than forcing
+a re-apply. The trade-off, stated: a light a show moved is not judged for outside
+changes until the room is set again.
+
+The Govee limit still applies: color can't be read back, so a Govee-only room is
+"showing" on LightEmUp's own record (`verified: false`) — the same limit "Now
+showing" has always had.
+
 ## One light moving in an otherwise static room (v3.53.0)
 The `exclude` list always allowed this; two things stopped it working in practice.
 
@@ -1468,7 +1536,7 @@ a deliberately-configured show is not overwritten by every apply:
 |---|---|---|
 | `pattern` | a two-color look ran Accent: room one color, one dot moving | v3.53.1 |
 | `brightness` | a 80% scene animated at a stored 16% | v3.53.2 |
-| `segments` | every segmented light animated as one flat color | v3.54.0 |
+| `segments` | every segmented light animated as one flat color | v3.54.0 (reverted in v3.56.0: forcing per-segment is what made them flash; the show's own `segmented` setting now decides, and the Scenes panel names the lights that hold) |
 
 A stored `segments: False` from before any of this is cleared once by
 `migrate_lightshow_segments` — see below.
@@ -1538,6 +1606,11 @@ deliberate at a standstill rather than to animate.
   step, opts, prev)` → `(r,g,b,level)` per cell. It knows nothing about rooms or devices.
   `PATTERNS` (key/name/blurb/opts) is **served** by `GET /api/lightshow` rather than
   duplicated in JS, so the blurb you read in the panel is the one the math implements.
+  **The same goes for the animated previews (v3.56.0):** `preview_frames` runs
+  `plan_frame` over 7 dots with placeholder colors for palettes of 2, 3 and 4, and
+  `GET /api/lightshow/previews` serves them as color INDICES (cached; fetched once
+  per page, because `/api/lightshow` is re-read every frame). The browser draws them
+  in the look's own colors. Never re-implement a pattern in JS to draw it.
   **`ColorDealer` moved here from main.py** — the palette scheduler and Shuffle/Palette-hop
   need the same "no two neighbors match" shuffle, and two copies of that rule is exactly
   the drift this codebase keeps paying for elsewhere.

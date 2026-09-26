@@ -95,7 +95,7 @@ PATTERNS = [
         "key": "wipe",
         "name": "Wipe",
         "blurb": "A new color creeps in from one end, covering the last one. Only one light changes "
-                 "per step, so it's the cheapest pattern there is — and the slowest-looking.",
+                 "per step, so it's the cheapest mode there is — and the slowest-looking.",
         "opts": ["direction"],
     },
     {
@@ -344,6 +344,34 @@ def plan_frame(pattern: str, cells: list, colors: list, step: int,
     # Unknown pattern (a config written by a newer build, or a typo): deal
     # something valid rather than leaving the room mid-frame.
     return [(*c, 1.0) for c in deal(colors, n, rng)]
+
+
+PREVIEW_CELLS = 7
+PREVIEW_PALETTE_SIZES = (2, 3, 4)
+
+
+def preview_frames(pattern: str, k: int, cells: int = PREVIEW_CELLS) -> list:
+    """A pattern's first few dozen frames over a short line of lights, as
+    `[color_index, level]` per cell (v3.56.0).
+
+    This is what the panels draw beside each pattern's description. It is
+    `plan_frame` itself, run on placeholder colors, rather than a JavaScript
+    re-implementation, so the little preview cannot drift from what the room
+    actually does. The browser swaps the indices for the look's own colors.
+
+    Long enough for every pattern to come back round: Wipe needs `cells * k`
+    steps to lay every color, and Accent a lap per accent color. Seeded, so the
+    random patterns (Shuffle, Swap) show the same loop every time."""
+    k = max(1, int(k))
+    colors = [(i, 0, 0) for i in range(k)]   # distinct, and r IS the index
+    pos = [(float(i), 0.0) for i in range(cells)]
+    rng = random.Random(f"{pattern}|{k}|{cells}")
+    frames, prev = [], None
+    for step in range(max(cells * k, 12)):
+        frame = plan_frame(pattern, pos, colors, step, opts={}, prev=prev, rng=rng)
+        frames.append([[int(c[0]), round(float(c[3]), 2)] for c in frame])
+        prev = frame
+    return frames
 
 
 def _rest_level(opts: dict) -> float:
