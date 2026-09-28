@@ -677,9 +677,12 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
   // one of the seed colors with no shading.
   const [customColors, setCustomColors] = useState([{ r: 60, g: 100, b: 255 }]);
   const [editingCustomIdx, setEditingCustomIdx] = useState(null);
-  // Which My Colors seeds are showing their RGB tab instead of the hue bar. View
-  // state only — the colors themselves are the same either way.
-  const [customRgbOpen, setCustomRgbOpen] = useState(() => new Set());
+  // Which tab each My Colors seed shows — {seedIndex: "hue" | "rgb" | "fav"},
+  // absent = "hue" — and which seed has its ★ Save label box open. View state
+  // only; the colors are the same whichever tab set them.
+  const [customTab, setCustomTab] = useState({});
+  const [customSaving, setCustomSaving] = useState(null);
+  const [customSaveLabel, setCustomSaveLabel] = useState("");
   const [customShadeMode, setCustomShadeMode] = useState("exact"); // "shades" | "exact"
   const [beaconSourceKey, setBeaconSourceKey] = useState(null);
   const [baseColor, setBaseColor] = useState({ r: 40, g: 180, b: 80 });
@@ -2844,9 +2847,16 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
                           onClick={() => {
                             setCustomColors(prev => prev.filter((_, i) => i !== idx));
                             // The seeds after this one move up a place; so does
-                            // which of them has its RGB tab open.
-                            setCustomRgbOpen(prev => new Set([...prev]
-                              .filter(i => i !== idx).map(i => (i > idx ? i - 1 : i))));
+                            // which tab each of them shows.
+                            setCustomTab(prev => {
+                              const next = {};
+                              Object.entries(prev).forEach(([k, v]) => {
+                                const i = Number(k);
+                                if (i !== idx) next[i > idx ? i - 1 : i] = v;
+                              });
+                              return next;
+                            });
+                            setCustomSaving(null);
                           }}
                           style={{
                             width: 22, height: 22, borderRadius: 11,
@@ -2865,52 +2875,140 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
                         kelvin={c.kelvin}
                         onChange={(k) => setSlot({ ...kelvinToRGB(k), kelvin: k })}
                       />
-                    ) : (<>
-                      {/* Hue | RGB, the same two ways every ColorPicker offers
-                          (v3.56.3). The hue bar alone could only reach fully
-                          saturated colors, so a color you knew by its numbers
-                          couldn't be entered here. The RGB tab is the picker's
-                          own RgbSliderInput + HexColorInput. */}
-                      <div style={{
-                        display: "flex", gap: 3, alignSelf: "flex-start",
-                        background: "#1e293b", borderRadius: 6, padding: 2,
-                      }}>
-                        {[{ k: "hue", l: "Hue" }, { k: "rgb", l: "RGB" }].map(opt => {
-                          const active = (opt.k === "rgb") === customRgbOpen.has(idx);
-                          return (
-                            <button key={opt.k}
-                              onClick={() => setCustomRgbOpen(prev => {
-                                const next = new Set(prev);
-                                if (opt.k === "rgb") next.add(idx); else next.delete(idx);
-                                return next;
-                              })}
+                    ) : (() => {
+                      // Hue | RGB | Favorites + ★ Save — the same set every
+                      // ColorPicker offers (RGB v3.56.3, Favorites + Save v3.57.0).
+                      // The hue bar only reaches fully saturated colors, so RGB is
+                      // how an exact color gets in; Save puts it in the app's
+                      // favorites (config, synced across devices) so it can be
+                      // picked again here, or in any other color picker.
+                      const tab = customTab[idx] || "hue";
+                      const favs = favorites || [];
+                      const saved = favs.some(f => f.r === c.r && f.g === c.g && f.b === c.b);
+                      const setTab = (k) => setCustomTab(prev => ({ ...prev, [idx]: k }));
+                      const tabBtn = (k, l) => (
+                        <button key={k} onClick={() => setTab(k)}
+                          style={{
+                            padding: isMobile ? "5px 12px" : "3px 10px", borderRadius: 4, border: "none",
+                            background: tab === k ? "#6366f1" : "transparent",
+                            color: tab === k ? "#fff" : "#94a3b8",
+                            fontSize: 10, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap",
+                          }}
+                        >{l}</button>
+                      );
+                      const saveFav = () => {
+                        if (!onFavoritesChange || saved) return;
+                        const label = customSaveLabel.trim() || `${c.r},${c.g},${c.b}`;
+                        onFavoritesChange([...favs, { r: c.r, g: c.g, b: c.b, label }]);
+                        setCustomSaving(null);
+                        setCustomSaveLabel("");
+                      };
+                      return (<>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                          <div style={{
+                            display: "flex", gap: 3, background: "#1e293b", borderRadius: 6, padding: 2,
+                          }}>
+                            {tabBtn("hue", "Hue")}
+                            {tabBtn("rgb", "RGB")}
+                            {tabBtn("fav", `Favorites${favs.length ? ` (${favs.length})` : ""}`)}
+                          </div>
+                          {onFavoritesChange && (
+                            <button
+                              onClick={() => { setCustomSaving(idx); setCustomSaveLabel(""); }}
+                              disabled={saved}
+                              title={saved ? "This exact color is already in your favorites"
+                                           : "Save this color to your favorites"}
                               style={{
-                                padding: isMobile ? "5px 12px" : "3px 10px", borderRadius: 4, border: "none",
-                                background: active ? "#6366f1" : "transparent",
-                                color: active ? "#fff" : "#94a3b8",
-                                fontSize: 10, fontWeight: 600, cursor: "pointer",
+                                marginLeft: "auto",
+                                padding: isMobile ? "5px 10px" : "3px 8px", borderRadius: 6, border: "none",
+                                background: saved ? "transparent" : "rgba(99,102,241,0.15)",
+                                color: saved ? "#64748b" : "#a5b4fc",
+                                fontSize: 10, fontWeight: 600, whiteSpace: "nowrap",
+                                cursor: saved ? "default" : "pointer",
                               }}
-                            >{opt.l}</button>
-                          );
-                        })}
-                      </div>
-                      {customRgbOpen.has(idx) ? (
-                        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                          {[["r", "R", "#f87171"], ["g", "G", "#4ade80"], ["b", "B", "#60a5fa"]].map(([ch, label, tint]) => (
-                            <RgbSliderInput key={ch} label={label} value={c[ch]} color={tint}
-                              // Functional update: the slider commits on a
-                              // throttle, and a closure over `c` would drop a
-                              // channel changed in between.
-                              onChange={(v) => setCustomColors(prev => prev.map((cc, i) =>
-                                i === idx ? { r: cc.r, g: cc.g, b: cc.b, [ch]: v } : cc))} />
-                          ))}
-                          <div style={{ height: 1, background: "#1e293b", margin: "2px 0" }} />
-                          <HexColorInput value={c} onChange={({ r, g, b }) => setSlot({ r, g, b })} />
+                            >{saved ? "★ Saved" : "★ Save"}</button>
+                          )}
                         </div>
-                      ) : (
-                        <HueBar currentColor={c} onChange={(rgb) => setSlot(rgb)} />
-                      )}
-                    </>)}
+                        {customSaving === idx && !saved && (
+                          <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                            <input
+                              type="text" value={customSaveLabel} autoFocus
+                              onChange={(e) => setCustomSaveLabel(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") saveFav();
+                                if (e.key === "Escape") setCustomSaving(null);
+                              }}
+                              placeholder="Label (optional)…"
+                              style={{
+                                flex: "1 1 140px", minWidth: 0, padding: "6px 10px", borderRadius: 8,
+                                border: "1px solid #334155", background: "#1e293b",
+                                color: "#f1f5f9", fontSize: 12, outline: "none",
+                              }}
+                            />
+                            <button onClick={saveFav} style={{
+                              padding: "6px 12px", borderRadius: 8, border: "none",
+                              background: "#6366f1", color: "#fff",
+                              fontSize: 11, fontWeight: 600, cursor: "pointer",
+                            }}>Add</button>
+                            <button onClick={() => setCustomSaving(null)} style={{
+                              padding: "6px 10px", borderRadius: 8, border: "1px solid #334155",
+                              background: "transparent", color: "#94a3b8",
+                              fontSize: 11, fontWeight: 600, cursor: "pointer",
+                            }}>Cancel</button>
+                          </div>
+                        )}
+                        {tab === "rgb" ? (
+                          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                            {[["r", "R", "#f87171"], ["g", "G", "#4ade80"], ["b", "B", "#60a5fa"]].map(([ch, label, tint]) => (
+                              <RgbSliderInput key={ch} label={label} value={c[ch]} color={tint}
+                                // Functional update: the slider commits on a
+                                // throttle, and a closure over `c` would drop a
+                                // channel changed in between.
+                                onChange={(v) => setCustomColors(prev => prev.map((cc, i) =>
+                                  i === idx ? { r: cc.r, g: cc.g, b: cc.b, [ch]: v } : cc))} />
+                            ))}
+                            <div style={{ height: 1, background: "#1e293b", margin: "2px 0" }} />
+                            <HexColorInput value={c} onChange={({ r, g, b }) => setSlot({ r, g, b })} />
+                          </div>
+                        ) : tab === "fav" ? (
+                          favs.length === 0 ? (
+                            <div style={{
+                              padding: 12, textAlign: "center", color: "#64748b", fontSize: 11,
+                              borderRadius: 8, border: "1px dashed #334155",
+                            }}>No favorites yet. Pick a color and tap ★ Save.</div>
+                          ) : (
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                              {favs.map((f, fi) => {
+                                const on = f.r === c.r && f.g === c.g && f.b === c.b;
+                                return (
+                                  <button key={fi} onClick={() => setSlot({ r: f.r, g: f.g, b: f.b })}
+                                    title={`${f.label} · ${rgbToHex(f.r, f.g, f.b)}`}
+                                    style={{
+                                      display: "flex", alignItems: "center", gap: 6,
+                                      padding: "4px 8px 4px 4px", borderRadius: 8, cursor: "pointer",
+                                      border: `1px solid ${on ? "#6366f1" : "#334155"}`,
+                                      background: on ? "rgba(99,102,241,0.14)" : "#0a0f1e",
+                                      maxWidth: "100%",
+                                    }}>
+                                    <span style={{
+                                      width: 20, height: 20, borderRadius: 5, flexShrink: 0,
+                                      background: `rgb(${f.r},${f.g},${f.b})`,
+                                      border: "1px solid rgba(255,255,255,0.15)",
+                                    }} />
+                                    <span style={{
+                                      fontSize: 11, color: on ? "#c7d2fe" : "#cbd5e1", fontWeight: 600,
+                                      whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                                    }}>{f.label}</span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )
+                        ) : (
+                          <HueBar currentColor={c} onChange={(rgb) => setSlot(rgb)} />
+                        )}
+                      </>);
+                    })()}
                   </div>
                   );
                 })}

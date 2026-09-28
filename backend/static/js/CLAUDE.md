@@ -476,14 +476,19 @@ Assigns colors/temperatures across a room's devices and applies them.
   hexa close to other lights may over-constrain a small palette; the palette cost model
   (below) degrades gracefully rather than failing. Each custom seed
   slot can be Color (hue) or White (a `kelvin` temperature); `applyMinSat` must not
-  saturation-clamp `kelvin` entries. **A Color seed has Hue | RGB tabs (v3.56.3)**,
-  the same two ways every ColorPicker offers: the hue bar only reaches fully
-  saturated colors, so the RGB tab (the shared `RgbSliderInput` + `HexColorInput`)
-  is how an exact color gets in. Which seeds have RGB open is view state
-  (`customRgbOpen`, a Set of indices, shifted when a seed is removed). The channel
-  sliders commit on a throttle, so they update through a functional
-  `setCustomColors` — a closure over the seed would drop a channel changed in
-  between.
+  saturation-clamp `kelvin` entries. **A Color seed has Hue | RGB | Favorites tabs
+  and a ★ Save button** (RGB v3.56.3, Favorites + Save v3.57.0) — the same set every
+  ColorPicker offers. The hue bar only reaches fully saturated colors, so the RGB
+  tab (the shared `RgbSliderInput` + `HexColorInput`) is how an exact color gets in,
+  and ★ Save puts it in the app's **favorites** (`onFavoritesChange`, `{r,g,b,label}`,
+  the label defaulting to `r,g,b` like the picker's). There is deliberately no second
+  store of "saved My Colors": a saved seed is an ordinary favorite, so it's also
+  offered in every other picker and in the light show's "My colors" source. The
+  button reads ★ Saved (disabled) when that exact color is already a favorite. Which
+  tab each seed shows is view state (`customTab`, `{index: "hue"|"rgb"|"fav"}`,
+  re-keyed when a seed is removed). The channel sliders commit on a throttle, so they
+  update through a functional `setCustomColors` — a closure over the seed would drop
+  a channel changed in between.
 - **Curated palettes are VARIABLE length (4–8) — never pad to a fixed count (v3.13.0).**
   Every library palette used to be exactly 8 colors, so any theme with fewer real ideas
   was filled out with tints of colors already in it: "Watermelon" was 2 hues across 8
