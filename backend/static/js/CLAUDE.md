@@ -378,6 +378,11 @@ Assigns colors/temperatures across a room's devices and applies them.
 - **Color vs White space:** `colorSpace` is `"color"` or `"white"`. White mode emits
   entries with a `kelvin` field; whole-device/Hue apply sends real CT, segments send
   the K→RGB approximation (calibrated server-side via `ct_rgb`).
+  - **White ranges (`CT_PALETTES`, utils.js)** are Kelvin bands for Palette-in-white:
+    Warm, Warm to Neutral (2000–4500K, v3.56.2), Neutral, Cool, All. A room saves
+    its pick as an **index** (`ct_preset` in `room_color_state`), so **append new
+    bands, never insert** — inserting shifts every saved choice after it onto a
+    different band. The on-screen order is `CT_PALETTE_ORDER`, separate on purpose.
 - **Segments vs whole is PER DEVICE (v3.18.0)** — `addressModeFor(key)` reads the
   `sceneAddress` prop (config `govee_scene_address`, backed by
   `POST /api/govee/scene-address`), and the **scheduler reads the same map**, so a

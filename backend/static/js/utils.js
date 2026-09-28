@@ -691,13 +691,19 @@ function generateTonalShades(baseR, baseG, baseB, count) {
 const CT_MIN_K = 2000;
 const CT_MAX_K = 6500;
 
-// 4 named white palettes — each a [min,max] Kelvin band.
+// Named white palettes — each a [min,max] Kelvin band.
+// A room saves its choice as an INDEX into this list (`ct_preset`), so new bands
+// are APPENDED — inserting one would silently move every saved choice after it.
+// The order they're shown in is CT_PALETTE_ORDER.
 const CT_PALETTES = [
-  { name: "Warm White",    min: 2000, max: 3000 },
-  { name: "Neutral White", min: 3000, max: 4500 },
-  { name: "Cool White",    min: 4500, max: 6500 },
-  { name: "All Whites",    min: 2000, max: 6500 },
+  { name: "Warm White",      min: 2000, max: 3000 },
+  { name: "Neutral White",   min: 3000, max: 4500 },
+  { name: "Cool White",      min: 4500, max: 6500 },
+  { name: "All Whites",      min: 2000, max: 6500 },
+  { name: "Warm to Neutral", min: 2000, max: 4500 },   // v3.56.2
 ];
+// Display order: warmest band first, widest last.
+const CT_PALETTE_ORDER = [0, 4, 1, 2, 3];
 
 // Fixed white-point sweep used by the CT calibration panel (Settings). Govee
 // LAN devices render these bluer than Hue, so we sample a Hue reference vs each

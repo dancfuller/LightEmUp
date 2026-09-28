@@ -2519,20 +2519,26 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
                   : "A band of white temperatures assigned across devices. Adjacent lights won't share a temperature."}
               </div>
 
-              {/* White-mode: 4 temperature-band presets */}
+              {/* White-mode: temperature-band presets, in CT_PALETTE_ORDER (the
+                  saved value is the index into CT_PALETTES, not the position). */}
               {colorSpace === "white" && (
                 <div style={{
                   display: "grid",
-                  gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(4, 1fr)",
+                  gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(auto-fill, minmax(96px, 1fr))",
                   gap: 6, marginBottom: 12,
                 }}>
-                  {CT_PALETTES.map((p, i) => {
+                  {CT_PALETTE_ORDER.map((i, pos) => {
+                    const p = CT_PALETTES[i];
                     const active = ctPreset === i;
                     const lo = kelvinToRGB(p.min), hi = kelvinToRGB(p.max);
+                    // Two to a row on a phone: an odd one out spans the row.
+                    const spanRow = isMobile && pos === CT_PALETTE_ORDER.length - 1
+                      && CT_PALETTE_ORDER.length % 2 === 1;
                     return (
                       <button key={p.name}
                         onClick={() => setCtPreset(i)}
                         style={{
+                          gridColumn: spanRow ? "1 / -1" : undefined,
                           padding: "8px 8px", borderRadius: 8,
                           border: `1px solid ${active ? "#34d399" : "#334155"}`,
                           background: active ? "rgba(52,211,153,0.12)" : "rgba(15,23,42,0.4)",
