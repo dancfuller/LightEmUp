@@ -476,7 +476,14 @@ Assigns colors/temperatures across a room's devices and applies them.
   hexa close to other lights may over-constrain a small palette; the palette cost model
   (below) degrades gracefully rather than failing. Each custom seed
   slot can be Color (hue) or White (a `kelvin` temperature); `applyMinSat` must not
-  saturation-clamp `kelvin` entries.
+  saturation-clamp `kelvin` entries. **A Color seed has Hue | RGB tabs (v3.56.3)**,
+  the same two ways every ColorPicker offers: the hue bar only reaches fully
+  saturated colors, so the RGB tab (the shared `RgbSliderInput` + `HexColorInput`)
+  is how an exact color gets in. Which seeds have RGB open is view state
+  (`customRgbOpen`, a Set of indices, shifted when a seed is removed). The channel
+  sliders commit on a throttle, so they update through a functional
+  `setCustomColors` — a closure over the seed would drop a channel changed in
+  between.
 - **Curated palettes are VARIABLE length (4–8) — never pad to a fixed count (v3.13.0).**
   Every library palette used to be exactly 8 colors, so any theme with fewer real ideas
   was filled out with tints of colors already in it: "Watermelon" was 2 hues across 8

@@ -263,7 +263,9 @@ function RgbSliderInput({ label, value, onChange, color }) {
         onBlur={() => setDraft(null)}
         onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }}
         style={{
-          width: 46, flexShrink: 0, padding: "3px 6px", borderRadius: 6,
+          // 58, not 46: Edge/Chrome draw spinner arrows INSIDE the box, and at 46
+          // they covered the last digit of any three-digit value (v3.56.3).
+          width: 58, flexShrink: 0, padding: "3px 6px", borderRadius: 6,
           border: "1px solid #334155", background: "#0f172a",
           color: "#e2e8f0", fontSize: 12, textAlign: "center", outline: "none",
         }}

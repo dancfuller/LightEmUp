@@ -677,6 +677,9 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
   // one of the seed colors with no shading.
   const [customColors, setCustomColors] = useState([{ r: 60, g: 100, b: 255 }]);
   const [editingCustomIdx, setEditingCustomIdx] = useState(null);
+  // Which My Colors seeds are showing their RGB tab instead of the hue bar. View
+  // state only — the colors themselves are the same either way.
+  const [customRgbOpen, setCustomRgbOpen] = useState(() => new Set());
   const [customShadeMode, setCustomShadeMode] = useState("exact"); // "shades" | "exact"
   const [beaconSourceKey, setBeaconSourceKey] = useState(null);
   const [baseColor, setBaseColor] = useState({ r: 40, g: 180, b: 80 });
@@ -2838,7 +2841,13 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
                       }}>{isWhite ? `${c.kelvin}K` : `R:${c.r} G:${c.g} B:${c.b}`}</span>
                       {idx > 0 && (
                         <button
-                          onClick={() => setCustomColors(prev => prev.filter((_, i) => i !== idx))}
+                          onClick={() => {
+                            setCustomColors(prev => prev.filter((_, i) => i !== idx));
+                            // The seeds after this one move up a place; so does
+                            // which of them has its RGB tab open.
+                            setCustomRgbOpen(prev => new Set([...prev]
+                              .filter(i => i !== idx).map(i => (i > idx ? i - 1 : i))));
+                          }}
                           style={{
                             width: 22, height: 22, borderRadius: 11,
                             background: "transparent", color: "#f87171",
@@ -2856,9 +2865,52 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
                         kelvin={c.kelvin}
                         onChange={(k) => setSlot({ ...kelvinToRGB(k), kelvin: k })}
                       />
-                    ) : (
-                      <HueBar currentColor={c} onChange={(rgb) => setSlot(rgb)} />
-                    )}
+                    ) : (<>
+                      {/* Hue | RGB, the same two ways every ColorPicker offers
+                          (v3.56.3). The hue bar alone could only reach fully
+                          saturated colors, so a color you knew by its numbers
+                          couldn't be entered here. The RGB tab is the picker's
+                          own RgbSliderInput + HexColorInput. */}
+                      <div style={{
+                        display: "flex", gap: 3, alignSelf: "flex-start",
+                        background: "#1e293b", borderRadius: 6, padding: 2,
+                      }}>
+                        {[{ k: "hue", l: "Hue" }, { k: "rgb", l: "RGB" }].map(opt => {
+                          const active = (opt.k === "rgb") === customRgbOpen.has(idx);
+                          return (
+                            <button key={opt.k}
+                              onClick={() => setCustomRgbOpen(prev => {
+                                const next = new Set(prev);
+                                if (opt.k === "rgb") next.add(idx); else next.delete(idx);
+                                return next;
+                              })}
+                              style={{
+                                padding: isMobile ? "5px 12px" : "3px 10px", borderRadius: 4, border: "none",
+                                background: active ? "#6366f1" : "transparent",
+                                color: active ? "#fff" : "#94a3b8",
+                                fontSize: 10, fontWeight: 600, cursor: "pointer",
+                              }}
+                            >{opt.l}</button>
+                          );
+                        })}
+                      </div>
+                      {customRgbOpen.has(idx) ? (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                          {[["r", "R", "#f87171"], ["g", "G", "#4ade80"], ["b", "B", "#60a5fa"]].map(([ch, label, tint]) => (
+                            <RgbSliderInput key={ch} label={label} value={c[ch]} color={tint}
+                              // Functional update: the slider commits on a
+                              // throttle, and a closure over `c` would drop a
+                              // channel changed in between.
+                              onChange={(v) => setCustomColors(prev => prev.map((cc, i) =>
+                                i === idx ? { r: cc.r, g: cc.g, b: cc.b, [ch]: v } : cc))} />
+                          ))}
+                          <div style={{ height: 1, background: "#1e293b", margin: "2px 0" }} />
+                          <HexColorInput value={c} onChange={({ r, g, b }) => setSlot({ r, g, b })} />
+                        </div>
+                      ) : (
+                        <HueBar currentColor={c} onChange={(rgb) => setSlot(rgb)} />
+                      )}
+                    </>)}
                   </div>
                   );
                 })}
