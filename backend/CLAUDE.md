@@ -1892,7 +1892,34 @@ the 900s full resync (`LIGHTSHOW_RESYNC_S`) repaints every light even under Swap
 - **Known gap, unchanged:** Govee lights can't be read back, so a change that
   touches ONLY Govee lights is still invisible to a running show.
 
-Covered by a throwaway loop test (20 assertions, 4 clean runs) that drives the
+**A MISSED step is not an outside change (v3.57.1).** The first version stopped a
+Living Room Walk after 26 minutes ("Mumford Light, Triple Light - Middle changed
+outside LightEmUp (color changed)") when nothing outside had touched the room. The
+proof was in the bulbs: all nine showed only the show's own two colors, just in the
+wrong places, which no outside command produces. They had MISSED steps — the show
+fired nine Hue commands in under a second, the bridge's whole ~10/s, and a Zigbee
+command lost after the bridge's 200 leaves the bulb on the previous step.
+- `_lightshow_judge_light` returns `ok` / `missed` / `outside`. It only says
+  **outside** for a state this show has NOT recently sent that bulb: a white
+  (`ct` mode), a level, an on/off, or a color that is neither the last send nor
+  any recent one (`rt["hue_hist"]`, the last `LIGHTSHOW_HUE_HISTORY` sends per
+  bulb). Anything the show itself sent recently is **missed**: dropped from
+  `rt["frame_map"]` so the next frame re-sends it even under a diffing mode, logged,
+  and counted in Delivery health via `record_repair`. The show keeps running.
+- Color baselines are per bulb **per sent color** (`rt["hue_seen"][id][xy] =
+  settled xy`), and one is recorded only when the reading isn't better explained
+  by another of the show's colors, so a missed step can never become a baseline.
+  A first reading far from everything is taken as the bridge's gamut clamp.
+- **The show's Hue writes are paced** (`LIGHTSHOW_HUE_GAP_S`, 0.12s, ~8/s), which
+  keeps a step under the bridge's ceiling rather than relying on the re-send.
+- **A stop logs its evidence**: for each light, what was sent and what the bridge
+  reports now. This bug had to be reconstructed from PUT timings and the bulbs'
+  leftover colors; the next one shouldn't.
+
+Covered by a throwaway loop test (27 assertions, clean over repeated runs): the
+verdict table, bulbs dropping steps under Walk NOT stopping the show (and being
+logged), an outside color the show never sent stopping it, plus the v3.56.1
+scenarios below. Earlier cover: a throwaway loop test (20 assertions, 4 clean runs) that drives the
 real `_lightshow_loop` against a fake bridge. It covers Incandescent between frames,
 one bulb changed, the room slider's own write NOT stopping it, gamut clamping NOT
 stopping it, and a command landing mid-paint.

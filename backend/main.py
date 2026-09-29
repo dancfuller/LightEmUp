@@ -1732,6 +1732,12 @@ LIGHTSHOW_SETTLE_S = 0.3
 # while the show was PAINTING, which the top check structurally cannot — see
 # _lightshow_overridden.
 LIGHTSHOW_POST_PAINT_CHECK_S = 4.0
+# Gap between a show's Hue commands, ~8/s — under the bridge's ~10/s ceiling
+# (v3.57.1). Back to back, a 9-bulb step went out in under a second and bulbs
+# missed steps. See _lightshow_judge_light.
+LIGHTSHOW_HUE_GAP_S = 0.12
+# How many recent sends per bulb are remembered, to recognize a missed step.
+LIGHTSHOW_HUE_HISTORY = 6
 
 LIGHTSHOW_DEFAULTS = {
     "enabled": False,
@@ -2218,7 +2224,8 @@ def _lightshow_expand(cells: list[dict], units: list[list[int]], unit_frame: lis
 
 async def _lightshow_paint(room_name: str, show: dict, cells: list[dict],
                            frame: list, write: set, seed: bool = False,
-                           hue_sent: Optional[dict] = None) -> set:
+                           hue_sent: Optional[dict] = None,
+                           hue_hist: Optional[dict] = None) -> set:
     """Put one frame on the lights. Returns the cell keys that FAILED to send.
 
     The caller drops those from its record of what's painted, so the next frame
@@ -2261,11 +2268,24 @@ async def _lightshow_paint(room_name: str, show: dict, cells: list[dict],
                     elif hue_sent is not None:
                         # Exactly what went to the bridge, and the light's write
                         # count right after it — see _lightshow_outside_change.
-                        hue_sent[str(c["light_id"])] = (
-                            (res or {}).get("state") or {}, hue_write_seq(c["light_id"]))
+                        st = (res or {}).get("state") or {}
+                        hue_sent[str(c["light_id"])] = (st, hue_write_seq(c["light_id"]))
+                        if hue_hist is not None:
+                            # Recent sends, so a bulb that missed a step is
+                            # recognized as showing one of OURS (v3.57.1).
+                            h = hue_hist.setdefault(str(c["light_id"]), [])
+                            h.append(st)
+                            del h[:-LIGHTSHOW_HUE_HISTORY]
                 except Exception as e:
                     log.warning("Lightshow %r: hue %s failed: %s", room_name, c["light_id"], e)
                     failed.add(c["key"])
+                    if hue_sent is not None:
+                        hue_sent.pop(str(c["light_id"]), None)
+                # Paced (v3.57.1). Back to back, nine bulbs went out in under a
+                # second — the bridge's whole ~10 commands/second — and bulbs
+                # missed steps. Missing one is harmless now (it is re-sent), but
+                # not provoking it is better.
+                await asyncio.sleep(LIGHTSHOW_HUE_GAP_S)
         finally:
             _in_bulk_hue.set(False)
 
@@ -2474,40 +2494,81 @@ async def _lightshow_restore_off(room_name: str, cells: list[dict], painted):
                         room_name, c["key"], e)
 
 
-def _lightshow_light_changed(sent: dict, cur: dict, seen: dict, lid: str) -> Optional[str]:
-    """Why a light no longer shows what the light show last sent it, or None.
-
-    Color is judged against what the bridge REPORTED after our send, not against
-    what we sent: the bridge clamps xy into each bulb's gamut, so a pure green on
-    an older bulb reads back far from the xy we asked for. The first read after a
-    send records that settled value (`seen`) and only later reads are compared
-    with it. The other signals need no baseline and are decisive on their own:
-    on/off flipped, the bulb in color-temperature mode (a light show only ever
-    sends colors, so that is someone choosing a white), or a different level."""
-    want_on = sent.get("on", True)
-    if bool(cur.get("on")) != bool(want_on):
-        return "turned off" if want_on else "turned on"
-    if not want_on:
-        return None
-    # A white is checked before the level: "Incandescent" changes both, and
-    # "set to a white" is the reason a person recognizes.
-    if "xy" in sent and cur.get("color_mode") == "ct":
-        return "set to a white"
-    if "bri" in sent and cur.get("brightness") is not None:
-        if abs(int(cur["brightness"]) - int(sent["bri"])) > HUE_VERIFY_BRI_TOLERANCE:
-            return "brightness changed"
-    if "xy" in sent:
-        mode = cur.get("color_mode")
-        cxy = cur.get("xy")
-        if mode == "xy" and isinstance(cxy, (list, tuple)) and len(cxy) == 2:
-            key = (float(sent["xy"][0]), float(sent["xy"][1]))
-            base = seen.get(lid)
-            if base and base[0] == key:
-                if max(abs(cxy[0] - base[1][0]), abs(cxy[1] - base[1][1])) > HUE_XY_TOLERANCE:
-                    return "color changed"
-            else:
-                seen[lid] = (key, (float(cxy[0]), float(cxy[1])))
+def _xy_of(st: dict):
+    xy = (st or {}).get("xy")
+    if isinstance(xy, (list, tuple)) and len(xy) == 2:
+        return (float(xy[0]), float(xy[1]))
     return None
+
+
+def _xy_near(a, b) -> bool:
+    return max(abs(a[0] - b[0]), abs(a[1] - b[1])) <= HUE_XY_TOLERANCE
+
+
+def _lightshow_judge_light(sent: dict, hist: list, seen: dict, cur: dict) -> tuple:
+    """("ok" | "missed" | "outside", why) for one Hue light in a running show.
+
+    **A bulb that isn't showing the show's last send is usually the show's own
+    fault** (v3.57.1). A step fires one command per bulb in quick succession, and a
+    Zigbee command can be lost after the bridge has answered 200; the bulb then
+    keeps the show's PREVIOUS step. v3.56.1 read that as "changed outside
+    LightEmUp" and stopped a Walk in the Living Room after 26 minutes — with the
+    bulbs left in a mix of exactly the show's two colors, in the wrong places,
+    which nothing outside would ever produce.
+
+    So a mismatch is only "outside" when the bulb shows something this show has
+    NOT recently sent it:
+      - a white (color-temperature mode) — a light show only ever sends colors;
+      - a level none of its recent sends had;
+      - on/off the recent sends never asked for;
+      - a color that is neither the last send, nor any recent one.
+    Anything the show itself sent recently is a MISSED step: re-send, don't stop.
+
+    `hist` is this light's recent sends, newest last. `seen` maps a sent xy to the
+    xy the bridge reported for it on THIS bulb — the bridge clamps each color into
+    the bulb's gamut, so a pure green can read back ~0.2 away from what was asked.
+    A settled reading is recorded only when it isn't better explained by another
+    of the show's colors, so a missed step can never become a baseline."""
+    want_on = bool(sent.get("on", True))
+    cur_on = bool(cur.get("on"))
+    if cur_on != want_on:
+        if any(bool(h.get("on", True)) == cur_on for h in hist):
+            return "missed", "on/off"
+        return "outside", "turned off" if want_on else "turned on"
+    if not want_on:
+        return "ok", None
+    # A white first: "Incandescent" changes the level too, and "set to a white" is
+    # the reason a person recognizes. Never a missed step — the show sends no whites.
+    if "xy" in sent and cur.get("color_mode") == "ct":
+        return "outside", "set to a white"
+    cur_bri = cur.get("brightness")
+    if "bri" in sent and cur_bri is not None:
+        if abs(int(cur_bri) - int(sent["bri"])) > HUE_VERIFY_BRI_TOLERANCE:
+            if any(h.get("bri") is not None
+                   and abs(int(cur_bri) - int(h["bri"])) <= HUE_VERIFY_BRI_TOLERANCE
+                   for h in hist):
+                return "missed", "brightness"
+            return "outside", "brightness changed"
+    key, cxy = _xy_of(sent), _xy_of(cur)
+    if key and cxy and cur.get("color_mode") == "xy":
+        base = seen.get(key)
+        if (base and _xy_near(cxy, base)) or _xy_near(cxy, key):
+            if not base:
+                seen[key] = cxy
+            return "ok", None
+        # Not this send's color. One of the show's OTHER recent colors on this bulb?
+        for h in hist:
+            hk = _xy_of(h)
+            if hk and hk != key and (_xy_near(cxy, hk)
+                                     or (seen.get(hk) and _xy_near(cxy, seen[hk]))):
+                return "missed", "color"
+        if not base:
+            # First reading of this color on this bulb, far from what was sent and
+            # from every other show color: the bridge's gamut clamp. Learn it.
+            seen[key] = cxy
+            return "ok", None
+        return "outside", "color changed"
+    return "ok", None
 
 
 async def _lightshow_outside_change(room_name: str, cells: list[dict], rt: dict,
@@ -2520,16 +2581,22 @@ async def _lightshow_outside_change(room_name: str, cells: list[dict], rt: dict,
     again. The rule now is the one asked for: **any light proven changed from
     outside stops the show.** One bridge GET covers the whole house.
 
-    A light is judged only against the show's OWN last send to it
-    (`rt["hue_sent"]`: the state dict and the light's `hue_write_seq` just after).
-    If LightEmUp has written that light since — the room's brightness slider, a
-    verify repair — the count has moved, so it is skipped rather than blamed:
-    something inside the app is never evidence of something outside it.
+    "Proven" is the operative word (v3.57.1): a bulb that merely MISSED one of the
+    show's own steps is re-sent, not blamed — see `_lightshow_judge_light`. Missed
+    steps are dropped from `rt["frame_map"]` so the next frame writes them even
+    under a diffing mode like Swap, and they are counted in Delivery health
+    (`record_repair`), because a lost Zigbee command is exactly what that card is for.
 
-    `skip` leaves out the lights this frame just wrote. A read four seconds after a
-    send can't tell a Zigbee drop (which the next step re-asserts) from an outside
-    command, and stopping a show on a dropped packet would be the worse mistake.
-    Unreachable lights and an unreadable bridge prove nothing and return nothing.
+    A light is judged only against the show's OWN sends to it (`rt["hue_sent"]`:
+    the state dict and the light's `hue_write_seq` just after; `rt["hue_hist"]`:
+    recent sends). If LightEmUp has written that light since — the room's
+    brightness slider, a verify repair — the count has moved, so it is skipped
+    rather than blamed: something inside the app is never evidence of something
+    outside it.
+
+    `skip` leaves out the lights this frame just wrote: four seconds after a send
+    a bulb may not have caught up. Unreachable lights and an unreadable bridge
+    prove nothing and return nothing.
 
     Govee lights can't be read back (see _lightshow_external_off), so a change that
     touches ONLY Govee lights is still invisible here."""
@@ -2542,22 +2609,34 @@ async def _lightshow_outside_change(room_name: str, cells: list[dict], rt: dict,
     lights = await _hue_states_by_id()
     if not lights:
         return []
-    seen = rt.setdefault("hue_seen", {})
-    changed = []
+    seen_all = rt.setdefault("hue_seen", {})
+    hist_all = rt.setdefault("hue_hist", {})
+    frame_map = rt.get("frame_map") or {}
+    changed, missed = [], []
     for c in judged:
         lid = str(c["light_id"])
         sent, seq = sent_by[lid]
         if hue_write_seq(lid) != seq:
             sent_by.pop(lid, None)        # LightEmUp wrote it since; not ours to judge
-            seen.pop(lid, None)
+            seen_all.pop(lid, None)
+            hist_all.pop(lid, None)
             continue
         cur = lights.get(lid)
         if not cur or cur.get("reachable") is False:
             continue
-        why = _lightshow_light_changed(sent, cur, seen, lid)
-        if why:
-            changed.append({"light_id": lid, "name": cur.get("name") or c["label"],
-                            "why": why, "state": cur})
+        verdict, why = _lightshow_judge_light(
+            sent, hist_all.get(lid) or [sent], seen_all.setdefault(lid, {}), cur)
+        name = cur.get("name") or c["label"]
+        if verdict == "outside":
+            changed.append({"light_id": lid, "name": name, "why": why, "state": cur,
+                            "sent": {k: sent.get(k) for k in ("on", "bri", "xy")}})
+        elif verdict == "missed":
+            missed.append(name)
+            frame_map.pop(c["key"], None)     # the next frame re-sends it
+            record_repair(c["key"], name, why if why != "on/off" else "on")
+    if missed:
+        log.info("Lightshow %r: %d light(s) missed a step (%s) — re-sending on the "
+                 "next one", room_name, len(missed), ", ".join(missed[:5]))
     return changed
 
 
@@ -2629,6 +2708,15 @@ async def _lightshow_stop_for_outside(room_name: str, cells: list[dict], changed
     whys = ", ".join(sorted({ch["why"] for ch in changed}))
     log.info("Lightshow %r: %s changed outside LightEmUp (%s) — stopping the show "
              "and leaving the lights as they were set", room_name, names, whys)
+    # The evidence, per light (v3.57.1): what the show last sent and what the
+    # bridge reports now. The first false stop could only be diagnosed by
+    # reconstructing this from scratch; the next one shouldn't need to be.
+    for ch in changed:
+        st = ch["state"]
+        log.info("Lightshow %r:   %s — %s; sent %s; now on=%s bri=%s mode=%s xy=%s ct=%s",
+                 room_name, ch["name"], ch["why"], ch.get("sent"), st.get("on"),
+                 st.get("brightness"), st.get("color_mode"), st.get("xy"),
+                 st.get("color_temp"))
     if wrote:
         await _lightshow_adopt_outside(room_name, cells, wrote, changed)
     _lightshow_note_outside_stop(room_name, f"{names} changed outside LightEmUp ({whys})")
@@ -2710,7 +2798,8 @@ async def _lightshow_loop(room_name: str):
             write, changed = _lightshow_write_set(
                 desired, rt.get("frame_map") or {}, rt.get("changed") or set(), full)
             failed = await _lightshow_paint(room_name, show, cells, frame, write, seed,
-                                            hue_sent=rt.setdefault("hue_sent", {}))
+                                            hue_sent=rt.setdefault("hue_sent", {}),
+                                            hue_hist=rt.setdefault("hue_hist", {}))
 
             rt.update({
                 "frame_list": unit_frame,
