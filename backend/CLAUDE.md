@@ -168,6 +168,25 @@ looking for one next time.
   `room_last_applied[room]`** — stored ON the entry so it dies the moment a new look is
   recorded. A stale "didn't take" outliving the problem would be its own lie.
 
+### Every Hue color goes out as xy — the room Controls color too (v3.57.2)
+`control_room` (the room's Controls color, `POST /api/rooms/control` with r/g/b)
+sent Hue **hue/sat** from its own "simplified" conversion. No check in this app
+can judge hue/sat — `_hue_verify_repair` and `_hue_state_matches` compare xy or
+ct — so a bulb that missed a room color passed every verify. 2026-10-01: the two
+Innr front door bulbs (AE 282 C, the same pair as the worked example below)
+missed a room-wide red; the TV-side one still showed Coral Reef's pink from the
+6:43 schedule to the fourth decimal place, and the 25s backstop that ran over it
+could only confirm "on".
+- **`_rgb_to_hue_xy` is the one RGB → xy conversion**, shared with
+  `control_hue_light`. `control_room` now sends `xy` and still derives no level
+  from the color (the room keeps its brightness). The hue/sat helper is gone from
+  main.py; `scenes.py` keeps its own copy for lightning.
+- **A room color now arms the color checks** `_apply_room_color` already had:
+  `HUE_COLOR_VERIFY_S`, plus `HUE_APPLY_VERIFY_S` when no `on` rode along (with
+  `on`, the power backstop already runs at that delay with color comparison).
+- **If you add a Hue path that sends a color, send xy.** A form the verifies can't
+  compare is a form whose misses are invisible.
+
 ### The fast verify is BLIND to a silent Zigbee drop (v3.42.2)
 `GET /lights` is answered from the **bridge's own state model**, and the bridge
 updates that model the moment it accepts a command for a light it believes is

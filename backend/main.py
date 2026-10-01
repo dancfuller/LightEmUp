@@ -3947,6 +3947,27 @@ async def hue_groups():
 
 
 @app.post("/api/hue/light")
+def _rgb_to_hue_xy(r: int, g: int, b: int) -> tuple:
+    """RGB (0-255) → (Hue xy [x, y], luminance Y 0..1), wide gamut D65.
+
+    The ONE conversion every Hue color path uses (v3.57.2). The room Controls
+    color used to send hue/sat from a separate "simplified" conversion, and no
+    check in this app can judge hue/sat — so when two front door bulbs missed a
+    room-wide red, every verify passed them and nothing was re-sent. In xy, the
+    same 25s check that already runs reads pink-vs-red and repairs it."""
+    def gamma(v):
+        v = v / 255.0
+        return pow(v, 2.2) if v > 0.04045 else v / 12.92
+    rr, gg, bb = gamma(r), gamma(g), gamma(b)
+    X = rr * 0.664511 + gg * 0.154324 + bb * 0.162028
+    Y = rr * 0.283881 + gg * 0.668433 + bb * 0.047685
+    Z = rr * 0.000088 + gg * 0.072310 + bb * 0.986039
+    total = X + Y + Z
+    if total > 0:
+        return [round(X / total, 4), round(Y / total, 4)], Y
+    return [0.3127, 0.3290], Y   # D65 white
+
+
 async def control_hue_light(req: HueLightStateRequest):
     ip = config.get("hue_bridge_ip")
     username = config.get("hue_username")
@@ -3990,19 +4011,7 @@ async def control_hue_light(req: HueLightStateRequest):
 
     # RGB → Hue xy color space (wide gamut D65)
     if req.r is not None and req.g is not None and req.b is not None:
-        # Gamma correction and wide RGB conversion
-        def gamma(v):
-            v = v / 255.0
-            return pow(v, 2.2) if v > 0.04045 else v / 12.92
-        rr, gg, bb = gamma(req.r), gamma(req.g), gamma(req.b)
-        X = rr * 0.664511 + gg * 0.154324 + bb * 0.162028
-        Y = rr * 0.283881 + gg * 0.668433 + bb * 0.047685
-        Z = rr * 0.000088 + gg * 0.072310 + bb * 0.986039
-        total = X + Y + Z
-        if total > 0:
-            state["xy"] = [round(X / total, 4), round(Y / total, 4)]
-        else:
-            state["xy"] = [0.3127, 0.3290]  # D65 white
+        state["xy"], Y = _rgb_to_hue_xy(req.r, req.g, req.b)
         # Only derive brightness from the color's luminance if this command carries
         # no level of its own. `req.brightness is None` asked a different question
         # (v3.51.1): a level chosen while the light was OFF is consumed into
@@ -4917,10 +4926,12 @@ async def control_room(req: RoomStateRequest):
                     state["bri"] = max(1, min(254, round(_want * 254 / 100)))
                     set_pending_brightness(f"hue:{light_id}", None)
             if req.r is not None and req.g is not None and req.b is not None:
-                # Convert RGB to Hue's hue/sat (simplified)
-                h, s = _rgb_to_hue_sat(req.r, req.g, req.b)
-                state["hue"] = h
-                state["sat"] = s
+                # xy, not hue/sat (v3.57.2): the same conversion control_hue_light
+                # uses, and the only color form the verifies can judge. A hue/sat
+                # command that a bulb missed passed every check. No level is
+                # derived from the color — the room keeps the brightness it has,
+                # as it always did here.
+                state["xy"] = _rgb_to_hue_xy(req.r, req.g, req.b)[0]
             # Only what this light can take; see control_hue_light (v3.50.0).
             state = hue_supported_state(light_id, state)
             if not state:
@@ -4993,6 +5004,16 @@ async def control_room(req: RoomStateRequest):
     # bulb left it burning all night. See _arm_power_backstops.
     if req.on is not None:
         _arm_power_backstops(req.room_name, hue_sent, hue_since, bool(req.on))
+    # A room COLOR gets the color checks a scheduled color already had
+    # (`_apply_room_color`), v3.57.2: the 0.6s pass above answers from the
+    # bridge's own model and can't see a dropped frame. HUE_COLOR_VERIFY_S is the
+    # quick real read; the 25s pass comes from the power backstop when "on" rode
+    # along, and is armed here when it didn't.
+    if req.r is not None and req.g is not None and req.b is not None and hue_sent:
+        label = f"{req.room_name} set to a color"
+        schedule_hue_late_verify(hue_sent, label, delay=HUE_COLOR_VERIFY_S, since=hue_since)
+        if req.on is None:
+            schedule_hue_late_verify(hue_sent, label, delay=HUE_APPLY_VERIFY_S, since=hue_since)
     # Same for Govee, power only — see _govee_verify_repair. Registered here
     # rather than per-device so a room (or a zone) costs one pass.
     schedule_govee_verify(govee_sent)
@@ -5013,27 +5034,6 @@ async def control_room(req: RoomStateRequest):
 
     publish_event("room", room=req.room_name)
     return {"results": results}
-
-
-def _rgb_to_hue_sat(r: int, g: int, b: int) -> tuple[int, int]:
-    """Convert RGB (0-255) to Hue's hue (0-65535) and saturation (0-254)."""
-    r_norm, g_norm, b_norm = r / 255.0, g / 255.0, b / 255.0
-    max_c = max(r_norm, g_norm, b_norm)
-    min_c = min(r_norm, g_norm, b_norm)
-    diff = max_c - min_c
-
-    if diff == 0:
-        hue = 0
-    elif max_c == r_norm:
-        hue = (60 * ((g_norm - b_norm) / diff) + 360) % 360
-    elif max_c == g_norm:
-        hue = (60 * ((b_norm - r_norm) / diff) + 120) % 360
-    else:
-        hue = (60 * ((r_norm - g_norm) / diff) + 240) % 360
-
-    sat = 0 if max_c == 0 else diff / max_c
-
-    return int(hue / 360 * 65535), int(sat * 254)
 
 
 # ─── Lightning Scene Endpoints ─────────────────────────────────────────────
