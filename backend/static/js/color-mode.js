@@ -2154,7 +2154,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
   });
 
   // ─── Curated palette library ────────────────────────────────────────────────
-  // The 160 palettes live in backend/palette_library.json and reach the browser
+  // The curated palettes live in backend/palette_library.json and reach the browser
   // via the GENERATED backend/static/js/palette-library.js. They moved out of
   // this file in v3.17.0 because the SCHEDULER needs them too ("at sunset, pick
   // a random Summer palette") and it fires on the Pi with no browser attached —

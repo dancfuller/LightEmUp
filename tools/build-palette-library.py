@@ -27,9 +27,33 @@ ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "backend" / "palette_library.json"
 DEST = ROOT / "backend" / "static" / "js" / "palette-library.js"
 
-# The re-cut in v3.13.0 fixed the length of no palette but did bound it: fewer
-# than 4 real colors isn't a palette, more than 8 outruns most rooms.
-MIN_COLORS, MAX_COLORS = 4, 8
+# The re-cut in v3.13.0 fixed the length of no palette but did bound it, and more
+# than 8 outruns most rooms. The floor was 4 until the LED pass (v3.58.0), which
+# allowed 3 rather than drop an autumn palette that lost its brown.
+MIN_COLORS, MAX_COLORS = 3, 8
+
+
+def led_problem(c) -> str:
+    """Why an LED can't show this color as intended, or "" (v3.58.0).
+
+    A bulb shows a color's HUE and SATURATION; darkness is only less light, and a
+    scene sets brightness itself. So a dark or dull orange (brown) comes out as
+    plain orange, a washed-out one (tan) as a pale peach, and a gray as white.
+    Use the 3000K soft white [255, 214, 136] for brown, and a white by the
+    palette's intent (3000K warm / [255, 253, 255] 6500K cool) for tan and gray.
+    These are the rules the LED pass applied; keep them in step with it."""
+    import colorsys
+    h, s, v = colorsys.rgb_to_hsv(*(x / 255 for x in c))
+    hd = h * 360
+    if v < 0.30:
+        return ""
+    if s < 0.12 and v < 0.85:
+        return "gray (an LED shows it as white)"
+    if 15 <= hd <= 50 and s >= 0.12 and v <= 0.65:
+        return "brown (an LED shows it as orange)"
+    if 15 <= hd <= 50 and 0.15 <= s <= 0.45 and v <= 0.85:
+        return "tan (an LED shows it as a pale peach)"
+    return ""
 
 
 def fail(msg: str):
@@ -76,6 +100,8 @@ def verify(palettes: list):
             if (not isinstance(c, list) or len(c) != 3
                     or any(not isinstance(v, int) or not 0 <= v <= 255 for v in c)):
                 problems.append(f"{name}: bad color {c!r} — want [r, g, b] 0-255")
+            elif led_problem(c):
+                problems.append(f"{name}: {c!r} is {led_problem(c)} — see led_problem()")
     if problems:
         for pr in problems[:20]:
             print(f"  - {pr}", file=sys.stderr)
@@ -92,9 +118,11 @@ def verify(palettes: list):
     print(f"    featured: {len(featured)}")
 
     # Spot-check a few known palettes so a mangled file is loud rather than
-    # merely well-formed. These are the ones the v3.13.0 re-cut notes call out.
+    # merely well-formed. Watermelon and Rainbow are the v3.13.0 re-cut's; Noir went
+    # in the LED pass (all gray, so all white on a bulb), and Spiced Cider is the
+    # autumn palette that pass cut to 3 rather than drop.
     by_name = {p["name"]: p for p in palettes}
-    for name, want_len in (("Watermelon", 5), ("Rainbow", 8), ("Noir", 4)):
+    for name, want_len in (("Watermelon", 5), ("Rainbow", 8), ("Spiced Cider", 3)):
         got = by_name.get(name)
         if not got:
             fail(f"spot-check: {name!r} is missing")

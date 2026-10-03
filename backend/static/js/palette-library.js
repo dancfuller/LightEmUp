@@ -5,7 +5,7 @@
 // The curated palette library, shared by the browser (the room color tool's
 // palette picker) and the Pi (the scheduler's "random palette" action, which
 // fires with no browser attached). It lived inline in color-mode.js until
-// v3.17.0; two copies of 808 colors would
+// v3.17.0; two copies of 740 colors would
 // drift the first time someone added a palette, so both sides now read one file.
 //
 // Colors are VARIABLE length (4-8) and deliberately so — see the notes in
@@ -35,16 +35,16 @@ const PALETTE_LIBRARY = [
   { name: "Hibiscus", category: "Summer", colors: [{r:255,g:60,b:120},{r:255,g:140,b:80},{r:255,g:200,b:60},{r:200,g:60,b:160},{r:80,g:200,b:120},{r:255,g:180,b:200},{r:200,g:80,b:200}] },
   { name: "Citrus", category: "Summer", colors: [{r:255,g:180,b:0},{r:200,g:240,b:60},{r:255,g:200,b:80},{r:140,g:220,b:40}] },
   // Autumn
-  { name: "Autumn", category: "Autumn", featured: true, colors: [{r:205,g:92,b:40},{r:218,g:165,b:32},{r:240,g:120,b:30},{r:140,g:60,b:20}] },
-  { name: "Pumpkin Spice", category: "Autumn", colors: [{r:255,g:130,b:50},{r:160,g:80,b:40},{r:220,g:140,b:60},{r:255,g:200,b:120}] },
-  { name: "Harvest Moon", category: "Autumn", colors: [{r:240,g:180,b:60},{r:160,g:100,b:30},{r:255,g:220,b:140},{r:200,g:140,b:60}] },
+  { name: "Autumn", category: "Autumn", featured: true, colors: [{r:205,g:92,b:40},{r:218,g:165,b:32},{r:240,g:120,b:30},{r:255,g:214,b:136}] },
+  { name: "Pumpkin Spice", category: "Autumn", colors: [{r:255,g:130,b:50},{r:255,g:214,b:136},{r:220,g:140,b:60},{r:255,g:200,b:120}] },
+  { name: "Harvest Moon", category: "Autumn", colors: [{r:240,g:180,b:60},{r:255,g:214,b:136},{r:200,g:140,b:60}] },
   { name: "Maple", category: "Autumn", colors: [{r:200,g:50,b:30},{r:200,g:120,b:30},{r:255,g:140,b:50},{r:140,g:30,b:10}] },
-  { name: "Spiced Cider", category: "Autumn", colors: [{r:160,g:80,b:30},{r:255,g:170,b:80},{r:120,g:60,b:30},{r:200,g:140,b:80}] },
-  { name: "Falling Leaves", category: "Autumn", colors: [{r:255,g:140,b:30},{r:200,g:60,b:30},{r:240,g:200,b:60},{r:140,g:80,b:30}] },
-  { name: "Cornfield", category: "Autumn", colors: [{r:240,g:200,b:80},{r:255,g:230,b:140},{r:160,g:120,b:40},{r:200,g:170,b:80}] },
+  { name: "Spiced Cider", category: "Autumn", colors: [{r:255,g:214,b:136},{r:255,g:170,b:80},{r:200,g:140,b:80}] },
+  { name: "Falling Leaves", category: "Autumn", colors: [{r:255,g:140,b:30},{r:200,g:60,b:30},{r:240,g:200,b:60},{r:255,g:214,b:136}] },
+  { name: "Cornfield", category: "Autumn", colors: [{r:240,g:200,b:80},{r:255,g:214,b:136},{r:200,g:170,b:80}] },
   { name: "Cranberry", category: "Autumn", colors: [{r:200,g:30,b:50},{r:240,g:80,b:80},{r:140,g:30,b:30},{r:200,g:80,b:100}] },
-  { name: "Rust Belt", category: "Autumn", colors: [{r:160,g:60,b:30},{r:180,g:100,b:60},{r:100,g:50,b:30},{r:220,g:120,b:70}] },
-  { name: "Apple Orchard", category: "Autumn", colors: [{r:200,g:40,b:40},{r:140,g:200,b:60},{r:240,g:180,b:80},{r:160,g:80,b:40},{r:255,g:120,b:80},{r:200,g:200,b:120}] },
+  { name: "Rust Belt", category: "Autumn", colors: [{r:160,g:60,b:30},{r:180,g:100,b:60},{r:255,g:214,b:136},{r:220,g:120,b:70}] },
+  { name: "Apple Orchard", category: "Autumn", colors: [{r:200,g:40,b:40},{r:140,g:200,b:60},{r:240,g:180,b:80},{r:255,g:214,b:136},{r:255,g:120,b:80},{r:200,g:200,b:120}] },
   // Winter
   { name: "Frostbite", category: "Winter", featured: true, colors: [{r:200,g:230,b:255},{r:140,g:200,b:240},{r:100,g:170,b:220},{r:180,g:220,b:240}] },
   { name: "Snowfall", category: "Winter", colors: [{r:240,g:240,b:255},{r:200,g:220,b:240},{r:255,g:255,b:255},{r:140,g:160,b:200}] },
@@ -53,13 +53,12 @@ const PALETTE_LIBRARY = [
   { name: "Glacier", category: "Winter", colors: [{r:140,g:200,b:230},{r:100,g:170,b:210},{r:200,g:230,b:240},{r:80,g:150,b:190}] },
   { name: "Arctic Aurora", category: "Winter", colors: [{r:80,g:240,b:200},{r:120,g:160,b:240},{r:60,g:200,b:240},{r:160,g:240,b:200}] },
   { name: "Fireside", category: "Winter", colors: [{r:255,g:120,b:40},{r:160,g:60,b:30},{r:255,g:220,b:140},{r:200,g:120,b:60}] },
-  { name: "Hot Cocoa", category: "Winter", colors: [{r:130,g:90,b:70},{r:200,g:160,b:120},{r:255,g:230,b:200},{r:230,g:200,b:160}] },
   { name: "Sleigh Ride", category: "Winter", colors: [{r:200,g:60,b:60},{r:240,g:240,b:240},{r:60,g:120,b:60},{r:180,g:200,b:230}] },
   { name: "Crystal Cave", category: "Winter", colors: [{r:180,g:200,b:240},{r:140,g:160,b:220},{r:120,g:140,b:200},{r:220,g:240,b:255}] },
   // Holidays
   { name: "Christmas", category: "Holidays", featured: true, colors: [{r:220,g:20,b:20},{r:0,g:120,b:0},{r:218,g:165,b:0},{r:240,g:240,b:240},{r:0,g:80,b:30}] },
   { name: "Hanukkah", category: "Holidays", colors: [{r:65,g:105,b:225},{r:135,g:206,b:235},{r:255,g:255,b:255},{r:30,g:60,b:160},{r:220,g:220,b:220}] },
-  { name: "New Year", category: "Holidays", colors: [{r:255,g:215,b:0},{r:192,g:192,b:192},{r:184,g:115,b:51},{r:230,g:230,b:230}] },
+  { name: "New Year", category: "Holidays", colors: [{r:255,g:215,b:0},{r:255,g:253,b:255},{r:184,g:115,b:51}] },
   { name: "Halloween", category: "Holidays", featured: true, colors: [{r:255,g:140,b:0},{r:140,g:60,b:200},{r:90,g:30,b:120},{r:200,g:60,b:0}] },
   { name: "Valentine's", category: "Holidays", colors: [{r:255,g:60,b:120},{r:200,g:30,b:80},{r:255,g:180,b:200},{r:240,g:200,b:220}] },
   { name: "Fourth of July", category: "Holidays", colors: [{r:220,g:30,b:30},{r:240,g:240,b:240},{r:30,g:60,b:200},{r:255,g:80,b:80},{r:80,g:120,b:240}] },
@@ -72,10 +71,9 @@ const PALETTE_LIBRARY = [
   { name: "Sunset", category: "Warm", featured: true, colors: [{r:255,g:94,b:77},{r:255,g:154,b:0},{r:255,g:206,b:84},{r:200,g:50,b:100},{r:255,g:180,b:120},{r:255,g:130,b:160}] },
   { name: "Campfire", category: "Warm", colors: [{r:220,g:40,b:20},{r:255,g:120,b:0},{r:255,g:215,b:0},{r:255,g:240,b:200}] },
   { name: "Lava", category: "Warm", colors: [{r:255,g:60,b:0},{r:255,g:180,b:60},{r:140,g:30,b:10},{r:200,g:80,b:0}] },
-  { name: "Desert Sun", category: "Warm", colors: [{r:255,g:170,b:60},{r:200,g:140,b:60},{r:255,g:220,b:140},{r:160,g:100,b:40}] },
+  { name: "Desert Sun", category: "Warm", colors: [{r:255,g:170,b:60},{r:200,g:140,b:60},{r:255,g:214,b:136}] },
   { name: "Ember", category: "Warm", colors: [{r:255,g:60,b:30},{r:160,g:30,b:10},{r:200,g:60,b:30},{r:255,g:160,b:80}] },
   { name: "Tangerine", category: "Warm", colors: [{r:255,g:140,b:50},{r:255,g:180,b:80},{r:255,g:220,b:160},{r:200,g:120,b:40}] },
-  { name: "Sahara", category: "Warm", colors: [{r:240,g:200,b:130},{r:200,g:160,b:100},{r:160,g:120,b:80},{r:255,g:240,b:200}] },
   { name: "Brick Oven", category: "Warm", colors: [{r:200,g:80,b:50},{r:120,g:40,b:20},{r:255,g:140,b:80},{r:200,g:120,b:80}] },
   { name: "Honey", category: "Warm", colors: [{r:255,g:200,b:60},{r:200,g:140,b:30},{r:220,g:160,b:80},{r:255,g:230,b:160}] },
   // Cool
@@ -127,23 +125,20 @@ const PALETTE_LIBRARY = [
   { name: "50s Diner", category: "Retro", colors: [{r:255,g:80,b:120},{r:60,g:200,b:240},{r:255,g:240,b:240},{r:240,g:200,b:80},{r:255,g:180,b:200}] },
   { name: "70s Disco", category: "Retro", colors: [{r:240,g:140,b:30},{r:200,g:60,b:120},{r:120,g:200,b:80},{r:160,g:80,b:200},{r:240,g:120,b:80}] },
   { name: "80s Pop", category: "Retro", colors: [{r:255,g:80,b:200},{r:80,g:240,b:240},{r:255,g:240,b:80},{r:200,g:80,b:240},{r:80,g:200,b:255},{r:255,g:140,b:80}] },
-  { name: "90s Grunge", category: "Retro", colors: [{r:160,g:120,b:90},{r:120,g:140,b:120},{r:220,g:140,b:80},{r:200,g:180,b:140}] },
+  { name: "90s Grunge", category: "Retro", colors: [{r:255,g:214,b:136},{r:120,g:140,b:120},{r:220,g:140,b:80}] },
   { name: "Y2K", category: "Retro", colors: [{r:200,g:240,b:240},{r:255,g:200,b:240},{r:240,g:240,b:200},{r:200,g:200,b:240},{r:240,g:200,b:200},{r:200,g:240,b:200},{r:240,g:220,b:240}] },
-  { name: "Polaroid", category: "Retro", colors: [{r:240,g:200,b:140},{r:240,g:180,b:160},{r:160,g:140,b:120},{r:200,g:200,b:160}] },
-  { name: "Western", category: "Retro", colors: [{r:200,g:120,b:60},{r:200,g:160,b:100},{r:140,g:80,b:40},{r:240,g:200,b:140}] },
+  { name: "Western", category: "Retro", colors: [{r:200,g:120,b:60},{r:200,g:160,b:100},{r:255,g:214,b:136}] },
   { name: "Atomic Age", category: "Retro", colors: [{r:255,g:160,b:80},{r:80,g:200,b:200},{r:255,g:220,b:60},{r:160,g:80,b:140},{r:200,g:80,b:80}] },
   { name: "Mid-Century", category: "Retro", colors: [{r:200,g:140,b:60},{r:80,g:140,b:120},{r:160,g:80,b:60},{r:220,g:200,b:160}] },
   // Nature
   { name: "Forest", category: "Nature", featured: true, colors: [{r:34,g:139,b:34},{r:107,g:142,b:35},{r:144,g:238,b:144},{r:30,g:168,b:107},{r:130,g:170,b:100}] },
   { name: "Meadow", category: "Nature", colors: [{r:140,g:200,b:80},{r:255,g:200,b:80},{r:160,g:220,b:140},{r:255,g:180,b:200},{r:180,g:200,b:100}] },
   { name: "Mountain", category: "Nature", colors: [{r:120,g:140,b:160},{r:200,g:220,b:230},{r:80,g:100,b:120},{r:230,g:240,b:240}] },
-  { name: "Desert", category: "Nature", colors: [{r:240,g:200,b:140},{r:200,g:140,b:80},{r:140,g:80,b:40},{r:255,g:230,b:180}] },
   { name: "Jungle", category: "Nature", colors: [{r:30,g:120,b:60},{r:80,g:160,b:60},{r:140,g:200,b:80},{r:255,g:140,b:60},{r:80,g:200,b:120}] },
-  { name: "Savanna", category: "Nature", colors: [{r:240,g:200,b:120},{r:200,g:160,b:80},{r:160,g:100,b:60},{r:120,g:80,b:40}] },
+  { name: "Savanna", category: "Nature", colors: [{r:240,g:200,b:120},{r:200,g:160,b:80},{r:255,g:214,b:136}] },
   { name: "Wildflower", category: "Nature", colors: [{r:255,g:140,b:200},{r:255,g:200,b:80},{r:120,g:200,b:80},{r:200,g:80,b:200},{r:255,g:80,b:120},{r:80,g:200,b:240},{r:200,g:160,b:240},{r:255,g:200,b:160}] },
   { name: "Botanical", category: "Nature", colors: [{r:80,g:160,b:80},{r:140,g:200,b:100},{r:200,g:220,b:120},{r:220,g:240,b:180}] },
-  { name: "Tundra", category: "Nature", colors: [{r:200,g:210,b:200},{r:160,g:170,b:160},{r:180,g:200,b:190},{r:120,g:140,b:140}] },
-  { name: "Coastline", category: "Nature", colors: [{r:240,g:220,b:170},{r:80,g:170,b:200},{r:200,g:170,b:130},{r:60,g:120,b:160}] },
+  { name: "Coastline", category: "Nature", colors: [{r:80,g:170,b:200},{r:255,g:253,b:255},{r:60,g:120,b:160}] },
   // Cosmic
   { name: "Galaxy", category: "Cosmic", featured: true, colors: [{r:80,g:30,b:160},{r:255,g:60,b:200},{r:60,g:80,b:240},{r:200,g:120,b:240},{r:120,g:60,b:240},{r:200,g:60,b:200}] },
   { name: "Nebula", category: "Cosmic", colors: [{r:200,g:60,b:200},{r:60,g:200,b:255},{r:255,g:80,b:120},{r:140,g:60,b:240},{r:255,g:160,b:200},{r:80,g:80,b:200}] },
@@ -156,16 +151,10 @@ const PALETTE_LIBRARY = [
   { name: "Comet", category: "Cosmic", colors: [{r:60,g:140,b:240},{r:200,g:240,b:255},{r:255,g:240,b:200},{r:240,g:240,b:255},{r:160,g:200,b:255}] },
   { name: "Eclipse", category: "Cosmic", colors: [{r:255,g:160,b:30},{r:200,g:60,b:30},{r:120,g:60,b:140},{r:160,g:60,b:200}] },
   // Earth
-  { name: "Terracotta", category: "Earth", colors: [{r:200,g:100,b:60},{r:220,g:140,b:90},{r:140,g:70,b:40},{r:240,g:160,b:120}] },
-  { name: "Sandstone", category: "Earth", colors: [{r:240,g:210,b:170},{r:200,g:170,b:130},{r:220,g:190,b:150},{r:160,g:130,b:90}] },
-  { name: "Clay", category: "Earth", colors: [{r:180,g:100,b:60},{r:200,g:140,b:90},{r:140,g:100,b:60},{r:160,g:60,b:30}] },
-  { name: "Mocha", category: "Earth", colors: [{r:140,g:90,b:70},{r:170,g:130,b:100},{r:200,g:160,b:130},{r:110,g:80,b:60}] },
-  { name: "Driftwood", category: "Earth", colors: [{r:160,g:140,b:120},{r:200,g:180,b:160},{r:120,g:100,b:80},{r:220,g:200,b:180}] },
-  { name: "Stone", category: "Earth", colors: [{r:160,g:160,b:160},{r:200,g:200,b:200},{r:140,g:130,b:120},{r:200,g:200,b:180}] },
-  { name: "Adobe", category: "Earth", featured: true, colors: [{r:200,g:120,b:80},{r:240,g:180,b:120},{r:255,g:200,b:140},{r:140,g:80,b:40}] },
-  { name: "Espresso", category: "Earth", colors: [{r:120,g:80,b:60},{r:160,g:100,b:70},{r:90,g:60,b:40},{r:180,g:140,b:100}] },
+  { name: "Terracotta", category: "Earth", colors: [{r:200,g:100,b:60},{r:220,g:140,b:90},{r:255,g:214,b:136},{r:240,g:160,b:120}] },
+  { name: "Clay", category: "Earth", colors: [{r:180,g:100,b:60},{r:200,g:140,b:90},{r:255,g:214,b:136},{r:160,g:60,b:30}] },
+  { name: "Adobe", category: "Earth", featured: true, colors: [{r:200,g:120,b:80},{r:240,g:180,b:120},{r:255,g:214,b:136}] },
   { name: "Olive Grove", category: "Earth", colors: [{r:140,g:140,b:80},{r:200,g:200,b:140},{r:140,g:160,b:90},{r:200,g:210,b:150}] },
-  { name: "Wheat", category: "Earth", colors: [{r:240,g:220,b:170},{r:200,g:180,b:120},{r:220,g:200,b:150},{r:160,g:140,b:80}] },
   // Mood
   { name: "Calm", category: "Mood", colors: [{r:160,g:200,b:220},{r:200,g:230,b:240},{r:220,g:230,b:230},{r:160,g:220,b:200}] },
   { name: "Energetic", category: "Mood", colors: [{r:255,g:80,b:30},{r:255,g:200,b:30},{r:30,g:200,b:80},{r:30,g:160,b:240},{r:255,g:30,b:120},{r:200,g:80,b:255},{r:255,g:140,b:30},{r:80,g:240,b:200}] },
@@ -176,17 +165,14 @@ const PALETTE_LIBRARY = [
   { name: "Focus", category: "Mood", colors: [{r:200,g:230,b:240},{r:240,g:240,b:200},{r:220,g:230,b:200},{r:230,g:240,b:230},{r:240,g:230,b:220},{r:230,g:230,b:240}] },
   { name: "Cozy", category: "Mood", featured: true, colors: [{r:200,g:120,b:80},{r:240,g:180,b:120},{r:160,g:80,b:60},{r:255,g:200,b:140}] },
   { name: "Dreamy", category: "Mood", colors: [{r:200,g:180,b:240},{r:240,g:200,b:240},{r:180,g:200,b:240},{r:255,g:220,b:240},{r:200,g:200,b:255}] },
-  { name: "Zen", category: "Mood", colors: [{r:200,g:220,b:200},{r:230,g:240,b:220},{r:160,g:180,b:160},{r:240,g:240,b:230}] },
+  { name: "Zen", category: "Mood", colors: [{r:200,g:220,b:200},{r:230,g:240,b:220},{r:255,g:253,b:255}] },
   // Cinematic
-  { name: "Wes Anderson", category: "Cinematic", featured: true, colors: [{r:240,g:180,b:160},{r:200,g:160,b:120},{r:160,g:200,b:180},{r:240,g:220,b:180}] },
   { name: "Blade Runner", category: "Cinematic", colors: [{r:255,g:80,b:120},{r:60,g:80,b:200},{r:255,g:180,b:60},{r:120,g:60,b:200},{r:30,g:200,b:240}] },
   { name: "The Matrix", category: "Cinematic", colors: [{r:30,g:200,b:60},{r:80,g:240,b:120},{r:30,g:120,b:50},{r:160,g:255,b:200}] },
   { name: "Tron", category: "Cinematic", colors: [{r:30,g:240,b:255},{r:255,g:120,b:30},{r:30,g:160,b:240},{r:255,g:60,b:30},{r:120,g:240,b:255}] },
-  { name: "Ghibli", category: "Cinematic", colors: [{r:160,g:200,b:140},{r:200,g:230,b:240},{r:240,g:200,b:140},{r:160,g:180,b:200},{r:220,g:240,b:200},{r:200,g:160,b:140}] },
+  { name: "Ghibli", category: "Cinematic", colors: [{r:160,g:200,b:140},{r:200,g:230,b:240},{r:160,g:180,b:200},{r:220,g:240,b:200},{r:255,g:253,b:255}] },
   { name: "Pixar", category: "Cinematic", colors: [{r:255,g:200,b:80},{r:80,g:200,b:240},{r:255,g:140,b:120},{r:160,g:240,b:160},{r:255,g:160,b:200},{r:120,g:160,b:240}] },
   { name: "Cyberscape", category: "Cinematic", colors: [{r:30,g:200,b:255},{r:255,g:60,b:200},{r:120,g:30,b:200},{r:30,g:255,b:160},{r:255,g:200,b:30},{r:80,g:80,b:240},{r:200,g:80,b:240}] },
-  { name: "Noir", category: "Cinematic", colors: [{r:200,g:200,b:200},{r:120,g:120,b:120},{r:160,g:160,b:160},{r:240,g:240,b:240}] },
-  { name: "Spaghetti Western", category: "Cinematic", colors: [{r:200,g:160,b:100},{r:160,g:100,b:60},{r:240,g:200,b:140},{r:220,g:180,b:120}] },
   { name: "Studio Ghibli Sky", category: "Cinematic", colors: [{r:140,g:200,b:240},{r:255,g:230,b:200},{r:200,g:240,b:255},{r:255,g:180,b:140}] },
 ];
 

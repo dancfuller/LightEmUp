@@ -436,7 +436,7 @@ function PaletteActionEditor({ action, patchAction, isMobile, label, field, seg,
   const gridStyle = {
     display: "grid",
     // Two columns on a phone rather than one: these are 14px swatch bars, and a
-    // single column would turn a 160-palette library into an endless scroll.
+    // single column would turn a ~150-palette library into an endless scroll.
     gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(auto-fill, minmax(150px, 1fr))",
     gap: 6, maxHeight: isMobile ? 240 : 300, overflowY: "auto",
     padding: 2, borderRadius: 8,

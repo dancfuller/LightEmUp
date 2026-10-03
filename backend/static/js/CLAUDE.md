@@ -489,7 +489,7 @@ Assigns colors/temperatures across a room's devices and applies them.
   re-keyed when a seed is removed). The channel sliders commit on a throttle, so they
   update through a functional `setCustomColors` — a closure over the seed would drop
   a channel changed in between.
-- **Curated palettes are VARIABLE length (4–8) — never pad to a fixed count (v3.13.0).**
+- **Curated palettes are VARIABLE length (3–8; 4–8 until v3.58.0) — never pad to a fixed count (v3.13.0).**
   Every library palette used to be exactly 8 colors, so any theme with fewer real ideas
   was filled out with tints of colors already in it: "Watermelon" was 2 hues across 8
   slots (four reds, four greens), and an audit found near-duplicates in **152 of 160**
@@ -502,6 +502,27 @@ Assigns colors/temperatures across a room's devices and applies them.
   near-neutrals are judged on lightness alone; floor of 4. Deliberately monochromatic
   themes (Cranberry, Noir, Snowfall) are legitimate — they're just shorter now.
   **When adding a palette, list only genuinely distinct colors.**
+- **No brown, tan or gray in a palette — an LED can't show them (v3.58.0).** A bulb
+  shows a color's hue and saturation; darkness is only less light, and the scene sets
+  brightness itself. So brown comes out as plain orange, tan as a washed-out peach, and
+  gray as white. The LED pass replaced brown with a 3000K soft white `[255, 214, 136]`
+  and tan/gray with a white by the palette's intent (that 3000K warm, or 6500K
+  `[255, 253, 255]` cool; gray always cool, so silver can't turn gold). A cream or pale
+  yellow merged into the white a palette GAINED, since they read as the same light;
+  creams elsewhere, pastels, maroon and olive were left alone. 14 palettes that were
+  nothing BUT these colors were dropped (Hot Cocoa, Sahara, Polaroid, Desert, Tundra,
+  Sandstone, Mocha, Driftwood, Stone, Espresso, Wheat, Wes Anderson, Noir, Spaghetti
+  Western), and 3-color palettes became legal so the autumn ones survived.
+  - **The whites are the RGB a Hue bulb actually renders at that Kelvin**, found by
+    searching for the RGB whose xy (via `_rgb_to_hue_xy`) lands on the blackbody point.
+    The usual Tanner-Helland `kelvinToRGB(2200)` = `(255,146,39)` lands at xy (0.579,
+    0.391) on a bulb, which is ORANGE, not 2200K. Don't use `kelvinToRGB` to put a
+    "white" into a palette.
+  - 3000K was chosen over the 2200K first asked for because a true candle white is a
+    deep gold and sat on top of the autumn ambers (10 look-alikes vs 6).
+  - **`tools/build-palette-library.py` enforces it** — `led_problem()` refuses brown,
+    tan and gray, so a new palette can't bring them back. Its thresholds are the ones
+    this pass used; keep them in step.
 - **The library itself moved OUT of this file in v3.17.0.** `paletteLibrary` is now just
   `PALETTE_LIBRARY` from the generated `palette-library.js`, because the scheduler's
   random-palette action needs the same table on the Pi. Add palettes in
@@ -739,7 +760,7 @@ add/edit form; `LocationCard` renders in Settings.
     the button says so.
 - **`palette-library.js` is GENERATED — never hand-edit it.** Source of truth is
   `backend/palette_library.json`; regenerate with `python tools/build-palette-library.py`
-  and commit both. It defines `PALETTE_LIBRARY` (160 palettes, variable 4–8 colors) and
+  and commit both. It defines `PALETTE_LIBRARY` (146 palettes, variable 3–8 colors) and
   `PALETTE_CATEGORIES`, and must load **before** `color-mode.js` and `schedules.js`.
 - **Switching action type REBUILDS the action, it doesn't merge (v3.19.1).**
   `setActionType(type, override)` keeps the target and takes that type's own fields from
