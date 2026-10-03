@@ -1403,9 +1403,19 @@ One entry that turns lights on and later off: "sunset−10 until sunrise+10", or
   Turning lights off late is harmless and still wanted. **If the end action ever becomes
   configurable beyond "off", revisit this** — catching up on a color change hours later is
   exactly what the no-catch-up rule exists to prevent.
-- **Saving clears `end_due`** when the trigger, action or end changes, or when the schedule
-  is disabled — a disabled schedule turning lights off an hour later is unexplainable. A
-  plain rename deliberately does NOT disturb a running span.
+- **Saving clears `end_due` only when what it depends on really CHANGED (v3.58.1)** — or
+  when the schedule is disabled, since a disabled schedule turning lights off an hour
+  later is unexplainable. **The editor sends the whole schedule on every save**, so
+  "present in the request" is not "changed": until v3.58.1 any save cleared it, and
+  editing only the palettes of a running sunset→sunrise schedule silently cancelled its
+  sunrise off (2026-10-02, Exterior On: fired 18:42, armed 07:00, palettes edited 20:26,
+  lights on all morning). Now:
+  - **trigger** changed (compared by value) ⇒ clear `end_due` and `last_fired`;
+  - **action** — only a new *target* (`_schedule_target`: room / zone) clears it; new
+    palettes, a color or a level keep the armed off;
+  - **end** changed while armed ⇒ **re-armed** by `_rearm_end_due` from the span's real
+    start (`last_fired`), rather than dropped; changed while not running ⇒ nothing armed.
+  A rename, a brightness change or a no-op save never disturbs a running span.
 - `end` is three-state in the API (absent = leave alone, object = set, **explicit null =
   remove**), which a plain Optional can't express — `upsert_schedule` reads
   `req.model_fields_set`. The frontend always sends it.

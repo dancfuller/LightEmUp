@@ -7820,6 +7820,32 @@ async def get_schedules():
             "location": config.get("location", {})}
 
 
+def _schedule_target(action) -> tuple:
+    """(room, zone) an action drives — what a schedule's armed off will act on."""
+    action = action or {}
+    return (action.get("room"), action.get("zone"))
+
+
+def _rearm_end_due(sched: dict) -> Optional[str]:
+    """The armed off for a RUNNING span whose end was just changed, measured from
+    the span's real start (`last_fired`). None if that can't be worked out, which
+    simply leaves nothing armed — the old behavior, never something worse."""
+    from datetime import datetime
+    try:
+        started = datetime.strptime(sched["last_fired"], "%Y-%m-%d %H:%M")
+    except (KeyError, TypeError, ValueError):
+        return None
+    try:
+        due = _resolve_end_due(sched, started, config.get("location", {}) or {})
+    except Exception:
+        log.exception("Schedule %r: could not re-arm its end", sched.get("name"))
+        return None
+    if due:
+        log.info("Scheduler: %r's end changed while running — will now turn off at %s",
+                 sched.get("name"), due)
+    return due
+
+
 @app.post("/api/schedules")
 async def upsert_schedule(req: ScheduleRequest):
     """Create or update a schedule. A create needs trigger + action; an update
@@ -7860,18 +7886,35 @@ async def upsert_schedule(req: ScheduleRequest):
             # an hour later is exactly the sort of thing you can't explain.
             if not sched["enabled"]:
                 sched["end_due"] = None
+        # The editor sends the WHOLE schedule back on every save, so "present" is
+        # not "changed" (v3.58.1). Clearing the armed end whenever a field merely
+        # ARRIVED meant that changing only the palettes of a running sunset→sunrise
+        # schedule silently cancelled its sunrise off — 2026-10-02, Exterior On:
+        # fired 18:42, armed 07:00, palettes edited 20:26, lights on all morning.
+        # Each reset now happens only when the thing it depends on really changed.
         if req.trigger is not None:
+            if req.trigger != sched.get("trigger"):
+                sched["last_fired"] = None   # retimed — don't let the old dedupe block it
+                sched["end_due"] = None      # …and the armed end belonged to the old timing
             sched["trigger"] = req.trigger
-            sched["last_fired"] = None   # retimed — don't let the old dedupe block it
-            sched["end_due"] = None      # …and the armed end belonged to the old timing
         if req.action is not None:
             _validate_schedule_action(req.action)
+            if _schedule_target(req.action) != _schedule_target(sched.get("action")):
+                # The armed off would land on a room or zone this schedule no
+                # longer drives. New palettes, a new color or a new level keep it.
+                sched["end_due"] = None
             sched["action"] = req.action
-            sched["end_due"] = None      # the target may have moved
         if end_sent:
             _validate_schedule_end(req.end)
-            sched["end"] = req.end
-            sched["end_due"] = None
+            if req.end != sched.get("end"):
+                sched["end"] = req.end
+                # A span already running gets its off RE-ARMED for the new end,
+                # measured from when it actually started — not dropped, which would
+                # leave the lights on until somebody noticed.
+                if sched.get("end_due") and req.end and sched.get("last_fired"):
+                    sched["end_due"] = _rearm_end_due(sched)
+                else:
+                    sched["end_due"] = None
 
     save_config(config)
     publish_event("config")
