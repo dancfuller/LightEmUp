@@ -295,6 +295,14 @@ Every UI change must work well on both desktop (16:9) and modern phones in portr
 3. **Babel script order matters**: The `<script>` tags in `index.html` must be in dependency order. `utils.js` first (defines hooks, API, color utils), `app.js` last (uses everything).
 4. **config.json is gitignored**: It contains local network IPs and credentials. Always use `config.json.example` as the template.
 5. **Hue bridge pairing**: Requires physical button press on the bridge within 30 seconds of the pair API call.
+6. **Never insert a function between an `@app.…` decorator and its `def` (v3.58.2).** A
+   decorator binds to the NEXT `def`. v3.57.2 put a helper between
+   `@app.post("/api/hue/light")` and `control_hue_light`, so every Hue light card
+   failed with 422 for three days — and nothing else noticed, because scenes,
+   schedules and room controls call `control_hue_light` directly. `_check_routes()`
+   at the end of `main.py` now refuses to start if any `/api` route is bound to a
+   `_private` helper, so the deploy's version check catches it. When adding a helper
+   near an endpoint, put it ABOVE the decorator.
 
 ## Running Locally
 

@@ -3946,7 +3946,6 @@ async def hue_groups():
     return {"groups": groups}
 
 
-@app.post("/api/hue/light")
 def _rgb_to_hue_xy(r: int, g: int, b: int) -> tuple:
     """RGB (0-255) → (Hue xy [x, y], luminance Y 0..1), wide gamut D65.
 
@@ -3968,6 +3967,10 @@ def _rgb_to_hue_xy(r: int, g: int, b: int) -> tuple:
     return [0.3127, 0.3290], Y   # D65 white
 
 
+# The route decorator sits on control_hue_light ITSELF. v3.57.2 inserted the
+# helper above between the two, so FastAPI routed POST /api/hue/light to the
+# helper — every Hue light card failed with 422 for three days (v3.58.2).
+@app.post("/api/hue/light")
 async def control_hue_light(req: HueLightStateRequest):
     ip = config.get("hue_bridge_ip")
     username = config.get("hue_username")
@@ -8514,6 +8517,27 @@ async def serve_frontend():
 
 app.mount("/sounds", StaticFiles(directory=str(STATIC_DIR / "sounds")), name="sounds")
 app.mount("/js", StaticFiles(directory=str(STATIC_DIR / "js")), name="js")
+
+
+def _check_routes():
+    """Refuse to start if an /api route is bound to a private helper (v3.58.2).
+
+    A decorator binds to whatever `def` comes next. v3.57.2 inserted a helper
+    between `@app.post("/api/hue/light")` and `control_hue_light`, so the route
+    went to the helper, and every Hue light card failed with 422 for three days
+    while scenes, schedules and room controls (which call the function directly)
+    kept working, which hid it. Failing at startup instead makes the deploy's
+    own version check catch it in seconds."""
+    bad = [f"{getattr(r, 'path', '?')} -> {r.endpoint.__name__}"
+           for r in app.routes
+           if getattr(r, "path", "").startswith("/api/")
+           and getattr(getattr(r, "endpoint", None), "__name__", "").startswith("_")]
+    if bad:
+        raise RuntimeError("Route bound to a private helper (a misplaced @app "
+                           "decorator?): " + "; ".join(bad))
+
+
+_check_routes()
 
 
 if __name__ == "__main__":
