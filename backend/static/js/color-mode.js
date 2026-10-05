@@ -2616,7 +2616,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
                   const q = paletteSearch.trim().toLowerCase();
                   const filtered = paletteLibrary.filter((p) => {
                     if (paletteCategory === "Featured" && !p.featured) return false;
-                    if (paletteCategory !== "Featured" && paletteCategory !== "All" && p.category !== paletteCategory) return false;
+                    if (paletteCategory !== "Featured" && paletteCategory !== "All" && !paletteInCategory(p, paletteCategory)) return false;
                     if (q && !p.name.toLowerCase().includes(q) && !p.category.toLowerCase().includes(q)) return false;
                     return true;
                   });

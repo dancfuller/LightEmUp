@@ -1153,6 +1153,9 @@
   {
    "name": "Christmas",
    "category": "Holidays",
+   "also": [
+    "Winter"
+   ],
    "featured": true,
    "colors": [
     [
@@ -1185,6 +1188,9 @@
   {
    "name": "Hanukkah",
    "category": "Holidays",
+   "also": [
+    "Winter"
+   ],
    "colors": [
     [
      65,
@@ -1216,6 +1222,9 @@
   {
    "name": "New Year",
    "category": "Holidays",
+   "also": [
+    "Winter"
+   ],
    "colors": [
     [
      255,
@@ -1237,6 +1246,9 @@
   {
    "name": "Halloween",
    "category": "Holidays",
+   "also": [
+    "Autumn"
+   ],
    "featured": true,
    "colors": [
     [
@@ -1264,6 +1276,9 @@
   {
    "name": "Valentine's",
    "category": "Holidays",
+   "also": [
+    "Winter"
+   ],
    "colors": [
     [
      255,
@@ -1290,6 +1305,9 @@
   {
    "name": "Fourth of July",
    "category": "Holidays",
+   "also": [
+    "Summer"
+   ],
    "colors": [
     [
      220,
@@ -1321,6 +1339,9 @@
   {
    "name": "St. Patrick's",
    "category": "Holidays",
+   "also": [
+    "Spring"
+   ],
    "colors": [
     [
      30,
@@ -1352,6 +1373,9 @@
   {
    "name": "Day of the Dead",
    "category": "Holidays",
+   "also": [
+    "Autumn"
+   ],
    "colors": [
     [
      255,
@@ -1388,6 +1412,9 @@
   {
    "name": "Diwali",
    "category": "Holidays",
+   "also": [
+    "Autumn"
+   ],
    "colors": [
     [
      255,
@@ -1414,6 +1441,9 @@
   {
    "name": "Lunar New Year",
    "category": "Holidays",
+   "also": [
+    "Winter"
+   ],
    "colors": [
     [
      220,

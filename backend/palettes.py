@@ -52,6 +52,9 @@ def _load():
             clean.append({
                 "name": p["name"],
                 "category": p.get("category") or "Other",
+                # Extra categories it is ALSO offered under (v3.58.3): a holiday
+                # in its season. See in_category.
+                "also": [a for a in (p.get("also") or []) if isinstance(a, str)],
                 "featured": bool(p.get("featured")),
                 "colors": colors,
             })
@@ -82,7 +85,10 @@ def in_category(category: str) -> list[dict]:
         return list(PALETTES)
     if category == "Featured":
         return [p for p in PALETTES if p["featured"]]
-    return [p for p in PALETTES if p["category"] == category]
+    # Its home category, or one it is ALSO listed under (v3.58.3) — so "a random
+    # Autumn palette" can draw Halloween. Mirrors paletteInCategory() in utils.js;
+    # the editor previews exactly the set the Pi will choose from.
+    return [p for p in PALETTES if p["category"] == category or category in p["also"]]
 
 
 def resolve_candidates(action: dict) -> list[dict]:

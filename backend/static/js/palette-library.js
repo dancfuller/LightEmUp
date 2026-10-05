@@ -8,7 +8,10 @@
 // v3.17.0; two copies of 740 colors would
 // drift the first time someone added a palette, so both sides now read one file.
 //
-// Colors are VARIABLE length (4-8) and deliberately so — see the notes in
+// A palette's `also` lists categories it is ALSO offered under (a holiday in its
+// season). Filter with paletteInCategory() in utils.js, never `p.category === x`.
+//
+// Colors are VARIABLE length (3-8) and deliberately so — see the notes in
 // color-mode.js: padding every palette to a fixed 8 was what produced "one light
 // is just a paler version of that other one".
 const PALETTE_LIBRARY = [
@@ -56,16 +59,16 @@ const PALETTE_LIBRARY = [
   { name: "Sleigh Ride", category: "Winter", colors: [{r:200,g:60,b:60},{r:240,g:240,b:240},{r:60,g:120,b:60},{r:180,g:200,b:230}] },
   { name: "Crystal Cave", category: "Winter", colors: [{r:180,g:200,b:240},{r:140,g:160,b:220},{r:120,g:140,b:200},{r:220,g:240,b:255}] },
   // Holidays
-  { name: "Christmas", category: "Holidays", featured: true, colors: [{r:220,g:20,b:20},{r:0,g:120,b:0},{r:218,g:165,b:0},{r:240,g:240,b:240},{r:0,g:80,b:30}] },
-  { name: "Hanukkah", category: "Holidays", colors: [{r:65,g:105,b:225},{r:135,g:206,b:235},{r:255,g:255,b:255},{r:30,g:60,b:160},{r:220,g:220,b:220}] },
-  { name: "New Year", category: "Holidays", colors: [{r:255,g:215,b:0},{r:255,g:253,b:255},{r:184,g:115,b:51}] },
-  { name: "Halloween", category: "Holidays", featured: true, colors: [{r:255,g:140,b:0},{r:140,g:60,b:200},{r:90,g:30,b:120},{r:200,g:60,b:0}] },
-  { name: "Valentine's", category: "Holidays", colors: [{r:255,g:60,b:120},{r:200,g:30,b:80},{r:255,g:180,b:200},{r:240,g:200,b:220}] },
-  { name: "Fourth of July", category: "Holidays", colors: [{r:220,g:30,b:30},{r:240,g:240,b:240},{r:30,g:60,b:200},{r:255,g:80,b:80},{r:80,g:120,b:240}] },
-  { name: "St. Patrick's", category: "Holidays", colors: [{r:30,g:160,b:80},{r:80,g:200,b:80},{r:140,g:220,b:140},{r:200,g:240,b:160},{r:255,g:215,b:0}] },
-  { name: "Day of the Dead", category: "Holidays", colors: [{r:255,g:140,b:0},{r:255,g:30,b:160},{r:120,g:30,b:200},{r:255,g:230,b:80},{r:30,g:200,b:160},{r:200,g:30,b:80}] },
-  { name: "Diwali", category: "Holidays", colors: [{r:255,g:180,b:30},{r:255,g:60,b:80},{r:200,g:60,b:160},{r:255,g:120,b:30}] },
-  { name: "Lunar New Year", category: "Holidays", colors: [{r:220,g:30,b:30},{r:255,g:215,b:0},{r:255,g:80,b:80},{r:255,g:160,b:60},{r:255,g:230,b:120}] },
+  { name: "Christmas", category: "Holidays", also: ["Winter"], featured: true, colors: [{r:220,g:20,b:20},{r:0,g:120,b:0},{r:218,g:165,b:0},{r:240,g:240,b:240},{r:0,g:80,b:30}] },
+  { name: "Hanukkah", category: "Holidays", also: ["Winter"], colors: [{r:65,g:105,b:225},{r:135,g:206,b:235},{r:255,g:255,b:255},{r:30,g:60,b:160},{r:220,g:220,b:220}] },
+  { name: "New Year", category: "Holidays", also: ["Winter"], colors: [{r:255,g:215,b:0},{r:255,g:253,b:255},{r:184,g:115,b:51}] },
+  { name: "Halloween", category: "Holidays", also: ["Autumn"], featured: true, colors: [{r:255,g:140,b:0},{r:140,g:60,b:200},{r:90,g:30,b:120},{r:200,g:60,b:0}] },
+  { name: "Valentine's", category: "Holidays", also: ["Winter"], colors: [{r:255,g:60,b:120},{r:200,g:30,b:80},{r:255,g:180,b:200},{r:240,g:200,b:220}] },
+  { name: "Fourth of July", category: "Holidays", also: ["Summer"], colors: [{r:220,g:30,b:30},{r:240,g:240,b:240},{r:30,g:60,b:200},{r:255,g:80,b:80},{r:80,g:120,b:240}] },
+  { name: "St. Patrick's", category: "Holidays", also: ["Spring"], colors: [{r:30,g:160,b:80},{r:80,g:200,b:80},{r:140,g:220,b:140},{r:200,g:240,b:160},{r:255,g:215,b:0}] },
+  { name: "Day of the Dead", category: "Holidays", also: ["Autumn"], colors: [{r:255,g:140,b:0},{r:255,g:30,b:160},{r:120,g:30,b:200},{r:255,g:230,b:80},{r:30,g:200,b:160},{r:200,g:30,b:80}] },
+  { name: "Diwali", category: "Holidays", also: ["Autumn"], colors: [{r:255,g:180,b:30},{r:255,g:60,b:80},{r:200,g:60,b:160},{r:255,g:120,b:30}] },
+  { name: "Lunar New Year", category: "Holidays", also: ["Winter"], colors: [{r:220,g:30,b:30},{r:255,g:215,b:0},{r:255,g:80,b:80},{r:255,g:160,b:60},{r:255,g:230,b:120}] },
   // Warm
   { name: "Warm", category: "Warm", colors: [{r:255,g:80,b:40},{r:255,g:160,b:30},{r:200,g:60,b:60},{r:218,g:165,b:32}] },
   { name: "Sunset", category: "Warm", featured: true, colors: [{r:255,g:94,b:77},{r:255,g:154,b:0},{r:255,g:206,b:84},{r:200,g:50,b:100},{r:255,g:180,b:120},{r:255,g:130,b:160}] },

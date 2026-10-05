@@ -502,6 +502,17 @@ Assigns colors/temperatures across a room's devices and applies them.
   near-neutrals are judged on lightness alone; floor of 4. Deliberately monochromatic
   themes (Cranberry, Noir, Snowfall) are legitimate — they're just shorter now.
   **When adding a palette, list only genuinely distinct colors.**
+- **A palette can be listed in a second category: `also` (v3.58.3).** Each holiday
+  palette keeps `category: "Holidays"` and is ALSO offered in its season — Halloween,
+  Day of the Dead and Diwali under Autumn; Christmas, Hanukkah, New Year, Lunar New
+  Year and Valentine's under Winter; Fourth of July under Summer; St. Patrick's under
+  Spring. It is one palette with one name, never a copy, because names are what
+  schedules store. **Every category filter goes through `paletteInCategory(p, cat)`**
+  (utils.js) — the Scenes picker, `light-scene.js`, and `palettesFor` (schedule editor +
+  light show panel) — and the Pi's `palettes.in_category` applies the same rule, so a
+  schedule drawing "a random Autumn palette" can pick Halloween. "All" still lists each
+  palette once. The build script checks every `also` names a real category other than
+  the palette's own.
 - **No brown, tan or gray in a palette — an LED can't show them (v3.58.0).** A bulb
   shows a color's hue and saturation; darkness is only less light, and the scene sets
   brightness itself. So brown comes out as plain orange, tan as a washed-out peach, and

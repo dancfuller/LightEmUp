@@ -110,10 +110,37 @@ def verify(palettes: list):
     cats = {}
     for p in palettes:
         cats.setdefault(p["category"], []).append(p["name"])
+
+    # `also` (v3.58.3): extra categories a palette is ALSO listed under — a holiday
+    # in its season, e.g. Halloween under Autumn. One palette, one name, two homes;
+    # never a copy, because names are what schedules store.
+    also_problems = []
+    for p in palettes:
+        also = p.get("also")
+        if also is None:
+            continue
+        if not isinstance(also, list) or not all(isinstance(a, str) for a in also):
+            also_problems.append(f"{p['name']}: 'also' must be a list of category names")
+            continue
+        for a in also:
+            if a not in cats:
+                also_problems.append(f"{p['name']}: also {a!r} is not a category")
+            elif a == p["category"]:
+                also_problems.append(f"{p['name']}: also {a!r} is its own category")
+    if also_problems:
+        for pr in also_problems:
+            print(f"  - {pr}", file=sys.stderr)
+        fail(f"{len(also_problems)} problem(s) with 'also' — nothing was written")
+
+    guests = {}
+    for p in palettes:
+        for a in p.get("also") or []:
+            guests.setdefault(a, []).append(p["name"])
     print(f"OK  {len(palettes)} palettes in {len(cats)} categories, "
           f"{sum(len(p['colors']) for p in palettes)} colors total")
     for cat, members in cats.items():
-        print(f"    {cat:<12} {len(members):>3}")
+        extra = f"  + {len(guests[cat])} also: {', '.join(guests[cat])}" if cat in guests else ""
+        print(f"    {cat:<12} {len(members):>3}{extra}")
     featured = [p["name"] for p in palettes if p.get("featured")]
     print(f"    featured: {len(featured)}")
 
@@ -142,8 +169,9 @@ def emit(palettes: list, cats: dict) -> str:
             last_cat = p["category"]
         colors = ",".join("{r:%d,g:%d,b:%d}" % tuple(c) for c in p["colors"])
         feat = " featured: true," if p.get("featured") else ""
-        rows.append('  { name: %s, category: %s,%s colors: [%s] },'
-                    % (json.dumps(p["name"]), json.dumps(p["category"]), feat, colors))
+        also = (" also: %s," % json.dumps(p["also"])) if p.get("also") else ""
+        rows.append('  { name: %s, category: %s,%s%s colors: [%s] },'
+                    % (json.dumps(p["name"]), json.dumps(p["category"]), also, feat, colors))
 
     cat_list = ", ".join(json.dumps(c) for c in cats)
     return f"""// GENERATED FILE — do not edit by hand.
@@ -156,7 +184,10 @@ def emit(palettes: list, cats: dict) -> str:
 // v3.17.0; two copies of {sum(len(p['colors']) for p in palettes)} colors would
 // drift the first time someone added a palette, so both sides now read one file.
 //
-// Colors are VARIABLE length (4-8) and deliberately so — see the notes in
+// A palette's `also` lists categories it is ALSO offered under (a holiday in its
+// season). Filter with paletteInCategory() in utils.js, never `p.category === x`.
+//
+// Colors are VARIABLE length (3-8) and deliberately so — see the notes in
 // color-mode.js: padding every palette to a fixed 8 was what produced "one light
 // is just a paler version of that other one".
 const PALETTE_LIBRARY = [

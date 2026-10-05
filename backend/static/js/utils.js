@@ -685,6 +685,17 @@ function generateTonalShades(baseR, baseG, baseB, count) {
   return shades;
 }
 
+// ─── Palette categories ─────────────────────────────────────────────────────
+// Is palette `p` listed under category `cat`? Its home `category`, or one of the
+// extra categories in `also` (v3.58.3) — a holiday is ALSO offered in its season,
+// so Halloween shows under Holidays and under Autumn. It is one palette with one
+// name, not a copy: names are what schedules store. Every category filter goes
+// through this; `p.category === cat` would silently drop the guests. The Pi's
+// palettes.in_category applies the same rule.
+function paletteInCategory(p, cat) {
+  return p.category === cat || (Array.isArray(p.also) && p.also.includes(cat));
+}
+
 // ─── Color Temperature (white) Utilities ────────────────────────────────────
 
 // User-facing tunable-white range. 2000K = candle warm, 6500K = cool daylight.

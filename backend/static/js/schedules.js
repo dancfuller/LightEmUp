@@ -53,7 +53,7 @@ function palettesFor(filter) {
   const lib = typeof PALETTE_LIBRARY !== "undefined" ? PALETTE_LIBRARY : [];
   if (filter === "All") return lib;
   if (filter === "Featured") return lib.filter(p => p.featured);
-  return lib.filter(p => p.category === filter);
+  return lib.filter(p => paletteInCategory(p, filter));
 }
 
 // The set a palette action will draw from — the browser's mirror of the

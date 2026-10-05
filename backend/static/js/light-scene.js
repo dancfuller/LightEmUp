@@ -434,7 +434,7 @@ function LightScenePanel({ light, segCount, segmentColors, segmentInfo, nickname
               if (q) return p.name.toLowerCase().includes(q);
               if (paletteCategory === "All") return true;
               if (paletteCategory === "Featured") return !!p.featured;
-              return p.category === paletteCategory;
+              return paletteInCategory(p, paletteCategory);
             }).map(p => (
               <button key={p.name} onClick={() => setPaletteName(p.name)}
                 style={{
