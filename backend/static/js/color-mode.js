@@ -663,7 +663,7 @@ function PresetPicker({ items, value, onChange, placeholder, isMobile,
   );
 }
 
-function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlGovee, favorites, onFavoritesChange, nicknames, segmentInfo, roomLayouts, fixtures, onApply, onScheduleLook, minSatEnabled, minSatPct, segmentFillModes, onSegmentFillModeChange, sceneAddress, onSceneAddressChange, savedColorState, lightshow, lightshowPatterns, onLightshowSave, lastApplied }) {
+function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlGovee, favorites, onFavoritesChange, nicknames, segmentInfo, roomLayouts, fixtures, onApply, onScheduleLook, minSatEnabled, minSatPct, segmentFillModes, onSegmentFillModeChange, sceneAddress, onSceneAddressChange, savedColorState, lightshow, lightshowPatterns, onLightshowSave, lastApplied, excluded = [] }) {
   const isMobile = useIsMobile();
   const [mode, setMode] = useState("palette"); // "palette" | "gradient" | "tonal" | "custom" | "beacon"
   // Color space: "color" (RGB, the default) or "white" (tunable color temperature).
@@ -3144,14 +3144,18 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
                     // the color the palette picked for it — outline it in amber
                     // so a run of identical swatches is visibly deliberate.
                     const filled = !!sm && (segmentFillModes?.[lk] || "follow") !== "follow";
+                    // EXCLUDED (v3.59.0): Apply will skip this light — the backend
+                    // drops it from the plan — so show it faded and say so.
+                    const isExcluded = excluded.includes(lk);
                     const bn = getDeviceLabel(lightMap[lk], nicknames);
                     const letter = sm ? String.fromCharCode(65 + parseInt(sm[2])) : null;
                     const label = sm ? `${bn.split(" ")[0]} ${letter}` : bn;
                     return (
-                      <div key={key} title={sm
+                      <div key={key} title={(sm
                         ? `${bn} — Segment ${letter}${filled ? ` (Scene fill: ${fillModeFor(segmentFillModes[lk]).label})` : ""}`
-                        : bn}
-                        style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3, cursor: "default" }}>
+                        : bn) + (isExcluded ? " — excluded: keeps its current look" : "")}
+                        style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3, cursor: "default",
+                                 opacity: isExcluded ? 0.3 : 1 }}>
                         <div style={{ position: "relative", width: 40, height: 40 }}>
                           <div style={{
                             width: 40, height: 40, borderRadius: sm ? 6 : 8,
@@ -3176,12 +3180,23 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
                           )}
                         </div>
                         <span style={{ fontSize: 9, color: "#94a3b8", maxWidth: 46, textAlign: "center", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {label}
+                          {isExcluded ? "excluded" : label}
                         </span>
                       </div>
                     );
                   })}
               </div>
+              {(() => {
+                const n = new Set(Object.keys(preview)
+                  .map(k => { const m = k.match(/^(.+):seg\d+$/); return m ? m[1] : k; })
+                  .filter(k => excluded.includes(k))).size;
+                return n > 0 && (
+                  <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 6, lineHeight: 1.4 }}>
+                    {n} excluded {n === 1 ? "light keeps its" : "lights keep their"} current look —
+                    Apply skips {n === 1 ? "it" : "them"}. Release them in the room header.
+                  </div>
+                );
+              })()}
               {/* The swatches can't speak for themselves: fifteen identical ones
                   look like a broken palette until you know a per-device setting
                   did that. Name the devices and point back at the control. */}

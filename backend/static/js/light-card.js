@@ -1,6 +1,6 @@
 // ─── Light Card Component ───────────────────────────────────────────────────
 
-function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, onNicknameChange, roomName, segmentColors, segmentInfo, segmentBrightness, onSegmentStateRefresh, controlMode, onControlModeChange, segmentFillMode, onSegmentFillModeChange, onSegmentCountChange, ctCorrection, onRecheck, isFavorite, onToggleFavorite }) {
+function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, onNicknameChange, roomName, segmentColors, segmentInfo, segmentBrightness, onSegmentStateRefresh, controlMode, onControlModeChange, segmentFillMode, onSegmentFillModeChange, onSegmentCountChange, ctCorrection, onRecheck, isFavorite, onToggleFavorite, excluded, onToggleExclude }) {
   const isMobile = useIsMobile();
   // An UNKNOWN level is unknown for both vendors (v3.51.6). It read as 0% for Hue
   // and 50% for Govee: two different, confident numbers for the same "we don't
@@ -121,7 +121,9 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
         ? "linear-gradient(135deg, #2c3a55 0%, #1a2438 100%)"
         : "linear-gradient(135deg, #0c1322 0%, #060a14 100%)",
       borderRadius: 16, padding: isMobile ? 14 : 20,
-      border: isOn ? "1px solid #4f5d7a" : "1px solid #1e293b",
+      // An EXCLUDED light (v3.59.0) wears a dashed border, so a card that will
+      // ignore the room's next look says so before you press anything.
+      border: excluded ? "1px dashed #64748b" : isOn ? "1px solid #4f5d7a" : "1px solid #1e293b",
       boxShadow: isOn ? "0 0 0 1px rgba(99,102,241,0.18), 0 6px 18px rgba(99,102,241,0.10)" : "none",
       opacity: isReachable ? 1 : 0.5, transition: "all 0.2s ease",
     }}>
@@ -245,6 +247,35 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
           }} />
         </button>
       </div>
+
+      {/* Exclude from the room's looks (v3.59.0). Only where the card sits in a
+          ROOM (the room view passes onToggleExclude; All Lights and Favorites
+          don't, since there's no room look there to be excluded from). Its own
+          row: the header is already name + star + power. */}
+      {onToggleExclude && (
+        <div style={{
+          display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
+          marginTop: -4, marginBottom: 10,
+        }}>
+          <button onClick={(e) => { e.stopPropagation(); onToggleExclude(); }}
+            aria-pressed={!!excluded}
+            title={excluded
+              ? "Include this light in the room's looks again"
+              : "Exclude: keep this light as it is when the room's look changes (power and schedules still reach it)"}
+            style={{
+              padding: isMobile ? "5px 10px" : "3px 9px", borderRadius: 6, cursor: "pointer",
+              border: `1px solid ${excluded ? "#94a3b8" : "#334155"}`,
+              background: excluded ? "rgba(148,163,184,0.16)" : "transparent",
+              color: excluded ? "#e2e8f0" : "#64748b",
+              fontSize: 11, fontWeight: 600, whiteSpace: "nowrap",
+            }}>{excluded ? "Excluded ✓" : "Exclude"}</button>
+          {excluded && (
+            <span style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.35, flex: "1 1 160px", minWidth: 0 }}>
+              Keeps its look when the room changes.
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Live scene status, directly under the name. Deliberately OUTSIDE the
           scene panel and outside the segments gate — it's the one thing about

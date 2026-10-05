@@ -351,6 +351,10 @@ All endpoints are under `/api/`. Key groups:
   refreshes with the live `/api/discover/govee` in the background)
 - `/api/hue/light`, `/api/govee/control` — individual device control
 - `/api/rooms`, `/api/rooms/control` — room CRUD and bulk control
+- `/api/rooms/exclude`, `/api/rooms/exclude/clear` — a room's **excluded** lights
+  (v3.59.0, config key `room_excluded`): its looks (scenes, whites, colors, the room
+  level, zones, light shows) leave them alone; power and **schedules** still reach
+  them; turning the room off clears them. See `backend/CLAUDE.md` "Excluded lights"
 - `/api/rooms/white` — set a whole room to a white temperature (the Soft White /
   Cool White header buttons). Same `_apply_room_white` the scheduler uses, so a
   scheduled 2700K and a button press are one code path (v3.43.0)

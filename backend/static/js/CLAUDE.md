@@ -1078,6 +1078,22 @@ the surface row, since adding one later hit the identical wall.
   "assigned" means. If you change one, change the other (or fold them together).
 - Both affordances hide when nothing is unassigned — an empty picker is a dead end.
 
+## Excluded lights in the room UI (v3.59.0)
+Each light card in a ROOM view has an **Exclude** toggle (its own slim row under
+the header; `excluded` + `onToggleExclude` props — All Lights and Favorites don't
+pass them, so the row never appears there). An excluded card wears a dashed border.
+The room header shows **"N excluded · names · Release"** under "Now showing", outside
+the collapsed gate, because a light that quietly ignores Soft White reads as broken.
+The Scenes preview fades excluded lights' swatches, labels them "excluded", and says
+Apply skips them; the Light Show panel lists them as "excluded in the room".
+- `roomExcluded` in app.js is a DISPLAY copy of `config.room_excluded`; the backend
+  owns the rule (see `backend/CLAUDE.md` "Excluded lights"). `controlRoom`'s optimistic
+  update mirrors it — a color or level leaves excluded cards alone, an off clears the
+  room's list — so the cards don't flash a change that never happened.
+- Nothing in the browser filters a scene plan: `buildScenePlan` still covers the whole
+  room (so "Schedule this look" captures every light) and the backend drops excluded
+  lights at apply time.
+
 ## room-section.js — the room header row (v3.25.0)
 Name · light count · **Soft White · Cool White · brightness · power**, all on one line.
 The white presets used to sit in a separate "Set room to" block two rows down, which put

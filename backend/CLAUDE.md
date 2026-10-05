@@ -2057,6 +2057,44 @@ lights and now brought back the whole room. The check is what makes that safe.
   **When writing a pattern test, don't let the ring/stripe index alias against the palette
   length** (a distance of 3 against a 3-color palette passes for the wrong reason).
 
+## Excluded lights (v3.59.0)
+"Keep the globe, hexa and rope on my custom colors; put the rest of the living
+room on Incandescent." `config["room_excluded"][room]` is a list of device keys
+(`hue:<id>`, `govee:<slug>`) that the room's LOOKS leave alone. The whole rule
+lives in the helpers above `_apply_room_white`; every path asks them:
+
+| Path | Excluded lights |
+|---|---|
+| Soft / Cool White, room color (`_apply_room_white` / `_apply_room_color`) | skipped |
+| Controls color, room level (`control_room` with r/g/b or brightness) | skipped |
+| Scenes, "Set here", "Try one now", zone buttons (`_run_scene_apply`) | skipped — filtered ONCE at its top by `_filter_plan_excluded` |
+| Light shows (`_lightshow_cells`) | left out, like the show's own `exclude` |
+| Room **on / resume / off** (`control_room`, power only) | **reached** |
+| Anything with `source == "schedule"` | **reached** — `_honors_exclusions` |
+
+- **Off clears them** (`_clear_room_excluded`, in `control_room` on `on: False` —
+  which covers the room toggle, All lights off, zones and scheduled offs). The
+  design is "for tonight": a forgotten exclusion can't silently block next week's
+  looks.
+- **A scene plan is filtered on the backend**, not in the browser, so every way of
+  applying a look gets the same rule, and "Schedule this look" still captures the
+  whole room. The stored payload is the FILTERED one, so `_scene_look_state` filters
+  the panel's full plan the same way before fingerprinting (a `model_copy`, never the
+  caller's object) — otherwise "Start Light Show" would never match after an apply
+  with exclusions.
+- **"Now showing" says so**: `record_room_applied` adds `excluded: N` to a scene /
+  white / color record made while any of the room's lights were excluded (never for
+  a schedule or a power record), and the header renders "· N excluded".
+- Govee entries in a plan are matched by `gv_key_for_ip(ip, mac)`, so a mac's case
+  or a changed DHCP address can't let an excluded light through.
+- `POST /api/rooms/exclude {room_name, key, excluded}` (refuses a key that isn't in
+  the room) and `POST /api/rooms/exclude/clear {room_name}` (the header's Release).
+- Config-key checklist: declared in `DEFAULT_CONFIG`, in `_SETTING_INTERNAL` (runtime
+  state, not a backed-up choice), carried by `rename_room` and dropped by
+  `delete_room`; served in `/api/config`.
+- **Word clash, deliberately left:** the light show's own `exclude` field is a
+  different list ("Which lights move" in its panel). Neither shows the other's word.
+
 ## Whole-room actions belong on the backend (v3.43.0)
 Three controls used to fan out **from the browser** — one HTTP request per light,
 all issued in the same tick, fire-and-forget: **Soft White**, **Cool White**, and

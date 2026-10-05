@@ -171,6 +171,13 @@ function RoomLastApplied({ entry, status, onReapply, isMobile, applying }) {
         textDecoration: diverged ? "line-through" : "none",
         minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
       }}>{entry.label}</span>
+      {/* The look skipped the room's excluded lights when it was applied
+          (v3.59.0), so it doesn't describe the whole room. */}
+      {entry.excluded > 0 && (
+        <span style={{ fontSize: isMobile ? 10 : 11, color: "#94a3b8", whiteSpace: "nowrap" }}>
+          · {entry.excluded} excluded
+        </span>
+      )}
 
       {/* The call to action. Divergence is nearly always a routine elsewhere
           forcing a plain color temperature, and what you want is your look
@@ -289,7 +296,7 @@ function ControlSurface({ view, views, onView, onClose, roomName, isMobile, chil
   );
 }
 
-function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGovee, onControlRoom, favorites, onFavoritesChange, nicknames, onNicknameChange, lightningActive, onLightningStart, onLightningStop, segmentInfo, segmentState, onSegmentStateRefresh, deviceModes, onDeviceModeChange, onDeviceModesBulkChange, sceneAddress, onSceneAddressChange, unassignedDevices, onAssignDevices, onNavigate, segmentFillModes, onSegmentFillModeChange, onSegmentCountChange, roomLayouts, onLayoutChange, fixtures, onFixtureUpsert, onFixtureDelete, minSatEnabled, minSatPct, savedColorState, ctCorrection, onScheduleLook, lastApplied, lastStatus, onReapply, onRecheck, onRoomWhite, lightshow, lightshowPatterns, onLightshowSave, onLightshowStep }) {
+function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGovee, onControlRoom, favorites, onFavoritesChange, nicknames, onNicknameChange, lightningActive, onLightningStart, onLightningStop, segmentInfo, segmentState, onSegmentStateRefresh, deviceModes, onDeviceModeChange, onDeviceModesBulkChange, sceneAddress, onSceneAddressChange, unassignedDevices, onAssignDevices, onNavigate, segmentFillModes, onSegmentFillModeChange, onSegmentCountChange, roomLayouts, onLayoutChange, fixtures, onFixtureUpsert, onFixtureDelete, minSatEnabled, minSatPct, savedColorState, ctCorrection, onScheduleLook, lastApplied, lastStatus, onReapply, onRecheck, onRoomWhite, lightshow, lightshowPatterns, onLightshowSave, onLightshowStep, excluded = [], onToggleExclude, onReleaseExcluded }) {
   const isMobile = useIsMobile();
   const [collapsed, setCollapsed] = useState(true);
   // Single overlay surface state — replaces the old per-panel show* booleans.
@@ -587,6 +594,7 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
         savedColorState={savedColorState}
         lightshow={lightshow}
         lightshowPatterns={lightshowPatterns}
+        excluded={excluded}
         // Stop / switch pattern from the Scenes panel, and the room record the
         // panel re-checks "is this look already on?" against (v3.56.0).
         onLightshowSave={onLightshowSave ? (patch) => onLightshowSave(name, patch) : null}
@@ -701,6 +709,41 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
         <RoomLastApplied entry={lastApplied} status={lastStatus} applying={applying}
           onReapply={onReapply ? () => onReapply(name) : null} isMobile={isMobile} />
 
+        {/* EXCLUDED lights (v3.59.0) keep what they're showing while the rest of
+            the room changes. Said in the header, OUTSIDE the collapsed gate,
+            because a light that quietly ignores Soft White reads as broken.
+            Power and schedules still reach them; the room going off clears them. */}
+        {excluded.length > 0 && (() => {
+          const names = allLights
+            .filter(l => excluded.includes(l.type === "hue" ? `hue:${l.id}` : `govee:${goveeSlug(l)}`))
+            .map(l => { const d = getDeviceDisplayName(l, nicknames); return d.nickname || d.friendlyName; });
+          return (
+            <div title="These lights keep what they're showing when you change the room's look. Turning the room off, or Release, brings them back."
+              style={{
+                display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
+                padding: isMobile ? "6px 9px" : "6px 11px", borderRadius: 9,
+                background: "rgba(15,27,46,0.75)", border: "1px dashed #475569",
+              }}>
+              <span style={{
+                fontSize: 9, fontWeight: 700, letterSpacing: 0.7, textTransform: "uppercase",
+                color: "#94a3b8",
+              }}>{excluded.length} excluded</span>
+              <span style={{
+                fontSize: isMobile ? 11 : 12, color: "#cbd5e1", minWidth: 0, flex: "1 1 120px",
+                overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+              }}>{names.join(", ")}</span>
+              {onReleaseExcluded && (
+                <button onClick={(e) => { e.stopPropagation(); onReleaseExcluded(); }}
+                  style={{
+                    padding: isMobile ? "5px 10px" : "3px 9px", borderRadius: 6,
+                    border: "1px solid #475569", background: "transparent",
+                    color: "#cbd5e1", fontSize: 11, fontWeight: 600, cursor: "pointer",
+                  }}>Release</button>
+              )}
+            </div>
+          );
+        })()}
+
         {/* Surface openers */}
         <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 6 : 8, flexWrap: "wrap" }}>
           {openerBtn("lightning", lightningActive ? "⚡ Storm" : "⚡ Lightning", lightningActive ? "#fbbf24" : "#94a3b8")}
@@ -813,6 +856,9 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
               <LightCard
                 key={`${light.type}-${light.id || light.ip}-${i}`}
                 light={light}
+                excluded={excluded.includes(devKey)}
+                onToggleExclude={onToggleExclude && isRealRoom
+                  ? () => onToggleExclude(devKey, !excluded.includes(devKey)) : null}
                 onControl={(l, cmd) => {
                   l._controlFn(l, cmd);
                   if (l.type === "govee" && onSegmentStateRefresh &&

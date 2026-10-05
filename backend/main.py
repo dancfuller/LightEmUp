@@ -187,6 +187,12 @@ DEFAULT_CONFIG = {
                                  # never be what switches a light on.
     # One-shot marker for migrate_lightshow_segments (v3.55.0), not a setting.
     "lightshow_segments_reset": False,
+    "room_excluded": {},         # room name → device keys EXCLUDED from that room's
+                                 # whole-room looks (v3.59.0): scenes, whites, colors,
+                                 # the room level, zones and light shows skip them;
+                                 # power and SCHEDULES never do. Cleared when the room
+                                 # is turned off — "leave these alone for tonight".
+                                 # Runtime state, so it's in _SETTING_INTERNAL.
     "lightshows": {},            # room name → the room's ambient lightshow (v3.39.0):
                                  #   { enabled, pattern, interval_s, brightness, segments,
                                  #     source, palettes, colors, exclude, + per-pattern opts }
@@ -1136,6 +1142,55 @@ def _white_label(kelvin: int) -> str:
     return f"White · {kelvin}K"
 
 
+# ─── Excluded lights (v3.59.0) ──────────────────────────────────────────────
+# A room's EXCLUDED lights keep whatever they're showing while the rest of the
+# room changes: "keep the globe, hexa and rope on my custom colors, put the rest
+# of the living room on Incandescent". One rule, applied here and nowhere else:
+#   - every whole-room LOOK skips them — scenes, whites, colors, the room level,
+#     zone buttons, "Set here", light shows;
+#   - POWER never does: "living room off" at bedtime turns everything off;
+#   - SCHEDULES never do: a schedule sets every light, so what it does stays
+#     predictable;
+#   - turning the room OFF clears them ("for tonight"), so a forgotten exclusion
+#     can't quietly block next week's looks.
+
+def _room_excluded(room_name: str) -> set:
+    """Device keys ("hue:12", "govee:<slug>") excluded in this room."""
+    return set((config.get("room_excluded", {}) or {}).get(room_name) or [])
+
+
+def _honors_exclusions(source: Optional[str]) -> bool:
+    """Everything except a schedule leaves excluded lights alone."""
+    return (source or "app") != "schedule"
+
+
+def _clear_room_excluded(room_name: str, reason: str) -> bool:
+    store = config.get("room_excluded", {}) or {}
+    if not store.get(room_name):
+        return False
+    store.pop(room_name, None)
+    schedule_save()
+    publish_event("config")
+    log.info("Room %r: exclusions cleared (%s)", room_name, reason)
+    return True
+
+
+def _filter_plan_excluded(req, excluded: set) -> int:
+    """Drop excluded devices from a resolved scene plan, in place. Returns how
+    many devices were dropped. Govee entries are keyed by mac (falling back to the
+    IP's known mac), the same identity room membership uses."""
+    if not excluded:
+        return 0
+    before = (len(req.hue) + len(req.govee_whole) + len(req.razer) + len(req.cloud))
+    keep_gv = lambda ip, mac: gv_key_for_ip(ip, mac) not in excluded
+    req.hue = [t for t in req.hue if f"hue:{t.light_id}" not in excluded]
+    req.govee_whole = [t for t in req.govee_whole if keep_gv(t.ip, t.mac)]
+    req.razer = [t for t in req.razer if keep_gv(t.ip, t.mac)]
+    req.cloud = [d for d in req.cloud if keep_gv(d.ip, d.device_mac)]
+    req.base_seeds = [s for s in req.base_seeds if keep_gv(s.ip, s.mac)]
+    return before - (len(req.hue) + len(req.govee_whole) + len(req.razer) + len(req.cloud))
+
+
 async def _apply_room_white(room_name: str, kelvin: int, brightness_pct: int,
                             source: str = "app", source_detail: Optional[str] = None):
     """Set every light in a room to a white color temperature at a brightness %.
@@ -1148,10 +1203,13 @@ async def _apply_room_white(room_name: str, kelvin: int, brightness_pct: int,
     await stop_room_storm(room_name, "room set to white", restore=False)
     mireds = max(153, min(500, round(1_000_000 / max(1, kelvin))))
     bri254 = max(1, min(254, round(brightness_pct * 254 / 100)))
+    skip = _room_excluded(room_name) if _honors_exclusions(source) else set()
     sent = {}
     _in_bulk_hue.set(True)
     try:
         for light_id in room.get("hue_light_ids", []):
+            if f"hue:{light_id}" in skip:
+                continue
             res = await control_hue_light(HueLightStateRequest(
                 light_id=str(light_id), on=True, brightness=bri254, color_temp=mireds))
             if res.get("success") and res.get("state"):
@@ -1164,6 +1222,8 @@ async def _apply_room_white(room_name: str, kelvin: int, brightness_pct: int,
     schedule_hue_verify(sent, since=since)
     govee_sent = {}
     for slug in room.get("govee_devices", []):
+        if f"govee:{slug}" in skip:
+            continue
         ip = gv_ip_for_slug(slug)
         if ip:
             await control_govee(GoveeCommandRequest(
@@ -1204,10 +1264,13 @@ async def _apply_room_color(room_name: str, r: int, g: int, b: int, brightness_p
     resume = await _stop_lightshow_for_apply(room_name, "room set to a solid color")
     await stop_room_storm(room_name, "room set to a solid color", restore=False)
     bri254 = max(1, min(254, round(brightness_pct * 254 / 100)))
+    skip = _room_excluded(room_name) if _honors_exclusions(source) else set()
     sent = {}
     _in_bulk_hue.set(True)
     try:
         for light_id in room.get("hue_light_ids", []):
+            if f"hue:{light_id}" in skip:
+                continue
             res = await control_hue_light(HueLightStateRequest(
                 light_id=str(light_id), on=True, brightness=bri254, r=r, g=g, b=b))
             if res.get("success") and res.get("state"):
@@ -1220,6 +1283,8 @@ async def _apply_room_color(room_name: str, r: int, g: int, b: int, brightness_p
     schedule_hue_verify(sent, since=since)
     govee_sent = {}
     for slug in room.get("govee_devices", []):
+        if f"govee:{slug}" in skip:
+            continue
         ip = gv_ip_for_slug(slug)
         if ip:
             await control_govee(GoveeCommandRequest(
@@ -1884,7 +1949,10 @@ def _lightshow_cells(room_name: str, show: dict,
     says otherwise (`segmented`, v3.56.0) — it HOLDS the scene. Pass a list as
     `held` to be told which ones those were, as `{key, label}`."""
     room = config.get("rooms", {}).get(room_name) or {}
-    exclude = set(show.get("exclude") or [])
+    # The show's own "which lights move" list, plus the ROOM's excluded lights
+    # (v3.59.0): an excluded light keeps what it's showing, and a show repainting
+    # it would contradict that.
+    exclude = set(show.get("exclude") or []) | _room_excluded(room_name)
     segmented = show.get("segmented") or "hold"
     geometry = _lightshow_geometry(room_name)
     dev_pos, seg_pos = _lightshow_positions(room_name)
@@ -4863,7 +4931,7 @@ async def delete_room(room_name: str):
     if removed:
         del config["rooms"][room_name]
     for key in ("room_layouts", "room_color_state", "lightning_scenes", "room_presets",
-                "room_last_applied", "lightshows"):
+                "room_last_applied", "lightshows", "room_excluded"):
         d = config.get(key)
         if isinstance(d, dict) and room_name in d:
             del d[room_name]
@@ -4908,11 +4976,19 @@ async def control_room(req: RoomStateRequest):
     ip = config.get("hue_bridge_ip")
     username = config.get("hue_username")
     results = {"hue": [], "govee": []}
+    # A command that carries a LOOK (a color, a level) leaves the room's excluded
+    # lights alone; plain power (on / resume / off) reaches every light (v3.59.0).
+    carries_look = req.r is not None or req.brightness is not None
+    skip = _room_excluded(req.room_name) if carries_look else set()
 
     # Control Hue lights in the room
     hue_sent = {}
     if ip and username:
         for light_id in room.get("hue_light_ids", []):
+            if f"hue:{light_id}" in skip:
+                results["hue"].append({"light_id": light_id, "success": True,
+                                       "skipped": "excluded"})
+                continue
             state = {}
             if req.on is not None:
                 state["on"] = req.on
@@ -4964,6 +5040,9 @@ async def control_room(req: RoomStateRequest):
     # current IP to actually address the device over LAN).
     govee_sent = {}
     for slug in room.get("govee_devices", []):
+        if f"govee:{slug}" in skip:
+            results["govee"].append({"slug": slug, "success": True, "skipped": "excluded"})
+            continue
         device_ip = gv_ip_for_slug(slug)
         if not device_ip:
             results["govee"].append({"slug": slug, "success": False, "reason": "unresolved (offline?)"})
@@ -5026,6 +5105,8 @@ async def control_room(req: RoomStateRequest):
     # would otherwise churn the record (and overwrite the scene name) on every tick.
     if req.on is False:
         record_room_applied(req.room_name, "power", "Turned off", expect=hue_sent, on=False)
+        # Exclusions are "for tonight": the room going off ends them (v3.59.0).
+        _clear_room_excluded(req.room_name, "room turned off")
     elif req.r is not None and req.g is not None and req.b is not None:
         record_room_applied(req.room_name, "color", "Solid color",
                             swatches=[[req.r, req.g, req.b]], expect=hue_sent)
@@ -5037,6 +5118,49 @@ async def control_room(req: RoomStateRequest):
 
     publish_event("room", room=req.room_name)
     return {"results": results}
+
+
+# ─── Excluded lights endpoints (v3.59.0) ───────────────────────────────────
+
+class RoomExcludeRequest(BaseModel):
+    room_name: str
+    key: str                 # "hue:<id>" or "govee:<slug>"
+    excluded: bool
+
+
+@app.post("/api/rooms/exclude")
+async def room_exclude(req: RoomExcludeRequest):
+    """Exclude one light from (or return it to) its room's whole-room looks.
+    See "Excluded lights" above _apply_room_white for exactly what that covers."""
+    room = config.get("rooms", {}).get(req.room_name)
+    if room is None:
+        raise HTTPException(404, f"Room '{req.room_name}' not found")
+    members = ({f"hue:{lid}" for lid in room.get("hue_light_ids", [])}
+               | {f"govee:{s}" for s in room.get("govee_devices", [])})
+    if req.key not in members:
+        raise HTTPException(400, f"'{req.key}' is not in '{req.room_name}'")
+    store = config.setdefault("room_excluded", {})
+    keys = [k for k in (store.get(req.room_name) or []) if k in members and k != req.key]
+    if req.excluded:
+        keys.append(req.key)
+    if keys:
+        store[req.room_name] = keys
+    else:
+        store.pop(req.room_name, None)
+    schedule_save()
+    publish_event("config")
+    return {"success": True, "room": req.room_name, "excluded": keys}
+
+
+class RoomExcludeClearRequest(BaseModel):
+    room_name: str
+
+
+@app.post("/api/rooms/exclude/clear")
+async def room_exclude_clear(req: RoomExcludeClearRequest):
+    """The room header's Release: every light follows the room again."""
+    _clear_room_excluded(req.room_name, "released")
+    return {"success": True, "room": req.room_name, "excluded": []}
 
 
 # ─── Lightning Scene Endpoints ─────────────────────────────────────────────
@@ -6201,6 +6325,14 @@ def _scene_emit(scope: str, room: str, **fields):
 async def _run_scene_apply(req: SceneApplyRequest, resume_current: bool = False):
     room = req.room
     scope = req.scope or req.room
+    # The room's excluded lights keep what they're showing (v3.59.0) — filtered
+    # HERE, the one place every apply passes through, so "Set here", "Try one
+    # now" and zones follow the same rule as the Scenes panel. A schedule sets
+    # every light; a one-light (scoped) apply is aimed at that light on purpose.
+    if not req.scope and _honors_exclusions(req.source):
+        dropped = _filter_plan_excluded(req, _room_excluded(room))
+        if dropped:
+            log.info("Scene apply %r: %d excluded light(s) left as they are", room, dropped)
     # Suppress the noisy per-call device events for this task's context; we emit
     # one "config" refresh at the end instead.
     _suppress_publish.set(True)
@@ -6761,6 +6893,15 @@ def record_room_applied(room: str, kind: str, label: str,
             entry["look_fp"] = look_fp
         if on is not None:
             entry["on"] = bool(on)    # a power record's state, for "Set here" (v3.51.5)
+        # A LOOK applied while some lights were excluded doesn't describe the
+        # whole room (v3.59.0); the header says "· 3 excluded". Schedules set
+        # everything, and power was never filtered, so neither is marked.
+        if kind in ("scene", "white", "color") and _honors_exclusions(source):
+            room_keys = ({f"hue:{lid}" for lid in (config.get("rooms", {}).get(room) or {}).get("hue_light_ids", [])}
+                         | {f"govee:{s}" for s in (config.get("rooms", {}).get(room) or {}).get("govee_devices", [])})
+            n = len(_room_excluded(room) & room_keys)
+            if n:
+                entry["excluded"] = n
         config.setdefault("room_last_applied", {})[room] = entry
         schedule_save()
         # Publish UNSOURCED (source=None overrides the ContextVar via **fields) so
@@ -6950,7 +7091,12 @@ async def _scene_look_state(req: SceneApplyRequest) -> dict:
     have = entry.get("look_fp") or _look_fingerprint(entry.get("payload"))
     if entry.get("kind") not in ("scene", "lightshow") or not have:
         return {**base, "reason": "other_look" if entry else "nothing_recorded"}
-    if have != _look_fingerprint(req.model_dump(exclude_none=True)):
+    # Compare the plan as it would actually be APPLIED: an apply drops the room's
+    # excluded lights (v3.59.0), so the stored payload is the filtered one and the
+    # panel's full plan must be filtered the same way before fingerprinting.
+    probe = req.model_copy(deep=True)
+    _filter_plan_excluded(probe, _room_excluded(req.room))
+    if have != _look_fingerprint(probe.model_dump(exclude_none=True)):
         return {**base, "reason": "different"}
     status = await _room_status(req.room, await _hue_states_by_id())
     if status.get("state") == "diverged":
@@ -7149,6 +7295,7 @@ async def get_config():
         "favorites": config.get("favorites") or DEFAULT_FAVORITES,
         "favorite_lights": config.get("favorite_lights", []),
         "lightshows": config.get("lightshows", {}),
+        "room_excluded": config.get("room_excluded", {}),   # v3.59.0
     }
 
 
@@ -7226,6 +7373,7 @@ _SETTING_INTERNAL = {
     "hue_missing_since",  # a clock, reset the moment a light returns
     "room_last_applied",  # "Now showing" display record
     "schema_version",     # migration marker, not a setting
+    "room_excluded",      # lights left out for tonight; cleared by the next room off
 }
 
 _SETTING_LABELS = {
@@ -8147,6 +8295,8 @@ def _lightshow_status(room_name: str) -> dict:
         **show,
         "room": room_name,
         "running": lightshow_running(room_name),
+        # The ROOM's excluded lights (v3.59.0), which the show leaves out too.
+        "room_excluded": sorted(_room_excluded(room_name)),
         # Segmented lights sitting this show out, keeping the scene (v3.56.0).
         # Named so both panels can say WHICH lights hold still rather than
         # leaving a light that never moves to read as broken.
@@ -8316,7 +8466,7 @@ async def rename_room(req: RoomRenameRequest):
 
     # Move the key in every room-name-keyed sidecar dict.
     for key in ("rooms", "room_layouts", "room_color_state", "lightning_scenes",
-                "room_presets", "room_last_applied", "lightshows"):
+                "room_presets", "room_last_applied", "lightshows", "room_excluded"):
         d = config.get(key)
         if isinstance(d, dict) and old in d:
             d[new] = d.pop(old)

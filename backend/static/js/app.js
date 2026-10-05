@@ -352,6 +352,10 @@ function App() {
   // What each room was last set to (backend-recorded, incl. schedule fires) —
   // drives the "Now showing" strip in each room header.
   const [roomLastApplied, setRoomLastApplied] = useState({});
+  // room name → device keys EXCLUDED from that room's looks (v3.59.0). The
+  // backend owns the rule (looks skip them; power and schedules don't; the room
+  // going off clears them) — this is only the display copy.
+  const [roomExcluded, setRoomExcluded] = useState({});
   // Whether each room STILL looks like that. LightEmUp isn't the only controller
   // (Hue app, Govee app, Google Home routines), so the record can go stale; the
   // backend proves divergence where it can and says "unknown" where it can't.
@@ -530,6 +534,7 @@ function App() {
       setFixtures(cfg.fixtures || {});
       setRoomColorState(cfg.room_color_state || {});
       setRoomLastApplied(cfg.room_last_applied || {});
+      setRoomExcluded(cfg.room_excluded || {});
       setCtCorrection(cfg.ct_correction || {});
       setCtRgb(cfg.ct_rgb || {});
       setDeviceModes(cfg.device_modes || {});
@@ -1191,9 +1196,35 @@ function App() {
     }
   };
 
+  // Exclude one light from its room's looks, or return it (v3.59.0). Optimistic;
+  // the server answers with the room's list, which is then the truth.
+  const setLightExcluded = useCallback((roomName, key, excluded) => {
+    trackUse("act", { s: "room", room: roomName, a: excluded ? "exclude" : "include", key });
+    setRoomExcluded(prev => {
+      const cur = (prev[roomName] || []).filter(k => k !== key);
+      return { ...prev, [roomName]: excluded ? [...cur, key] : cur };
+    });
+    api("/rooms/exclude", {
+      method: "POST", body: JSON.stringify({ room_name: roomName, key, excluded }),
+    }).then(res => setRoomExcluded(prev => ({ ...prev, [roomName]: res.excluded || [] })))
+      .catch(e => console.error("Exclude failed:", e));
+  }, []);
+  const releaseExcluded = useCallback((roomName) => {
+    trackUse("act", { s: "room", room: roomName, a: "release-excluded" });
+    setRoomExcluded(prev => ({ ...prev, [roomName]: [] }));
+    api("/rooms/exclude/clear", { method: "POST", body: JSON.stringify({ room_name: roomName }) })
+      .catch(e => console.error("Release failed:", e));
+  }, []);
+
   const controlRoom = async (roomName, cmd) => {
     // cmd can be { on: bool } or { on, brightness, r, g, b }
     trackUse("act", { s: "room", room: roomName, a: usageCmdKind(cmd) });
+    // Mirror the backend's rule for the optimistic update (v3.59.0): a LOOK (a
+    // color or a level) leaves excluded lights alone; turning the room off
+    // reaches them and clears the exclusions.
+    const carriesLook = cmd.r !== undefined || cmd.brightness !== undefined;
+    const skipKeys = new Set(carriesLook ? (roomExcluded[roomName] || []) : []);
+    if (cmd.on === false) setRoomExcluded(prev => ({ ...prev, [roomName]: [] }));
     api("/rooms/control", {
       method: "POST",
       body: JSON.stringify({ room_name: roomName, ...cmd }),
@@ -1210,7 +1241,7 @@ function App() {
 
     if (hueIds.size > 0) {
       setHueLights(prev => prev.map(l => {
-        if (!hueIds.has(l.id)) return l;
+        if (!hueIds.has(l.id) || skipKeys.has(`hue:${l.id}`)) return l;
         const stateUpdate = {};
         if (cmd.on !== undefined) stateUpdate.on = cmd.on;
         if (cmd.brightness !== undefined) stateUpdate.brightness = Math.round(cmd.brightness * 254 / 100);
@@ -1220,7 +1251,7 @@ function App() {
 
     if (goveeSlugs.size > 0) {
       setGoveeDevices(prev => prev.map(d => {
-        if (!goveeSlugs.has(goveeSlug(d))) return d;
+        if (!goveeSlugs.has(goveeSlug(d)) || skipKeys.has(`govee:${goveeSlug(d)}`)) return d;
         const stateUpdate = {};
         if (cmd.on !== undefined) stateUpdate.on = cmd.on;
         if (cmd.brightness !== undefined) stateUpdate.brightness = cmd.brightness;
@@ -1677,6 +1708,9 @@ function App() {
                   minSatPct={minSatPct}
                   savedColorState={roomColorState[roomName]}
                   lastApplied={roomLastApplied[roomName]}
+                  excluded={roomExcluded[roomName] || []}
+                  onToggleExclude={(key, ex) => setLightExcluded(roomName, key, ex)}
+                  onReleaseExcluded={() => releaseExcluded(roomName)}
                   lastStatus={roomStatus[roomName]}
                   onReapply={reapplyRoom}
                   ctCorrection={ctCalibrated}

@@ -195,9 +195,12 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
   // Segmented lights holding the scene — from the Pi, which knows which lights
   // scenes paint per segment (v3.56.0).
   const heldKeys = (s.held || []).map(h => h.key);
+  // The ROOM's excluded lights (v3.59.0) sit every look out, a show included.
+  const roomExcludedKeys = s.room_excluded || [];
   const heldCount = heldKeys.length;
   const deviceKeys = (devices || []).map(d => d.key);
-  const movingCount = deviceKeys.filter(k => !excluded.includes(k) && !heldKeys.includes(k)).length;
+  const movingCount = deviceKeys.filter(k => !excluded.includes(k) && !heldKeys.includes(k)
+    && !roomExcludedKeys.includes(k)).length;
   const toggleDevice = (key) => {
     save({
       exclude: excluded.includes(key)
@@ -789,6 +792,19 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
         {showLights && (
           <div style={{ display: "grid", gap: 5, marginTop: 10 }}>
             {(devices || []).map(d => {
+              // Excluded from the ROOM (v3.59.0): set in the room, not here.
+              if (roomExcludedKeys.includes(d.key)) {
+                return (
+                  <div key={d.key} style={{
+                    display: "flex", alignItems: "center", gap: 8, padding: "7px 9px",
+                    borderRadius: 8, border: "1px dashed #334155", background: "#0a0f1e",
+                  }}>
+                    <span style={{ fontSize: 13, color: "#475569" }}>⏸</span>
+                    <span style={{ flex: 1, fontSize: 12, color: "#94a3b8", minWidth: 0 }}>{d.label}</span>
+                    <span style={{ fontSize: 10, color: "#64748b", whiteSpace: "nowrap" }}>excluded in the room</span>
+                  </div>
+                );
+              }
               // A held segmented light isn't the exclude list's to change — it
               // follows "Segmented lights" above, and says so.
               if (heldKeys.includes(d.key) && !excluded.includes(d.key)) {
