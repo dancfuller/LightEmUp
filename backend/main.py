@@ -7753,6 +7753,9 @@ async def get_palettes():
         "categories": palettes.CATEGORIES,
         "count": len(palettes.PALETTES),
         "palettes": [{"name": p["name"], "category": p["category"],
+                      # The extra categories it is offered under (v3.58.3) —
+                      # in_category reads them, so this view must show them.
+                      "also": p["also"],
                       "featured": p["featured"],
                       "colors": [list(c) for c in p["colors"]]}
                      for p in palettes.PALETTES],
