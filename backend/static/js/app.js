@@ -330,6 +330,37 @@ function App() {
   // the description in the panel is the one the math implements.
   const [lightshows, setLightshows] = useState({});
   const [lightshowPatterns, setLightshowPatterns] = useState([]);
+
+  // Land a LIVE Govee scan without letting it undo a newer command (v3.59.1).
+  // The scan reads each device in turn and takes ~5 s. Reported: open a fresh
+  // session, press the Living Room off within those seconds, and the room
+  // toggle flipped back ON a moment later with the lights correctly off — the
+  // first-load scan had read the Govee lights BEFORE the off and replaced the
+  // devices when it finished. Same race the Hue minute-refresh already guards
+  // with apiLastWriteAt. If this page sent anything while the scan ran, keep the
+  // devices' current on/off/color/level and take only what the scan is
+  // authoritative for: who answered (`responding`, `state.reachable`), the
+  // current IP, and any device the app didn't have yet.
+  const applyGoveeScan = useCallback((d, startedAt) => {
+    setMissingGovee(d.missing || []);
+    const scanned = d.devices || [];
+    if (apiLastWriteAt() <= startedAt) {
+      setGoveeDevices(scanned);
+      return;
+    }
+    const live = new Map(scanned.map(x => [goveeSlug(x), x]));
+    setGoveeDevices(prev => {
+      const have = new Set(prev.map(goveeSlug));
+      const merged = prev.map(p => {
+        const l = live.get(goveeSlug(p));
+        if (!l) return p;
+        return { ...l, state: { ...(l.state || {}), ...(p.state || {}),
+                                reachable: l.state?.reachable ?? p.state?.reachable } };
+      });
+      scanned.forEach(x => { if (!have.has(goveeSlug(x))) merged.push(x); });
+      return merged;
+    });
+  }, []);
   // Each pattern's animated preview (v3.56.0). Fetched ONCE: /api/lightshow is
   // re-read on every frame of every running show, and these never change.
   const [lightshowPreviews, setLightshowPreviews] = useState({});
@@ -619,8 +650,9 @@ function App() {
     // background — not awaited, since it takes several seconds and must never
     // block the UI. Results replace the cached devices when they land.
     if (isFirst) {
+      const scanStartedAt = Date.now();
       api("/discover/govee")
-        .then(d => { setGoveeDevices(d.devices || []); setMissingGovee(d.missing || []); })
+        .then(d => applyGoveeScan(d, scanStartedAt))
         .catch(e => console.warn("Background Govee refresh failed:", e));
     }
   }, []);
@@ -983,9 +1015,9 @@ function App() {
   const rescanGovee = useCallback(async () => {
     setRescanning(true);
     try {
+      const scanStartedAt = Date.now();
       const data = await api("/discover/govee");
-      setGoveeDevices(data.devices || []);
-      setMissingGovee(data.missing || []);
+      applyGoveeScan(data, scanStartedAt);
     } catch (e) {
       console.warn("Govee rescan failed:", e);
     } finally {

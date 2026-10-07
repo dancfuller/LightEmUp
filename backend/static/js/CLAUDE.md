@@ -1459,6 +1459,24 @@ sequence plainly and tells the user the only actual fix — set each light's pow
 behavior to **off** in the Hue/Govee apps, which is a setting LightEmUp cannot reach.
 **Don't trim it for tidiness**; an unstated limitation gets rediscovered as a bug report.
 
+## A live Govee scan must not undo a newer command (app.js, v3.59.1)
+Reported: open a fresh session at bedtime, press the Living Room off — the lights go
+off, and a split second later the room toggle shows ON again (pressing it "off" a
+second time changes nothing, because the lights already are). The first-load
+background `/discover/govee` scan reads each device in turn (~5 s); it had read the
+Govee lights BEFORE the off and replaced `goveeDevices` when it finished. Any open
+session that presses something during a scan had the same race (the header ↻ and
+Re-scan run the scan too).
+- **Every live scan lands through `applyGoveeScan(data, startedAt)`.** If this page
+  sent anything since the scan started (`apiLastWriteAt()`), it keeps each device's
+  current on/off/color/level and takes only what the scan is authoritative for:
+  `responding` / `state.reachable`, the current IP, and devices the app didn't have.
+  Otherwise the scan replaces the list as before. Same idea as the Hue minute-refresh
+  guard below. **A new caller of `/discover/govee` must go through it.**
+- Reproduced in the harness (`tools/preview/_shoot_scan_race.mjs`, scratch): room ON,
+  scan held 5 s returning the pre-off state, toggle pressed at ~1 s — the old code
+  ends ON, the fix ends OFF.
+
 ## app.js — orchestration
 State, routing, API calls. **Fast initial load (v3.5.0):** `loadAll(isFirst)` paints from
 `/config` + `/discover/govee/cached` (instant, no LAN scan) + the quick segment/lightning/
