@@ -11,7 +11,7 @@ utils → audio → components-shared → light-card → favorite-lights → lig
 room-map → palette-data → palette-library → color-mode → light-scene → location-data →
 schedules → lightshow → segment-reset-debug → room-section → zones → room-assignment →
 setup-wizard → server-logs → ct-calibration → delivery-health → usage-log → backup-restore →
-app
+ask → app
 
 A new file must be added to index.html in the correct slot (after its dependencies).
 
@@ -1192,6 +1192,27 @@ got a `Z` appended and became an invalid `Date`, rendering as an empty string.
 Everything the backend writes is UTC (`_now_iso`), so nothing was broken in practice —
 but the trap was one edit away from being sprung, and it is now a proper
 `/(?:Z|[+-]\d{2}:?\d{2})$/` test.
+
+## ask.js — the Ask bar and its Settings card (v3.60.0)
+`AskBar` is app chrome directly under the Live bar, on every tab, and renders
+**nothing** until a key is saved (`config.anthropic_api_key_set`), so it costs nobody
+anything until it's set up.
+- **No mic button, on purpose.** The phone keyboard's dictation mic works in any text
+  box. An in-page mic (Web Speech API) needs a secure context, and the Pi is served
+  over plain http. The placeholder says to tap the keyboard mic.
+- **The input is 16px on every width**: iOS zooms the page on focus below that.
+  `enterKeyHint="send"` makes the keyboard's return key read Send.
+- A reply is tinted by outcome: green when something was done, amber when Ask is
+  asking (with **Yes / No** buttons when the backend says `awaiting`, which just send
+  "yes" / "no"), red for an error.
+- After any action it calls `loadAll()` now and again 4s later: the backend's own
+  `config` event carries this page's id, so this page would ignore it as an echo.
+- `trackUse("act", {s: "ask", a: "ask" | "answer"})`, never the words.
+- `AskCard` (Settings, under Usage log): status, today's count against the cap, the
+  month's count and estimated cost, and the key field (`POST /api/ask/key`, never read
+  back).
+- Verified with the routes faked (`tools/preview/_shoot_ask.mjs`, scratch) at 1440 and
+  402px: idle, waiting, done, the Yes / No confirmation, and the card.
 
 ## Usage log — `trackUse` (utils.js) and usage-log.js (v3.49.0)
 Records which screens and actions each device uses so the interface can be arranged

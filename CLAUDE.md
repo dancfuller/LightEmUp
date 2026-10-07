@@ -160,6 +160,13 @@ backend/
                        # Hue/Govee calls. Each pattern declares which room GEOMETRY
                        # it suits (line / floor plan), v3.40.0. Also owns ColorDealer
                        # (shared with the palette scheduler)
+  ask.py               # Ask (v3.60.0): natural-language control via Claude Haiku
+                       # 4.5. Owns the prompt, the action (tool) list, the loop,
+                       # a few minutes of per-browser memory, the house-wide
+                       # confirmation and the daily cap. Never touches a device —
+                       # main.py's _ask_* actions do, on the buttons' own paths
+  presets.py           # Team / college / flag colors for the Pi, PARSED from
+                       # static/js/palette-data.js (one copy of the data, v3.60.0)
   usage_log.py         # Usage log (v3.49.0): which screens and actions each device
                        # uses. Writes usage_log.jsonl + usage_devices.json beside it
                        # (gitignored runtime data, NOT config.json, NOT in backups)
@@ -226,6 +233,9 @@ backend/
                           # room-section.js: reuses its relativeTime
       usage-log.js        # UsageLogCard — Settings card to name each device and see what
                           # it uses (v3.49.0). The recording is trackUse() in utils.js
+      ask.js              # AskBar (app chrome under the Live bar; a text box the
+                          # phone keyboard's mic can dictate into) + AskCard (Settings:
+                          # the Anthropic key and what Ask has cost), v3.60.0
       backup-restore.js   # BackupRestoreCard — Settings export/import of every setting
                           # (downloads to the browser; import previews then replaces)
       app.js              # App component — state, routing, SSE client, API orchestration
@@ -326,6 +336,11 @@ All endpoints are under `/api/`. Key groups:
   `?include_credentials=false` strips the bridge token. `/api/config/import` replaces all
   settings from such a file (`dry_run` previews; writes a `config.json.pre-import-*.bak`
   first; no restart needed). See `backend/CLAUDE.md` "Backup / restore"
+- `/api/ask` — one turn of Ask (v3.60.0): `{text}` in, `{reply, actions, awaiting}`
+  out. Claude Haiku 4.5 picks from a fixed list of actions (`ask.build_tools`) and the
+  Pi runs them through the existing room/zone/scene/light-show paths with
+  `source: "ask"`. `/api/ask/status` (count, cap, month's cost) and `/api/ask/key`
+  (config key `anthropic_api_key`, a credential). See `backend/CLAUDE.md` "Ask"
 - `/api/discover/govee`, `/api/discover/hue` — device discovery (live LAN/network scan)
 - `/api/hue/phantoms` — rooms listing Hue ids the bridge no longer has (a re-paired light
   comes back with a new id and the old one lingers forever). `POST /api/hue/phantoms/remove`

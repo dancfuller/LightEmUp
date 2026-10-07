@@ -2095,6 +2095,68 @@ lives in the helpers above `_apply_room_white`; every path asks them:
 - **Word clash, deliberately left:** the light show's own `exclude` field is a
   different list ("Which lights move" in its panel). Neither shows the other's word.
 
+## Ask — natural-language control (v3.60.0)
+"Make the living room spooky but leave the hexa alone." `POST /api/ask {text}` sends
+the words to **Claude Haiku 4.5** (`ask.MODEL`), which may only call the ten actions
+in `ask.build_tools`; the Pi runs them and returns one sentence. The input is a plain
+text box: the phone keyboard's own mic does the speech-to-text, which needs no HTTPS
+and no permission prompt.
+
+**The split is the safety argument.** `ask.py` owns the conversation and never
+touches a device. Every action is a `_ask_*` function in main.py that validates its
+names against config and then calls a path the buttons already use:
+`_apply_room_white`, `_apply_room_color`, `control_room`, `control_all`,
+`_apply_room_palette`, `_animate_current`, `_start_scene_apply`, `upsert_lightshow`,
+`stop_lightshow`, `room_exclude`, `room_exclude_clear`, `control_hue_light`,
+`control_govee`. So Ask gets the verifies, the "Now showing" records, exclusions and
+the light-show rules for free, and it can't do anything the app can't.
+`source="ask"` honors exclusions (only `schedule` doesn't).
+- **A name that doesn't resolve raises `ask.AskError`**, which goes back to the
+  model as an error result naming the real options ("More than one light is called
+  'Lamp' — which one?"). The model then asks the user. Nothing guesses.
+- **House-wide needs a yes, and the CODE enforces it.** An action with
+  `targets: ["house"]` is refused the first time and its signature (`_signature`,
+  arguments minus `confirmed`) is stored on the conversation. It runs only when the
+  model repeats it with `confirmed: true` AND that signature is pending. A model that
+  sets `confirmed` on its first try is refused like any other.
+- **Defaults the user chose, and where they live.** In the prompt (`SYSTEM_RULES`):
+  "<room> lights on" = 2700K at 100% (not a resume); "dim" ≈ 30%; "X but leave Y
+  alone" = exclude first, then the look; "X red but Y blue" = the room, then the one
+  light. In the code (`_ask_start_light_show`): a show defaults to Walk; a room that's
+  on animates what it shows (`_animate_current`); a room that's off gets
+  `ASK_WARM_WHITES` at 100% and the show starts when that apply completes
+  (`SceneApplyRequest.animate`). Those four whites are bulb-true RGB for
+  2200/2500/2700/3000K, the same method as the palette pass.
+- **Segmented lights are told to hold still.** The prompt says why (cloud segment
+  calls ~2s apart flash a single color) and forbids suggesting otherwise; no tool can
+  change the show's `segmented` setting.
+- **Context.** The cached system block (`cache_control`) holds the rules plus
+  `_ask_context()["layout"]`: rooms with each light marked hue / govee / segmented,
+  zones, every palette by category, every team / college / country name, and the
+  light-show modes. The live state (on/off, "Now showing", exclusions, running shows)
+  rides on the current user turn only, so an older turn can't contradict it.
+- **Memory**: per `X-Client-Id`, `CONVO_TTL_S` (3 min), so "which lamp?" → "the left
+  one" and "go ahead?" → "yes" work. In memory only; a failed or step-exhausted
+  request forgets it so a dangling tool call can't poison the next turn.
+- **Cost**: about 1–2 cents a request (two model calls over a ~5.5k-token prompt,
+  most of it the preset names). `DAILY_CAP` (200) is counted BEFORE the model is
+  called, and `ask_usage` keeps the day's count and the month's estimated cost
+  (`PRICE`) for the Settings card.
+- **Team / college / flag colors** come from `presets.py`, which parses
+  `static/js/palette-data.js` rather than keeping a second copy. It needs every entry
+  on one line in the `{ name, group?, colors }` shape; it logs loudly if a block goes
+  missing. Near-black is dropped like the browser's `presetColors`.
+- **Config keys**: `anthropic_api_key` (in `_CREDENTIAL_KEYS`, so export-without-
+  credentials strips it and the preview says only set / not set; `/api/config` serves
+  `anthropic_api_key_set`, never the key) and `ask_usage` (`_SETTING_INTERNAL`).
+  Neither is room-keyed.
+- **The SDK is imported lazily** in `AskEngine._client_for`, so the app starts
+  without `anthropic` installed and Ask says so instead.
+- Covered by a scratch test with a SCRIPTED model (23 assertions, no API calls):
+  the 2700K default, the house-wide yes enforced in code, team colors, exclude-then-look
+  order, zones, both light-show branches, an ambiguous light going back as a question,
+  room-then-light order, the cap, no key, a rejected key, and the cost tally.
+
 ## Whole-room actions belong on the backend (v3.43.0)
 Three controls used to fan out **from the browser** — one HTTP request per light,
 all issued in the same tick, fire-and-forget: **Soft White**, **Cool White**, and

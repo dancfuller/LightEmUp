@@ -1628,6 +1628,11 @@ function App() {
         <ZoneBar zones={zones} onControl={controlZone} isMobile={isMobile} />
       </div>
 
+      {/* Ask (v3.60.0): say or type what the lights should do. Chrome like the
+          Live bar above it, so it's on every tab; renders nothing until an
+          Anthropic key is saved in Settings. */}
+      <AskBar enabled={!!config?.anthropic_api_key_set} onDone={() => loadAll()} isMobile={isMobile} />
+
       {/* Favorites is APP CHROME, not page content (v3.35.0). It started inside
           the Rooms and All Lights tabs, which made it a sub-section of a page
           and meant it vanished the moment you went anywhere else — while the
@@ -2056,6 +2061,7 @@ function App() {
 
             <DeliveryHealthCard isMobile={isMobile} />
             <UsageLogCard isMobile={isMobile} />
+            <AskCard isMobile={isMobile} onKeyChanged={() => loadAll()} />
             <PowerRecoveryCard settings={powerRecovery} onChange={updatePowerRecovery} isMobile={isMobile} />
 
             <LocationCard location={location} onChange={updateLocation} isMobile={isMobile} />

@@ -52,6 +52,8 @@ from scenes import scene_manager, LightningSettings
 from razer_keeper import razer_keeper
 import lightshow
 import palettes
+import presets   # team / college / flag colors, read from palette-data.js (v3.60.0)
+import ask       # Ask: natural-language control (v3.60.0)
 import usage_log
 from fastapi import Request
 from version import __version__ as APP_VERSION, GIT_HASH, GIT_DATE, version_string
@@ -76,6 +78,10 @@ DEFAULT_CONFIG = {
     "hue_bridge_ip": None,
     "hue_username": None,
     "govee_api_key": None,
+    "anthropic_api_key": None,   # Ask (v3.60.0): a credential — never echoed, and a
+                                 # backup export strips it like the other two
+    "ask_usage": {},             # Ask's daily count and monthly cost tally; runtime
+                                 # state, so _SETTING_INTERNAL
     "rooms": {},
     "nicknames": {},
     "room_layouts": {},
@@ -7275,6 +7281,7 @@ async def get_config():
         "hue_bridge_ip": config.get("hue_bridge_ip"),
         "hue_paired": bool(config.get("hue_username")),
         "govee_api_key_set": bool(config.get("govee_api_key")),
+        "anthropic_api_key_set": bool(config.get("anthropic_api_key")),   # Ask, v3.60.0
         "rooms": config.get("rooms", {}),
         "nicknames": config.get("nicknames", {}),
         "room_layouts": config.get("room_layouts", {}),
@@ -7311,7 +7318,7 @@ SUPPORTED_SCHEMA = 2     # highest config schema_version this build understands
 
 # Credentials, not preferences. hue_username is a bridge token: without it a
 # restore can't talk to the bridge until someone physically presses its button.
-_CREDENTIAL_KEYS = ("hue_username", "govee_api_key")
+_CREDENTIAL_KEYS = ("hue_username", "govee_api_key", "anthropic_api_key")
 
 
 def _deep_copy(obj):
@@ -7374,6 +7381,7 @@ _SETTING_INTERNAL = {
     "room_last_applied",  # "Now showing" display record
     "schema_version",     # migration marker, not a setting
     "room_excluded",      # lights left out for tonight; cleared by the next room off
+    "ask_usage",          # Ask's request count and cost tally
 }
 
 _SETTING_LABELS = {
@@ -7403,6 +7411,7 @@ _SETTING_LABELS = {
     "hue_bridge_ip": "Hue Bridge",
     "hue_username": "Hue Bridge pairing",
     "govee_api_key": "Govee API key",
+    "anthropic_api_key": "Anthropic API key (Ask)",
 }
 
 _SETTING_ORDER = ["rooms", "nicknames", "room_layouts", "schedules", "zones",
@@ -7412,7 +7421,7 @@ _SETTING_ORDER = ["rooms", "nicknames", "room_layouts", "schedules", "zones",
 def _render_setting(key: str, value):
     """One cell of the restore preview. Falls back to a count for containers and
     set/not set for scalars, so an unregistered key still renders something true."""
-    if key in ("hue_username", "govee_api_key"):
+    if key in _CREDENTIAL_KEYS:
         return "set" if value else "not set"        # never echo a credential
     if key == "hue_bridge_ip":
         return value or "none"
@@ -8645,6 +8654,388 @@ async def get_logs(lines: int = 500, level: Optional[str] = None):
 
     tail = all_lines[-max(1, lines):]
     return {"lines": tail, "available": len(all_lines), "retention_hours": 48}
+
+
+# ─── Ask: natural-language control (v3.60.0) ────────────────────────────────
+# The model and the conversation live in ask.py; the ACTIONS live here, because
+# each one is a thin wrapper over a path the buttons already use — so Ask can't
+# do anything the app couldn't, and it gets the verifies, records, exclusions and
+# light-show rules for free. Every action validates its names against config and
+# raises ask.AskError with a usable message rather than guessing, so the model
+# can ask the user instead. `source="ask"` honors room exclusions (only
+# schedules don't) and shows as an in-app change in "Now showing".
+
+# Four warm whites for a light show started in a room that's off: the RGB a Hue
+# bulb renders AT 2200 / 2500 / 2700 / 3000K (same method as the palette pass,
+# v3.58.0), so the show trades subtly different warm whites, never orange.
+ASK_WARM_WHITES = [(255, 186, 83), (255, 198, 104), (255, 205, 117), (255, 214, 136)]
+ASK_SOURCE = "ask"
+
+
+def _ask_room(name: str) -> str:
+    rooms = config.get("rooms", {}) or {}
+    want = (name or "").strip().lower()
+    for r in rooms:
+        if r.lower() == want:
+            return r
+    raise ask.AskError(f"No room named {name!r}. Rooms: {', '.join(rooms)}.")
+
+
+def _ask_targets(targets: list) -> list:
+    """Room names for a list of room / zone names or "house"."""
+    rooms = config.get("rooms", {}) or {}
+    zones = config.get("zones", {}) or {}
+    out = []
+    for t in targets or []:
+        want = str(t).strip().lower()
+        if want == ask.HOUSE:
+            out.extend(rooms)
+            continue
+        zone = next((z for z in zones if z.lower() == want), None)
+        if zone:
+            out.extend(r for r in (zones[zone].get("rooms") or []) if r in rooms)
+            continue
+        out.append(_ask_room(t))
+    seen, unique = set(), []
+    for r in out:
+        if r not in seen:
+            seen.add(r)
+            unique.append(r)
+    if not unique:
+        raise ask.AskError("That doesn't match any room or zone.")
+    return unique
+
+
+async def _ask_lights() -> list:
+    """Every light that's in a room: {key, name, room, kind, segmented, …}."""
+    states = await _hue_states_by_id()
+    out = []
+    for room_name, room in (config.get("rooms", {}) or {}).items():
+        for lid in room.get("hue_light_ids", []):
+            key = f"hue:{lid}"
+            name = _device_label(key, (states.get(str(lid)) or {}).get("name") or f"Light {lid}")
+            out.append({"key": key, "name": name, "room": room_name, "kind": "hue",
+                        "light_id": str(lid), "on": bool((states.get(str(lid)) or {}).get("on")),
+                        "segmented": False})
+        for slug in room.get("govee_devices", []):
+            key = f"govee:{slug}"
+            mac, info = _gv_info_for_slug(slug)
+            sku = (info or {}).get("sku")
+            out.append({"key": key, "name": _device_label(key, (info or {}).get("name") or slug),
+                        "room": room_name, "kind": "govee", "slug": slug, "mac": mac or slug,
+                        "ip": (info or {}).get("ip") or gv_ip_for_slug(slug),
+                        "segmented": (gv_scene_address(slug, sku) == "segments"
+                                      and gv_segment_count(slug, sku) > 1)})
+    return out
+
+
+def _ask_pick_light(lights: list, name: str, room: Optional[str] = None) -> dict:
+    want = (name or "").strip().lower()
+    pool = [l for l in lights if room is None or l["room"] == room]
+    hits = [l for l in pool if l["name"].lower() == want]
+    if len(hits) == 1:
+        return hits[0]
+    if len(hits) > 1:
+        raise ask.AskError(f"More than one light is called {name!r} "
+                           f"(in {', '.join(sorted({l['room'] for l in hits}))}) — which one?")
+    names = ", ".join(l["name"] for l in pool)
+    raise ask.AskError(f"No light named {name!r}{' in ' + room if room else ''}. Lights: {names}.")
+
+
+def _ask_room_is_on(room_name: str, lights: list) -> bool:
+    mine = [l for l in lights if l["room"] == room_name]
+    hue = [l for l in mine if l["kind"] == "hue"]
+    if hue:
+        return any(l["on"] for l in hue)     # the bridge is authoritative
+    entry = (config.get("room_last_applied", {}) or {}).get(room_name) or {}
+    return bool(entry) and not (entry.get("kind") == "power" and entry.get("on") is False)
+
+
+async def _ask_set_power(targets: list, on: bool, except_rooms: Optional[list] = None) -> str:
+    rooms = _ask_targets(targets)
+    skip = {_ask_room(r) for r in (except_rooms or [])}
+    whole_house = any(str(t).strip().lower() == ask.HOUSE for t in targets) and not skip
+    if whole_house:
+        await control_all(AllControlRequest(on=bool(on)))
+        return f"Every light {'on' if on else 'off'}"
+    done = [r for r in rooms if r not in skip]
+    for r in done:
+        await control_room(RoomStateRequest(room_name=r, on=bool(on)))
+    left = f" (left {', '.join(sorted(skip))} alone)" if skip else ""
+    return f"{', '.join(done)} {'on' if on else 'off'}{left}"
+
+
+async def _ask_set_white(targets: list, kelvin: int, brightness: int = 100) -> str:
+    rooms = _ask_targets(targets)
+    k, b = max(2000, min(6500, int(kelvin))), max(1, min(100, int(brightness)))
+    for r in rooms:
+        await _apply_room_white(r, k, b, source=ASK_SOURCE, source_detail="Ask")
+    return f"{', '.join(rooms)} to {k}K at {b}%"
+
+
+async def _ask_set_color(targets: list, red: int, green: int, blue: int,
+                         brightness: Optional[int] = None) -> str:
+    rooms = _ask_targets(targets)
+    rgb = tuple(max(0, min(255, int(v))) for v in (red, green, blue))
+    for r in rooms:
+        if brightness is None:
+            # No level asked for: keep the room's own, as the Controls color does.
+            await control_room(RoomStateRequest(room_name=r, on=True, r=rgb[0], g=rgb[1], b=rgb[2]))
+        else:
+            await _apply_room_color(r, *rgb, max(1, min(100, int(brightness))),
+                                    source=ASK_SOURCE, source_detail="Ask")
+    return f"{', '.join(rooms)} to {rgb_to_hex_str(rgb)}"
+
+
+async def _ask_set_brightness(targets: list, brightness: int) -> str:
+    rooms = _ask_targets(targets)
+    b = max(1, min(100, int(brightness)))
+    for r in rooms:
+        await control_room(RoomStateRequest(room_name=r, brightness=b))
+    return f"{', '.join(rooms)} to {b}%"
+
+
+async def _ask_apply_palette(targets: list, palette: Optional[str] = None,
+                             category: Optional[str] = None, preset: Optional[str] = None,
+                             brightness: int = 100) -> str:
+    rooms = _ask_targets(targets)
+    if sum(1 for v in (palette, category, preset) if v) != 1:
+        raise ask.AskError("Give exactly one of palette, category or preset.")
+    if palette:
+        chosen = palettes.by_name(palette) or next(
+            (p for p in palettes.PALETTES if p["name"].lower() == palette.strip().lower()), None)
+        if not chosen:
+            raise ask.AskError(f"No palette named {palette!r}.")
+    elif category:
+        cat = next((c for c in palettes.CATEGORIES if c.lower() == category.strip().lower()), None)
+        pool = palettes.in_category(cat) if cat else []
+        if not pool:
+            raise ask.AskError(f"No palette category {category!r}. "
+                               f"Categories: {', '.join(palettes.CATEGORIES)}.")
+        chosen = palettes.pick(pool)
+    else:
+        found = presets.find(preset)
+        if not found:
+            raise ask.AskError(f"No team, college or country called {preset!r}.")
+        chosen = {"name": found[1]["name"], "colors": found[1]["colors"]}
+    b = max(1, min(100, int(brightness or 100)))
+    # One palette for every room, like a zone schedule: a coherent look, not a
+    # different random pick per room.
+    for r in rooms:
+        await _apply_room_palette(r, chosen, b, source=ASK_SOURCE, source_detail="Ask")
+    return f"{', '.join(rooms)} to {chosen['name']}"
+
+
+async def _ask_start_light_show(room: str, mode: Optional[str] = None) -> str:
+    room_name = _ask_room(room)
+    key = (mode or "walk").strip().lower()
+    if key not in lightshow.PATTERN_KEYS:
+        raise ask.AskError(f"No light show mode {mode!r}.")
+    name = next(p["name"] for p in lightshow.PATTERNS if p["key"] == key)
+    if lightshow_running(room_name):
+        if _lightshow_cfg(room_name).get("pattern") == key:
+            return f"{room_name}: the {name} light show is already running"
+        await upsert_lightshow(LightshowRequest(room=room_name, pattern=key))
+        return f"{room_name}: light show switched to {name}"
+    lights = await _ask_lights()
+    colors, _ = _room_current_colors(room_name)
+    if _ask_room_is_on(room_name, lights) and colors:
+        await _animate_current(room_name, key)
+        return f"{room_name}: {name} light show started on what it's showing"
+    # Off (or nothing animatable on): warm whites at 100%, then the show — started
+    # by the apply itself once it completes, the same as "Apply & Start Light Show".
+    req = _build_palette_scene(room_name, {"name": "Warm whites", "colors": ASK_WARM_WHITES}, 100)
+    if req is None:
+        raise ask.AskError(f"{room_name} has no lights a light show can use.")
+    req.label, req.source, req.source_detail, req.animate = "Warm whites", ASK_SOURCE, "Ask", key
+    await _start_scene_apply(req)
+    return f"{room_name}: warm whites at 100%, then the {name} light show"
+
+
+async def _ask_stop_light_show(room: Optional[str] = None) -> str:
+    if room:
+        room_name = _ask_room(room)
+        if not lightshow_running(room_name):
+            return f"No light show is running in {room_name}"
+        await stop_lightshow(room_name, "stopped via Ask")
+        return f"{room_name}: light show stopped"
+    running = [r for r in (config.get("rooms", {}) or {}) if lightshow_running(r)]
+    if not running:
+        return "No light show is running"
+    if len(running) > 1:
+        raise ask.AskError(f"Light shows are running in {', '.join(running)} — which one?")
+    await stop_lightshow(running[0], "stopped via Ask")
+    return f"{running[0]}: light show stopped"
+
+
+async def _ask_exclude_lights(room: str, lights: list, excluded: bool) -> str:
+    room_name = _ask_room(room)
+    catalog = await _ask_lights()
+    picked = [_ask_pick_light(catalog, n, room_name) for n in lights]
+    for l in picked:
+        await room_exclude(RoomExcludeRequest(room_name=room_name, key=l["key"],
+                                              excluded=bool(excluded)))
+    names = ", ".join(l["name"] for l in picked)
+    return f"{room_name}: {names} {'excluded' if excluded else 'included again'}"
+
+
+async def _ask_release_exclusions(room: str) -> str:
+    room_name = _ask_room(room)
+    await room_exclude_clear(RoomExcludeClearRequest(room_name=room_name))
+    return f"{room_name}: every light follows the room again"
+
+
+async def _ask_control_light(light: str, on: Optional[bool] = None, red: Optional[int] = None,
+                             green: Optional[int] = None, blue: Optional[int] = None,
+                             kelvin: Optional[int] = None, brightness: Optional[int] = None) -> str:
+    l = _ask_pick_light(await _ask_lights(), light)
+    rgb = None
+    if red is not None or green is not None or blue is not None:
+        rgb = tuple(max(0, min(255, int(v or 0))) for v in (red, green, blue))
+    if rgb is None and kelvin is None and brightness is None and on is None:
+        raise ask.AskError("Say what to do with the light: on, off, a color, a white or a level.")
+    turn_on = on if on is not None else (True if (rgb or kelvin) else None)
+    if l["kind"] == "hue":
+        await control_hue_light(HueLightStateRequest(
+            light_id=l["light_id"], on=turn_on,
+            brightness=None if brightness is None else max(1, min(254, round(int(brightness) * 254 / 100))),
+            r=rgb[0] if rgb else None, g=rgb[1] if rgb else None, b=rgb[2] if rgb else None,
+            color_temp=None if kelvin is None else max(153, min(500, round(1_000_000 / int(kelvin))))))
+    else:
+        if not l.get("ip"):
+            raise ask.AskError(f"{l['name']} hasn't been seen on the network.")
+        await control_govee(GoveeCommandRequest(
+            ip=l["ip"], mac=l["mac"], on=turn_on,
+            brightness=None if brightness is None else max(1, min(100, int(brightness))),
+            r=rgb[0] if rgb else None, g=rgb[1] if rgb else None, b=rgb[2] if rgb else None,
+            color_temp_kelvin=None if kelvin is None else int(kelvin)))
+    what = ("off" if turn_on is False else
+            rgb_to_hex_str(rgb) if rgb else f"{int(kelvin)}K" if kelvin else
+            f"{int(brightness)}%" if brightness is not None else "on")
+    return f"{l['name']} {what}"
+
+
+def rgb_to_hex_str(rgb) -> str:
+    return "#%02X%02X%02X" % tuple(int(v) for v in rgb)
+
+
+async def _ask_context() -> dict:
+    """What the model knows about the house. `layout` changes rarely and sits in
+    the cached system prompt; `state` is read fresh for every request."""
+    lights = await _ask_lights()
+    rooms = config.get("rooms", {}) or {}
+    zones = config.get("zones", {}) or {}
+    lines = ["THE HOUSE", "Rooms and their lights:"]
+    for r in rooms:
+        mine = [l for l in lights if l["room"] == r]
+        desc = ", ".join(f"{l['name']} ({l['kind']}{', segmented' if l['segmented'] else ''})"
+                         for l in mine) or "no lights"
+        lines.append(f"- {r}: {desc}")
+    if zones:
+        lines.append("Zones (groups of rooms):")
+        for z, v in zones.items():
+            lines.append(f"- {z}: {', '.join(v.get('rooms') or [])}")
+    lines.append("Palettes by category (exact names):")
+    for cat in palettes.CATEGORIES:
+        lines.append(f"- {cat}: {', '.join(p['name'] for p in palettes.in_category(cat))}")
+    for kind, label in (("teams", "Teams"), ("ncaa", "Colleges"), ("flags", "Countries")):
+        names = [e["name"] for e in presets.PRESETS.get(kind, [])]
+        if names:
+            lines.append(f"{label} (exact names): {', '.join(names)}")
+    lines.append("Light show modes:")
+    for p in lightshow.PATTERNS:
+        lines.append(f"- {p['key']} ({p['name']}): {p['blurb']}")
+    layout = "\n".join(lines)
+
+    state = []
+    excluded = config.get("room_excluded", {}) or {}
+    last = config.get("room_last_applied", {}) or {}
+    names = {l["key"]: l["name"] for l in lights}
+    for r in rooms:
+        mine = [l for l in lights if l["room"] == r]
+        hue = [l for l in mine if l["kind"] == "hue"]
+        on = _ask_room_is_on(r, lights)
+        bits = [f"- {r}: {'on' if on else 'off'}"]
+        if hue:
+            bits.append(f"{sum(l['on'] for l in hue)} of {len(hue)} Hue lights on")
+        entry = last.get(r) or {}
+        if entry.get("label"):
+            bits.append(f"last set to \"{entry['label']}\"")
+        if excluded.get(r):
+            bits.append("excluded: " + ", ".join(names.get(k, k) for k in excluded[r]))
+        if lightshow_running(r):
+            pat = _lightshow_cfg(r).get("pattern") or "walk"
+            bits.append(f"{pat} light show running")
+        state.append("; ".join(bits))
+    return {"layout": layout, "state": "\n".join(state),
+            "modes": [p["key"] for p in lightshow.PATTERNS]}
+
+
+def _ask_usage_get() -> dict:
+    return dict(config.get("ask_usage") or {})
+
+
+def _ask_usage_put(u: dict):
+    config["ask_usage"] = u
+    schedule_save()
+
+
+ASK_ENGINE = ask.AskEngine(
+    actions={
+        "set_power": _ask_set_power, "set_white": _ask_set_white,
+        "set_color": _ask_set_color, "set_brightness": _ask_set_brightness,
+        "apply_palette": _ask_apply_palette, "start_light_show": _ask_start_light_show,
+        "stop_light_show": _ask_stop_light_show, "exclude_lights": _ask_exclude_lights,
+        "release_exclusions": _ask_release_exclusions, "control_light": _ask_control_light,
+    },
+    context=_ask_context,
+    get_key=lambda: config.get("anthropic_api_key"),
+    usage_get=_ask_usage_get, usage_put=_ask_usage_put,
+)
+
+
+class AskRequest(BaseModel):
+    text: str
+
+
+@app.post("/api/ask")
+async def ask_endpoint(req: AskRequest, request: Request):
+    """One turn of Ask. The browser's X-Client-Id keys a few minutes of memory,
+    so a follow-up ("the left one", "yes") continues the same conversation."""
+    client_id = request.headers.get("X-Client-Id", "") or "anon"
+    result = await ASK_ENGINE.ask(client_id, req.text[:500])
+    publish_event("config")
+    return result
+
+
+def _ask_status() -> dict:
+    u = ASK_ENGINE.usage()
+    return {"enabled": bool(config.get("anthropic_api_key")), "model": ask.MODEL,
+            "today": u.get("count", 0), "daily_cap": ask.DAILY_CAP,
+            "month_count": u.get("month_count", 0),
+            "month_cost": round(float(u.get("month_cost", 0.0)), 4)}
+
+
+@app.get("/api/ask/status")
+async def ask_status():
+    return _ask_status()
+
+
+class AskKeyRequest(BaseModel):
+    key: Optional[str] = None
+
+
+@app.post("/api/ask/key")
+async def ask_set_key(req: AskKeyRequest):
+    """Store (or, with an empty key, remove) the Anthropic API key. Never echoed
+    back; a backup export strips it like the other credentials."""
+    key = (req.key or "").strip()
+    if key and not key.startswith("sk-ant-"):
+        raise HTTPException(400, "That doesn't look like an Anthropic API key (sk-ant-…).")
+    config["anthropic_api_key"] = key or None
+    save_config(config)
+    publish_event("config")
+    return _ask_status()
 
 
 # ─── Static Files (frontend) ─────────────────────────────────────────────────
