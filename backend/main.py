@@ -8795,13 +8795,48 @@ async def _ask_set_brightness(targets: list, brightness: int) -> str:
     return f"{', '.join(rooms)} to {b}%"
 
 
+def _ask_room_palette_name(room_name: str) -> Optional[str]:
+    """The library palette a room is showing, if its record says one — so "a
+    different fall scene" doesn't draw the one already on."""
+    label = ((config.get("room_last_applied", {}) or {}).get(room_name) or {}).get("label") or ""
+    name = label.rsplit("·", 1)[-1].strip() if "·" in label else label.strip()
+    return name if name and palettes.by_name(name) else None
+
+
+def _ask_swatch_hex(entry: dict) -> str:
+    """A room record's colors as hex, so the model can match or avoid them."""
+    if entry.get("kelvin") and not entry.get("swatches"):
+        return f"white {int(entry['kelvin'])}K"
+    return ", ".join(rgb_to_hex_str(c) for c in (entry.get("swatches") or [])[:8])
+
+
 async def _ask_apply_palette(targets: list, palette: Optional[str] = None,
                              category: Optional[str] = None, preset: Optional[str] = None,
-                             brightness: int = 100) -> str:
+                             brightness: int = 100, lights: Optional[list] = None,
+                             colors: Optional[list] = None) -> str:
     rooms = _ask_targets(targets)
-    if sum(1 for v in (palette, category, preset) if v) != 1:
-        raise ask.AskError("Give exactly one of palette, category or preset.")
-    if palette:
+    picked = []
+    if lights:
+        # Named lights only: each must be in one of the target rooms. The rest of
+        # the room is left exactly as it is (a scoped apply, like the light card's
+        # scene panel), so nothing is re-dealt and the room's record stays put.
+        catalog = [l for l in await _ask_lights() if l["room"] in rooms]
+        picked = [_ask_pick_light(catalog, n) for n in lights]
+    if sum(1 for v in (palette, category, preset, colors) if v) != 1:
+        raise ask.AskError("Give exactly one of palette, category, preset or colors.")
+    if colors:
+        # The model chooses the colors; WHERE each goes is the engine's job — the
+        # same dealer a "My Colors" schedule uses, which keeps neighbors apart,
+        # follows a line's physical order and runs colors along a segmented light.
+        parsed = []
+        for c in colors:
+            h = str(c).strip().lstrip("#")
+            if len(h) != 6 or any(ch not in "0123456789abcdefABCDEF" for ch in h):
+                raise ask.AskError(f"{c!r} isn't a #RRGGBB color.")
+            parsed.append((int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)))
+        chosen = {"name": "My Colors", "category": "custom", "featured": False,
+                  "colors": parsed}
+    elif palette:
         chosen = palettes.by_name(palette) or next(
             (p for p in palettes.PALETTES if p["name"].lower() == palette.strip().lower()), None)
         if not chosen:
@@ -8812,13 +8847,31 @@ async def _ask_apply_palette(targets: list, palette: Optional[str] = None,
         if not pool:
             raise ask.AskError(f"No palette category {category!r}. "
                                f"Categories: {', '.join(palettes.CATEGORIES)}.")
-        chosen = palettes.pick(pool)
+        # "A different <season> scene": never the palette the room already shows.
+        chosen = palettes.pick(pool, avoid=_ask_room_palette_name(rooms[0]))
     else:
         found = presets.find(preset)
         if not found:
             raise ask.AskError(f"No team, college or country called {preset!r}.")
         chosen = {"name": found[1]["name"], "colors": found[1]["colors"]}
     b = max(1, min(100, int(brightness or 100)))
+    if picked:
+        done = []
+        for r in rooms:
+            keys = {l["key"] for l in picked if l["room"] == r}
+            if not keys:
+                continue
+            req = _build_palette_scene(r, chosen, b)
+            if req is None:
+                raise ask.AskError(f"{r} has no lights a palette can use.")
+            room_keys = {f"hue:{lid}" for lid in config["rooms"][r].get("hue_light_ids", [])} | \
+                        {f"govee:{s}" for s in config["rooms"][r].get("govee_devices", [])}
+            _filter_plan_excluded(req, room_keys - keys)
+            req.scope = next(iter(keys)) if len(keys) == 1 else f"{r}|ask|{'+'.join(sorted(keys))}"
+            req.label, req.source, req.source_detail = f"Palette · {chosen['name']}", ASK_SOURCE, "Ask"
+            await scene_room_apply(req)
+            done.extend(l["name"] for l in picked if l["room"] == r)
+        return f"{', '.join(done)} to {chosen['name']} (rest of the room unchanged)"
     # One palette for every room, like a zone schedule: a coherent look, not a
     # different random pick per room.
     for r in rooms:
@@ -8960,7 +9013,8 @@ async def _ask_context() -> dict:
             bits.append(f"{sum(l['on'] for l in hue)} of {len(hue)} Hue lights on")
         entry = last.get(r) or {}
         if entry.get("label"):
-            bits.append(f"last set to \"{entry['label']}\"")
+            colors = _ask_swatch_hex(entry)
+            bits.append(f"last set to \"{entry['label']}\"" + (f" ({colors})" if colors else ""))
         if excluded.get(r):
             bits.append("excluded: " + ", ".join(names.get(k, k) for k in excluded[r]))
         if lightshow_running(r):

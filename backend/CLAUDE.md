@@ -2127,6 +2127,29 @@ the light-show rules for free, and it can't do anything the app can't.
   `ASK_WARM_WHITES` at 100% and the show starts when that apply completes
   (`SceneApplyRequest.animate`). Those four whites are bulb-true RGB for
   2200/2500/2700/3000K, the same method as the palette pass.
+- **A palette on chosen lights (v3.60.2).** `apply_palette` takes `lights`: the
+  room's palette plan is built as usual, filtered to those lights (the complement
+  goes through `_filter_plan_excluded`), and run as a SCOPED apply via
+  `scene_room_apply` — the light card's one-light path — so the rest of the room,
+  its light show and its "Now showing" record are untouched. "Change the rope lights
+  to a different fall scene" had no action to map to before this, so Ask could only
+  ask which palette.
+- **Its own colors, placed by the engine (v3.60.2).** `apply_palette` takes
+  `colors` (#RRGGBB, up to 12): "a scene of reds, blues and greens". The model only
+  CHOOSES the colors; they become a "My Colors" palette dealt by
+  `_build_palette_scene`, the same path as a `colors` schedule action, so neighbors
+  differ, a line deals in physical order and a segmented light runs them along its
+  segments. The model never decides which light gets which: it sees names, not
+  positions, and the dealer is tested against the real rooms. Known limit: that
+  dealer doesn't know fixtures, so a fixture's bulbs can repeat a color (the Scenes
+  panel's solver handles that). Works with `lights` too.
+- **A category pick never repeats the room's palette** (`_ask_room_palette_name`
+  reads it off the room record), which is what "a different <season> scene" means.
+- **When the choice is left to it, Ask chooses.** "A different color that works
+  with the scene" used to come back as "warm or cool?". The prompt now says to pick,
+  act and say what it picked, and to ask only when it can't tell WHICH light or room.
+  To make that possible the state carries each room's current colors as hex
+  (`_ask_swatch_hex`), not just the look's name.
 - **Segmented lights are told to hold still.** The prompt says why (cloud segment
   calls ~2s apart flash a single color) and forbids suggesting otherwise; no tool can
   change the show's `segmented` setting.

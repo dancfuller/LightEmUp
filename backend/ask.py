@@ -93,11 +93,19 @@ def build_tools(mode_keys: list) -> list:
         _tool("set_brightness", "Change the brightness of rooms without changing their colors.",
               {"targets": _TARGETS, "brightness": _BRIGHTNESS, "confirmed": _CONFIRMED},
               ["targets", "brightness"]),
-        _tool("apply_palette", "Spread a multi-color look across rooms. Give exactly one of: "
-              "palette (an exact palette name), category (a random palette from that "
-              "category), or preset (an exact team, college or country name).",
+        _tool("apply_palette", "Spread a multi-color look across rooms, or across just "
+              "some lights in them. Give exactly one of: palette (an exact palette name), "
+              "category (a random palette from that category, never the one the room is "
+              "already showing), preset (an exact team, college or country name), or "
+              "colors (your own list). The hub decides which light gets which color.",
               {"targets": _TARGETS, "palette": {"type": "string"},
                "category": {"type": "string"}, "preset": {"type": "string"},
+               "colors": {"type": "array", "minItems": 1, "maxItems": 12,
+                          "items": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"},
+                          "description": "Colors as #RRGGBB, each one distinct."},
+               "lights": {"type": "array", "minItems": 1, "items": {"type": "string"},
+                          "description": "Only these lights (exact names, in the target "
+                                         "rooms); every other light keeps what it shows."},
                "brightness": _BRIGHTNESS, "confirmed": _CONFIRMED},
               ["targets"]),
         _tool("start_light_show", "Start a light show in a room, or switch the mode of one "
@@ -144,6 +152,24 @@ or black — say so briefly and offer the nearest thing (warm white, orange).
 fitting palette by exact name ("spooky" -> Halloween); for "something <season or \
 style>" use that category so a palette is picked at random.
 - A team, college or country: apply_palette with preset = its exact name.
+- Colors named outright ("a scene of reds, blues and greens", "purple and teal"): \
+apply_palette with colors. Choose vivid, clearly different values: one per color \
+named, or two or three shades each when they say "reds" or "blues". Don't decide \
+which light gets which — the hub places them so neighbors differ and segmented \
+lights run them along their segments. Prefer this over a palette whose name only \
+sounds close.
+- A palette or "scene" on one or a few lights ("change the rope lights to a \
+different fall scene"): apply_palette with lights. A segmented light shows the \
+palette along its segments; the rest of the room stays as it is. "A different \
+<season> scene" = that category; it never repeats the palette already showing.
+
+When the choice is left to you, make it. "A different color", "something that \
+goes with it", "a color that works with the scene", "surprise me", "whatever you \
+think": pick one yourself, act, and say what you chose. Don't ask them to choose \
+between options. To fit a scene, use the room's current colors in the state: pick \
+a color in the same mood that isn't already one of them (for an autumn palette of \
+oranges and purples, a deep red or gold). Only ask a question when you can't tell \
+WHICH light or room is meant, never about taste.
 - "Release" / "include everything again": release_exclusions.
 
 Exceptions and order (tools run in the order you call them):
