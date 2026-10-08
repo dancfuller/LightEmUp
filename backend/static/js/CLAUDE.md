@@ -1202,6 +1202,13 @@ anything until it's set up.
   over plain http. The placeholder says to tap the keyboard mic.
 - **The input is 16px on every width**: iOS zooms the page on focus below that.
   `enterKeyHint="send"` makes the keyboard's return key read Send.
+- **It must be obvious where to start and that something is happening (v3.60.1).**
+  Reported: after sending, nothing showed the hub was working, and it wasn't clear
+  whether to tap the box or "Ask". So "Ask" is grey and disabled until there is text,
+  then solid indigo; the box has a "💬 Tap to type or speak" prompt and an indigo focus
+  ring. While waiting the button spins ("Working"), a pulsing line repeats the request
+  ("Working on it… “…”"), and after 6s it says "Still working — setting the lights…".
+  Sending blurs the input so a phone keyboard closes and doesn't hide that line.
 - A reply is tinted by outcome: green when something was done, amber when Ask is
   asking (with **Yes / No** buttons when the backend says `awaiting`, which just send
   "yes" / "no"), red for an error.

@@ -13,7 +13,18 @@ function AskBar({ enabled, onDone, isMobile }) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [reply, setReply] = useState(null);   // {text, tone, awaiting}
+  const [asked, setAsked] = useState("");     // what's being worked on, shown while busy
+  const [slow, setSlow] = useState(false);
+  const [focused, setFocused] = useState(false);
   const inputRef = useRef(null);
+
+  // A scene can take several seconds to reach every light; say so rather than
+  // leave a pulse that looks stuck.
+  useEffect(() => {
+    if (!busy) { setSlow(false); return; }
+    const t = setTimeout(() => setSlow(true), 6000);
+    return () => clearTimeout(t);
+  }, [busy]);
 
   if (!enabled) return null;
 
@@ -21,7 +32,10 @@ function AskBar({ enabled, onDone, isMobile }) {
     const said = (words ?? text).trim();
     if (!said || busy) return;
     setBusy(true);
+    setAsked(said);
     setReply(null);
+    // Close the phone keyboard so the progress line below isn't hidden behind it.
+    inputRef.current?.blur();
     trackUse("act", { s: "ask", a: words ? "answer" : "ask" });   // never the words
     try {
       const res = await api("/ask", { method: "POST", body: JSON.stringify({ text: said }) });
@@ -45,6 +59,14 @@ function AskBar({ enabled, onDone, isMobile }) {
   };
 
   const toneColor = { done: "#86efac", ask: "#fcd34d", error: "#fca5a5", info: "#cbd5e1" };
+  const ready = !!text.trim() && !busy;
+  // Grey until there's something to send, so the box — not the button — reads
+  // as the place to start.
+  const btn = busy
+    ? { border: "1px solid #4f46e5", background: "rgba(79,70,229,0.15)", color: "#c7d2fe" }
+    : ready
+    ? { border: "1px solid #4f46e5", background: "#4f46e5", color: "#fff" }
+    : { border: "1px solid #334155", background: "transparent", color: "#64748b" };
 
   return (
     <div data-usage-surface="ask" style={{
@@ -57,35 +79,58 @@ function AskBar({ enabled, onDone, isMobile }) {
           ref={inputRef}
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder={isMobile ? "Ask… (tap the keyboard mic to speak)" : "Ask LightEmUp… e.g. \"living room spooky but leave the hexa alone\""}
+          placeholder={isMobile ? "💬 Tap to type or speak" : "💬 Tell your lights what to do — e.g. \"living room spooky but leave the hexa alone\""}
           enterKeyHint="send"
           autoComplete="off"
           autoCapitalize="sentences"
           disabled={busy}
           aria-label="Ask LightEmUp"
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
           style={{
             flex: "1 1 auto", minWidth: 0, padding: isMobile ? "9px 12px" : "8px 12px",
-            borderRadius: 10, border: "1px solid #334155", background: "#0f172a",
-            color: "#f1f5f9",
+            borderRadius: 10, background: "#0f172a",
+            border: `1px solid ${focused ? "#6366f1" : "#475569"}`,
+            boxShadow: focused ? "0 0 0 3px rgba(99,102,241,0.25)" : "none",
+            color: busy ? "#94a3b8" : "#f1f5f9",
             fontSize: 16,   // under 16px, iOS zooms the page on focus
             outline: "none",
           }}
         />
-        <button type="submit" disabled={busy || !text.trim()} style={{
+        <button type="submit" disabled={!ready} style={{
+          ...btn,
           flex: "0 0 auto", padding: isMobile ? "9px 14px" : "8px 16px", borderRadius: 10,
-          border: "1px solid #4f46e5", background: busy || !text.trim() ? "transparent" : "#4f46e5",
-          color: busy || !text.trim() ? "#64748b" : "#fff", fontWeight: 700,
-          fontSize: isMobile ? 13 : 14, cursor: busy || !text.trim() ? "default" : "pointer",
-          whiteSpace: "nowrap",
-        }}>{busy ? "…" : "Ask"}</button>
+          fontWeight: 700, fontSize: isMobile ? 13 : 14,
+          cursor: ready ? "pointer" : "default", whiteSpace: "nowrap",
+          display: "inline-flex", alignItems: "center", gap: 7,
+        }}>
+          {busy && <span style={{
+            width: 12, height: 12, borderRadius: "50%", flexShrink: 0,
+            border: "2px solid rgba(199,210,254,0.35)", borderTopColor: "#c7d2fe",
+            animation: "spin 0.8s linear infinite",
+          }} />}
+          {busy ? "Working" : "Ask"}
+        </button>
       </form>
       {(busy || reply) && (
         <div style={{
           maxWidth: 1200, margin: "6px auto 0", display: "flex", gap: 8,
           alignItems: "center", flexWrap: "wrap",
         }}>
-          <span style={{ fontSize: isMobile ? 13 : 14, color: busy ? "#94a3b8" : toneColor[reply.tone], lineHeight: 1.4 }}>
-            {busy ? "Thinking…" : reply.text}
+          {busy && (
+            <span style={{ display: "inline-flex", gap: 4 }} aria-hidden="true">
+              {[0, 1, 2].map(i => (
+                <span key={i} style={{
+                  width: 7, height: 7, borderRadius: "50%", background: "#818cf8",
+                  animation: `pulse 1.1s ease-in-out ${i * 0.18}s infinite`,
+                }} />
+              ))}
+            </span>
+          )}
+          <span role="status" style={{ fontSize: isMobile ? 13 : 14, color: busy ? "#c7d2fe" : toneColor[reply.tone], lineHeight: 1.4, animation: busy ? "pulse 1.6s ease-in-out infinite" : "none" }}>
+            {busy
+              ? <>{slow ? "Still working — setting the lights…" : "Working on it…"} <span style={{ color: "#64748b" }}>“{asked}”</span></>
+              : reply.text}
           </span>
           {!busy && reply?.awaiting && (
             <span style={{ display: "inline-flex", gap: 6 }}>
