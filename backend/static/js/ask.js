@@ -97,11 +97,18 @@ function AskBar({ enabled, onDone, isMobile }) {
             outline: "none",
           }}
         />
-        <button type="submit" disabled={!ready} style={{
+        {/* Grey but NOT disabled when empty: people press it first anyway, so a
+            press then puts the cursor in the box (and opens a phone keyboard)
+            instead of doing nothing. */}
+        <button type="submit" disabled={busy}
+          onClick={(e) => {
+            if (!ready) { e.preventDefault(); inputRef.current?.focus(); }
+          }}
+          style={{
           ...btn,
           flex: "0 0 auto", padding: isMobile ? "9px 14px" : "8px 16px", borderRadius: 10,
           fontWeight: 700, fontSize: isMobile ? 13 : 14,
-          cursor: ready ? "pointer" : "default", whiteSpace: "nowrap",
+          cursor: "pointer", whiteSpace: "nowrap",
           display: "inline-flex", alignItems: "center", gap: 7,
         }}>
           {busy && <span style={{

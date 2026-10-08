@@ -8748,7 +8748,14 @@ def _ask_room_is_on(room_name: str, lights: list) -> bool:
     if hue:
         return any(l["on"] for l in hue)     # the bridge is authoritative
     entry = (config.get("room_last_applied", {}) or {}).get(room_name) or {}
-    return bool(entry) and not (entry.get("kind") == "power" and entry.get("on") is False)
+    if not entry:
+        return False
+    if entry.get("kind") == "power":
+        # Records from before `on` existed say it only in the label, the same
+        # fallback "Set here" uses.
+        on = entry.get("on")
+        return ("off" not in (entry.get("label") or "").lower()) if on is None else bool(on)
+    return True
 
 
 async def _ask_set_power(targets: list, on: bool, except_rooms: Optional[list] = None) -> str:
@@ -8770,7 +8777,7 @@ async def _ask_set_white(targets: list, kelvin: int, brightness: int = 100) -> s
     k, b = max(2000, min(6500, int(kelvin))), max(1, min(100, int(brightness)))
     for r in rooms:
         await _apply_room_white(r, k, b, source=ASK_SOURCE, source_detail="Ask")
-    return f"{', '.join(rooms)} to {k}K at {b}%"
+    return f"{', '.join(rooms)} to {k}K at {b}%" + _ask_excluded_note(rooms)
 
 
 async def _ask_set_color(targets: list, red: int, green: int, blue: int,
@@ -8784,7 +8791,7 @@ async def _ask_set_color(targets: list, red: int, green: int, blue: int,
         else:
             await _apply_room_color(r, *rgb, max(1, min(100, int(brightness))),
                                     source=ASK_SOURCE, source_detail="Ask")
-    return f"{', '.join(rooms)} to {rgb_to_hex_str(rgb)}"
+    return f"{', '.join(rooms)} to {rgb_to_hex_str(rgb)}" + _ask_excluded_note(rooms)
 
 
 async def _ask_set_brightness(targets: list, brightness: int) -> str:
@@ -8792,7 +8799,7 @@ async def _ask_set_brightness(targets: list, brightness: int) -> str:
     b = max(1, min(100, int(brightness)))
     for r in rooms:
         await control_room(RoomStateRequest(room_name=r, brightness=b))
-    return f"{', '.join(rooms)} to {b}%"
+    return f"{', '.join(rooms)} to {b}%" + _ask_excluded_note(rooms)
 
 
 def _ask_room_palette_name(room_name: str) -> Optional[str]:
@@ -8876,7 +8883,7 @@ async def _ask_apply_palette(targets: list, palette: Optional[str] = None,
     # different random pick per room.
     for r in rooms:
         await _apply_room_palette(r, chosen, b, source=ASK_SOURCE, source_detail="Ask")
-    return f"{', '.join(rooms)} to {chosen['name']}"
+    return f"{', '.join(rooms)} to {chosen['name']}" + _ask_excluded_note(rooms)
 
 
 async def _ask_start_light_show(room: str, mode: Optional[str] = None) -> str:
@@ -8891,6 +8898,18 @@ async def _ask_start_light_show(room: str, mode: Optional[str] = None) -> str:
         await upsert_lightshow(LightshowRequest(room=room_name, pattern=key))
         return f"{room_name}: light show switched to {name}"
     lights = await _ask_lights()
+    # Segmented lights hold still by default and excluded lights are left out, so
+    # a room of nothing else has nothing to move. Say so rather than start a show
+    # that stops itself.
+    mine = [l for l in lights if l["room"] == room_name]
+    held = _lightshow_cfg(room_name).get("segmented", "hold") == "hold"
+    movable = [l for l in mine if l["key"] not in _room_excluded(room_name)
+               and not (held and l["segmented"])]
+    if mine and not movable:
+        raise ask.AskError(
+            f"Every light in {room_name} is segmented or excluded, and segmented lights "
+            "hold still in light shows, so there's nothing to move. That can be changed "
+            "in the room's Light Show panel.")
     colors, _ = _room_current_colors(room_name)
     if _ask_room_is_on(room_name, lights) and colors:
         await _animate_current(room_name, key)
@@ -8972,6 +8991,342 @@ def rgb_to_hex_str(rgb) -> str:
     return "#%02X%02X%02X" % tuple(int(v) for v in rgb)
 
 
+def _ask_excluded_note(rooms: list) -> str:
+    """Appended to a room-wide look's result, so the reply can say which lights it
+    skipped. An exclusion outlives the request that made it ("leave the hexa
+    alone"), and an hour later a look that ignores the hexa reads as broken."""
+    names = {}
+    for l in _ask_light_names():
+        names[l[0]] = l[1]
+    bits = []
+    for r in rooms:
+        keys = sorted(_room_excluded(r))
+        if keys:
+            bits.append(f"{', '.join(names.get(k, k) for k in keys)} in {r}")
+    return f" (left alone because excluded: {'; '.join(bits)})" if bits else ""
+
+
+def _ask_light_names() -> list:
+    """(key, name) for every light in a room, from config alone — no bridge read."""
+    out = []
+    for room in (config.get("rooms", {}) or {}).values():
+        for lid in room.get("hue_light_ids", []):
+            out.append((f"hue:{lid}", _device_label(f"hue:{lid}", f"Light {lid}")))
+        for slug in room.get("govee_devices", []):
+            _, info = _gv_info_for_slug(slug)
+            out.append((f"govee:{slug}", _device_label(f"govee:{slug}", (info or {}).get("name") or slug)))
+    return out
+
+
+import copy
+
+# ── Undo: what each room looked like before Ask last changed it ──────────────
+# In memory only: an undo is for "that wasn't what I meant", minutes later, not
+# for tomorrow. One snapshot per room, taken at the FIRST change a request makes
+# to it, so a request that changes a room twice still undoes to before both.
+ASK_UNDO_MAX_AGE_S = 2 * 3600
+_ask_request = ContextVar("ask_request", default="direct")
+_ask_undo: dict = {}          # room → snapshot
+_ask_undo_last: dict = {}     # {"req", "rooms", "at"} — the last request that changed something
+
+
+async def _ask_snapshot(rooms: list):
+    req_id = _ask_request.get()
+    todo = [r for r in rooms if (_ask_undo.get(r) or {}).get("req") != req_id]
+    if not todo:
+        return
+    states = await _hue_states_by_id()
+    for r in todo:
+        room = (config.get("rooms", {}) or {}).get(r) or {}
+        hue = {}
+        for lid in room.get("hue_light_ids", []):
+            s = states.get(str(lid))
+            if not s or not s.get("reachable", True):
+                continue
+            st = {"on": bool(s.get("on"))}
+            if s.get("brightness"):
+                st["bri"] = int(s["brightness"])
+            if s.get("color_mode") == "ct" and s.get("color_temp"):
+                st["ct"] = int(s["color_temp"])
+            elif s.get("xy"):
+                st["xy"] = list(s["xy"])
+            hue[str(lid)] = st
+        dev = config.get("device_state", {}) or {}
+        _ask_undo[r] = {
+            "req": req_id, "at": time.time(),
+            "record": copy.deepcopy((config.get("room_last_applied", {}) or {}).get(r)),
+            "excluded": sorted(_room_excluded(r)),
+            "show": _lightshow_cfg(r).get("pattern") if lightshow_running(r) else None,
+            "storm": scene_manager.is_active(r),
+            "hue": hue,
+            "govee": {f"govee:{s}": copy.deepcopy(dev.get(f"govee:{s}"))
+                      for s in room.get("govee_devices", [])},
+        }
+    if _ask_undo_last.get("req") != req_id:
+        _ask_undo_last.clear()
+        _ask_undo_last.update(req=req_id, rooms=[], at=time.time())
+    for r in todo:
+        if r not in _ask_undo_last["rooms"]:
+            _ask_undo_last["rooms"].append(r)
+
+
+def _ask_rooms_touched(name: str, args: dict) -> list:
+    """Which rooms an action is about to change, for the undo snapshot. Best
+    effort: a name that doesn't resolve fails in the action itself anyway."""
+    try:
+        if name in ("set_power", "set_white", "set_color", "set_brightness", "apply_palette"):
+            return _ask_targets(args.get("targets") or [])
+        if name in ("start_light_show", "exclude_lights", "release_exclusions", "start_storm"):
+            return [_ask_room(args["room"])]
+        if name == "stop_light_show":
+            return [_ask_room(args["room"])] if args.get("room") else \
+                [r for r in (config.get("rooms", {}) or {}) if lightshow_running(r)]
+        if name == "stop_storm":
+            return [_ask_room(args["room"])] if args.get("room") else scene_manager.get_active_rooms()
+        if name == "control_light":
+            want = (args.get("light") or "").strip().lower()
+            key = next((k for k, n in _ask_light_names() if n.lower() == want), None)
+            for r, room in (config.get("rooms", {}) or {}).items():
+                if key and (key[4:] in [str(x) for x in room.get("hue_light_ids", [])]
+                            or key[6:] in room.get("govee_devices", [])):
+                    return [r]
+    except Exception:
+        pass
+    return []
+
+
+def _ask_with_snapshot(name, fn):
+    async def run(**kw):
+        rooms = _ask_rooms_touched(name, kw)
+        if rooms:
+            await _ask_snapshot(rooms)
+        return await fn(**kw)
+    return run
+
+
+async def _ask_undo_rooms(room: Optional[str] = None) -> str:
+    if room:
+        rooms = [_ask_room(room)]
+    else:
+        rooms = list(_ask_undo_last.get("rooms") or [])
+    now = time.time()
+    rooms = [r for r in rooms if r in _ask_undo and now - _ask_undo[r]["at"] < ASK_UNDO_MAX_AGE_S]
+    if not rooms:
+        raise ask.AskError("There's nothing Ask changed recently to put back.")
+    ip, username = config.get("hue_bridge_ip"), config.get("hue_username")
+    done, partial = [], []
+    for r in rooms:
+        snap = _ask_undo.pop(r)
+        if lightshow_running(r) and not snap["show"]:
+            await stop_lightshow(r, "put back via Ask")
+        if scene_manager.is_active(r) and not snap["storm"]:
+            await stop_room_storm(r, "put back via Ask", restore=False)
+        # Exclusions first: the replay below honors them.
+        excl = config.setdefault("room_excluded", {})
+        if snap["excluded"]:
+            excl[r] = list(snap["excluded"])
+        else:
+            excl.pop(r, None)
+        dev_now = config.get("device_state", {}) or {}
+        govee_changed = [k for k, v in snap["govee"].items()
+                         if v and dev_now.get(k) != v]
+        rec = snap["record"] or {}
+        kind = rec.get("kind")
+        if kind == "scene" and rec.get("payload"):
+            # The scene's own payload puts back every light it covers, segments
+            # included, so the Hue snapshot isn't needed on top of it.
+            payload = _freshen_scene_payload(rec["payload"])
+            if payload is not None:
+                sreq = SceneApplyRequest(**payload)
+                sreq.label = rec.get("label")
+                if snap["show"]:
+                    sreq.animate = snap["show"]   # restarts once the scene is back
+                await _start_scene_apply(sreq)
+            done.append(r)
+            continue
+        if kind in ("white", "color", "power"):
+            config.setdefault("room_last_applied", {})[r] = rec
+            try:
+                await reapply_room(RoomReapplyRequest(room_name=r))
+            except HTTPException:
+                pass
+        # Hue lights back to exactly what the bridge reported before.
+        if ip and username:
+            for lid, st in snap["hue"].items():
+                send = dict(st) if st.get("on") else {"on": False}
+                try:
+                    if await set_hue_light_state(ip, username, lid, send):
+                        record_hue_state(lid, send)
+                except Exception:
+                    log.warning("Ask undo: Hue %s failed", lid, exc_info=True)
+        for key in govee_changed:
+            v = snap["govee"][key]
+            slug = key.split(":", 1)[1]
+            gip = gv_ip_for_slug(slug)
+            if not gip:
+                continue
+            mac, _ = _gv_info_for_slug(slug)
+            await control_govee(GoveeCommandRequest(
+                ip=gip, mac=mac, on=v.get("on"), brightness=v.get("brightness"),
+                r=v.get("r"), g=v.get("g"), b=v.get("b"),
+                color_temp_kelvin=None if v.get("r") is not None else v.get("color_temp_kelvin")))
+        if snap["show"]:
+            await upsert_lightshow(LightshowRequest(room=r, pattern=snap["show"], enabled=True))
+        if rec:
+            config.setdefault("room_last_applied", {})[r] = rec
+        segmented = [l for l in await _ask_lights() if l["room"] == r and l["segmented"]]
+        if segmented and kind != "scene":
+            partial.append(f"{r} ({', '.join(l['name'] for l in segmented)} can't be put back exactly)")
+        done.append(r)
+    schedule_save()
+    publish_event("config", source=None)
+    note = f"; {'; '.join(partial)}" if partial else ""
+    return f"Put back {', '.join(done)} as it was before{note}"
+
+
+# ── Later: "turn off in 20 minutes", "at sunset" ─────────────────────────────
+ASK_SCHEDULE_PREFIX = "Ask: "
+
+
+def _ask_when(in_minutes, at, sun_event, offset_min):
+    """→ (datetime, phrase). The scheduler fires in the minute matching HH:MM."""
+    from datetime import datetime as _dt, timedelta
+    now = _dt.now()
+    if sum(1 for v in (in_minutes, at, sun_event) if v not in (None, "")) != 1:
+        raise ask.AskError("Give exactly one of in_minutes, at or sun_event.")
+    if in_minutes is not None:
+        m = int(in_minutes)
+        if not 1 <= m <= 24 * 60:
+            raise ask.AskError("in_minutes must be between 1 and 1440.")
+        when = (now + timedelta(minutes=m)).replace(second=0, microsecond=0)
+        if when <= now:
+            when += timedelta(minutes=1)
+        return when, f"in {m} minutes"
+    if at:
+        try:
+            hh, mm = (int(x) for x in str(at).split(":"))
+            when = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+        except Exception:
+            raise ask.AskError(f"{at!r} isn't a 24-hour HH:MM time.")
+        if when <= now:
+            when += timedelta(days=1)
+        return when, f"at {when:%H:%M}"
+    loc = config.get("location", {}) or {}
+    if loc.get("lat") is None:
+        raise ask.AskError("Sunrise and sunset need the house's location — set it in Settings → Location.")
+    for d in (now.date(), (now + timedelta(days=1)).date()):
+        hm = _sun_hhmm(sun_event, d, loc["lat"], loc["lng"], int(offset_min or 0))
+        if not hm:
+            raise ask.AskError("Couldn't work out the sun times.")
+        when = _dt(d.year, d.month, d.day, hm[0], hm[1])
+        if when > now:
+            off = int(offset_min or 0)
+            rel = "" if not off else f" {abs(off)} min {'before' if off < 0 else 'after'}"
+            return when, f"{rel.strip()} {sun_event}".strip() + f" ({when:%H:%M})"
+    raise ask.AskError("Couldn't work out the sun times.")
+
+
+async def _ask_schedule_once(target: str, action: str, in_minutes: Optional[int] = None,
+                             at: Optional[str] = None, sun_event: Optional[str] = None,
+                             offset_min: Optional[int] = 0, kelvin: Optional[int] = None,
+                             red: Optional[int] = None, green: Optional[int] = None,
+                             blue: Optional[int] = None, brightness: Optional[int] = None,
+                             palette: Optional[str] = None, category: Optional[str] = None,
+                             colors: Optional[list] = None) -> str:
+    want = (target or "").strip().lower()
+    zone = next((z for z in (config.get("zones", {}) or {}) if z.lower() == want), None)
+    where = {"zone": zone} if zone else {"room": _ask_room(target)}
+    b = max(1, min(100, int(brightness if brightness is not None else 100)))
+    if action in ("on", "off"):
+        act, what = {"type": "power", "on": action == "on"}, f"turn {action}"
+    elif action == "white":
+        k = max(2000, min(6500, int(kelvin or 2700)))
+        act, what = {"type": "white", "kelvin": k, "brightness": b}, f"{k}K at {b}%"
+    elif action == "color":
+        rgb = {"r": int(red or 0), "g": int(green or 0), "b": int(blue or 0)}
+        act, what = {"type": "color", "rgb": rgb, "brightness": b}, rgb_to_hex_str(rgb.values())
+    elif action == "palette":
+        if palette:
+            if not palettes.by_name(palette):
+                raise ask.AskError(f"No palette named {palette!r}.")
+            act, what = {"type": "palette", "source": "list", "palettes": [palette], "brightness": b}, palette
+        elif category:
+            cat = next((c for c in palettes.CATEGORIES + ["Featured"] if c.lower() == category.lower()), None)
+            if not cat:
+                raise ask.AskError(f"No palette category {category!r}.")
+            act, what = {"type": "palette", "source": "category", "category": cat, "brightness": b}, f"a {cat} palette"
+        else:
+            raise ask.AskError("A palette needs palette or category.")
+    elif action == "colors":
+        parsed = [[int(str(c).lstrip("#")[i:i + 2], 16) for i in (0, 2, 4)] for c in (colors or [])]
+        if not parsed:
+            raise ask.AskError("colors needs at least one #RRGGBB.")
+        act, what = {"type": "colors", "colors": parsed, "brightness": b}, "My Colors"
+    else:
+        raise ask.AskError(f"Unknown action {action!r} (on, off, white, color, palette, colors).")
+    when, phrase = _ask_when(in_minutes, at, sun_event, offset_min)
+    name = f"{ASK_SCHEDULE_PREFIX}{zone or where['room']} {what} {phrase}"
+    try:
+        res = await upsert_schedule(ScheduleRequest(
+            name=name, enabled=True,
+            trigger={"type": "oneoff", "date": f"{when:%Y-%m-%d}", "time": f"{when:%H:%M}"},
+            action={**act, **where}))
+    except HTTPException as e:
+        raise ask.AskError(f"Couldn't schedule that: {e.detail}")
+    day = "" if when.date() == __import__("datetime").date.today() else " tomorrow"
+    return f"Scheduled ({res['schedule']['id']}): {zone or where['room']} {what} at {when:%H:%M}{day}. It's in the Schedules tab."
+
+
+def _ask_pending_schedules() -> list:
+    from datetime import datetime as _dt
+    now = _dt.now().strftime("%Y-%m-%d %H:%M")
+    return [s for s in config.get("schedules", []) or []
+            if (s.get("name") or "").startswith(ASK_SCHEDULE_PREFIX) and s.get("enabled")
+            and (s.get("trigger") or {}).get("type") == "oneoff"
+            and f"{s['trigger'].get('date')} {s['trigger'].get('time')}" >= now]
+
+
+async def _ask_cancel_scheduled(id: Optional[str] = None) -> str:
+    pending = _ask_pending_schedules()
+    if id:
+        pending = [s for s in pending if s.get("id") == id]
+    if not pending:
+        raise ask.AskError("There's no pending timer from Ask to cancel.")
+    if not id and len(pending) > 1:
+        raise ask.AskError("Several are pending: " + "; ".join(
+            f"{s['id']}: {s['name'][len(ASK_SCHEDULE_PREFIX):]}" for s in pending) + " — which one?")
+    s = pending[-1]
+    await delete_schedule(s["id"])
+    return f"Cancelled: {s['name'][len(ASK_SCHEDULE_PREFIX):]}"
+
+
+# ── Lightning storms ─────────────────────────────────────────────────────────
+async def _ask_start_storm(room: str) -> str:
+    room_name = _ask_room(room)
+    try:
+        await start_lightning(LightningStartRequest(room_name=room_name))
+    except HTTPException as e:
+        raise ask.AskError(str(e.detail))
+    return f"{room_name}: lightning storm started (the Stop button is at the bottom of the app)"
+
+
+async def _ask_stop_storm(room: Optional[str] = None) -> str:
+    active = scene_manager.get_active_rooms()
+    if room:
+        rooms = [_ask_room(room)]
+        if rooms[0] not in active:
+            return f"No storm is running in {rooms[0]}"
+    elif not active:
+        return "No storm is running"
+    elif len(active) > 1:
+        raise ask.AskError(f"Storms are running in {', '.join(active)} — which one, or all?")
+    else:
+        rooms = list(active)
+    for r in rooms:
+        await stop_room_storm(r, "stopped via Ask")
+    return f"{', '.join(rooms)}: storm stopped"
+
+
 async def _ask_context() -> dict:
     """What the model knows about the house. `layout` changes rarely and sits in
     the cached system prompt; `state` is read fresh for every request."""
@@ -9000,17 +9355,58 @@ async def _ask_context() -> dict:
         lines.append(f"- {p['key']} ({p['name']}): {p['blurb']}")
     layout = "\n".join(lines)
 
-    state = []
+    from datetime import datetime as _dt
+    state = [f"Now: {_dt.now():%A %H:%M}"]
     excluded = config.get("room_excluded", {}) or {}
     last = config.get("room_last_applied", {}) or {}
     names = {l["key"]: l["name"] for l in lights}
+    hue_states = await _hue_states_by_id()
+    dev = config.get("device_state", {}) or {}
+    storms = set(scene_manager.get_active_rooms())
+
+    def light_line(l):
+        if l["kind"] == "hue":
+            s = hue_states.get(l["light_id"]) or {}
+            if not s:
+                return f"{l['name']}: unknown"
+            if not s.get("reachable", True):
+                return f"{l['name']}: unreachable"
+            if not s.get("on"):
+                return f"{l['name']}: off"
+            pct = round(int(s.get("brightness") or 0) * 100 / 254)
+            if s.get("color_mode") == "ct" and s.get("color_temp"):
+                look = f"white {round(1_000_000 / int(s['color_temp']) / 100) * 100}K"
+            elif s.get("xy"):
+                c = _hue_xy_to_rgb(s["xy"], 254) or {}
+                look = rgb_to_hex_str((c.get("r", 0), c.get("g", 0), c.get("b", 0))) if isinstance(c, dict) \
+                    else rgb_to_hex_str(c)
+            else:
+                look = "on"
+            return f"{l['name']}: {look} at {pct}%"
+        if l["segmented"]:
+            return f"{l['name']}: segmented (colors per segment, not reported)"
+        d = dev.get(l["key"]) or {}
+        if not d:
+            return f"{l['name']}: not known"
+        if d.get("on") is False:
+            return f"{l['name']}: last sent off"
+        look = (rgb_to_hex_str((d["r"], d["g"], d["b"])) if d.get("r") is not None
+                else f"white {d['color_temp_kelvin']}K" if d.get("color_temp_kelvin") else "on")
+        lvl = f" at {d['brightness']}%" if d.get("brightness") is not None else ""
+        return f"{l['name']}: last sent {look}{lvl}"
+
     for r in rooms:
         mine = [l for l in lights if l["room"] == r]
         hue = [l for l in mine if l["kind"] == "hue"]
         on = _ask_room_is_on(r, lights)
         bits = [f"- {r}: {'on' if on else 'off'}"]
+        lit = [hue_states.get(l["light_id"]) for l in hue if (hue_states.get(l["light_id"]) or {}).get("on")]
         if hue:
             bits.append(f"{sum(l['on'] for l in hue)} of {len(hue)} Hue lights on")
+        if lit:
+            bits.append(f"level about {round(sum(int(s.get('brightness') or 0) for s in lit) * 100 / 254 / len(lit))}%")
+        if r in storms:
+            bits.append("lightning storm running")
         entry = last.get(r) or {}
         if entry.get("label"):
             colors = _ask_swatch_hex(entry)
@@ -9020,7 +9416,18 @@ async def _ask_context() -> dict:
         if lightshow_running(r):
             pat = _lightshow_cfg(r).get("pattern") or "walk"
             bits.append(f"{pat} light show running")
+        snap = _ask_undo.get(r)
+        if snap and time.time() - snap["at"] < ASK_UNDO_MAX_AGE_S:
+            bits.append(f"can be put back to how it was {round((time.time() - snap['at']) / 60)} min ago")
         state.append("; ".join(bits))
+        if mine:
+            state.append("    " + " | ".join(light_line(l) for l in mine))
+    pending = _ask_pending_schedules()
+    if pending:
+        state.append("Timers set by Ask (pending): " + "; ".join(
+            f"[{s['id']}] {s['name'][len(ASK_SCHEDULE_PREFIX):]}" for s in pending))
+    if _ask_undo_last.get("rooms"):
+        state.append("The last Ask change touched: " + ", ".join(_ask_undo_last["rooms"]))
     return {"layout": layout, "state": "\n".join(state),
             "modes": [p["key"] for p in lightshow.PATTERNS]}
 
@@ -9034,14 +9441,20 @@ def _ask_usage_put(u: dict):
     schedule_save()
 
 
+# Anything that changes lights is snapshotted first, so "put it back" can undo it.
+ASK_NO_SNAPSHOT = {"put_back", "schedule_once", "cancel_scheduled"}
+
 ASK_ENGINE = ask.AskEngine(
-    actions={
+    actions={k: (f if k in ASK_NO_SNAPSHOT else _ask_with_snapshot(k, f)) for k, f in {
         "set_power": _ask_set_power, "set_white": _ask_set_white,
         "set_color": _ask_set_color, "set_brightness": _ask_set_brightness,
         "apply_palette": _ask_apply_palette, "start_light_show": _ask_start_light_show,
         "stop_light_show": _ask_stop_light_show, "exclude_lights": _ask_exclude_lights,
         "release_exclusions": _ask_release_exclusions, "control_light": _ask_control_light,
-    },
+        "start_storm": _ask_start_storm, "stop_storm": _ask_stop_storm,
+        "put_back": _ask_undo_rooms, "schedule_once": _ask_schedule_once,
+        "cancel_scheduled": _ask_cancel_scheduled,
+    }.items()},
     context=_ask_context,
     get_key=lambda: config.get("anthropic_api_key"),
     usage_get=_ask_usage_get, usage_put=_ask_usage_put,
@@ -9057,6 +9470,7 @@ async def ask_endpoint(req: AskRequest, request: Request):
     """One turn of Ask. The browser's X-Client-Id keys a few minutes of memory,
     so a follow-up ("the left one", "yes") continues the same conversation."""
     client_id = request.headers.get("X-Client-Id", "") or "anon"
+    _ask_request.set(f"{client_id}:{time.time()}")   # one undo snapshot per room per request
     result = await ASK_ENGINE.ask(client_id, req.text[:500])
     publish_event("config")
     return result

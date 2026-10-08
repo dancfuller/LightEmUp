@@ -1209,6 +1209,10 @@ anything until it's set up.
   ring. While waiting the button spins ("Working"), a pulsing line repeats the request
   ("Working on it… “…”"), and after 6s it says "Still working — setting the lights…".
   Sending blurs the input so a phone keyboard closes and doesn't hide that line.
+- **Grey "Ask" still does something (v3.60.3):** people press it before typing, so
+  pressing it with an empty box focuses the input (opening a phone keyboard) instead
+  of doing nothing. It is therefore NOT `disabled` or `aria-disabled` while empty —
+  only while a request runs.
 - A reply is tinted by outcome: green when something was done, amber when Ask is
   asking (with **Yes / No** buttons when the backend says `awaiting`, which just send
   "yes" / "no"), red for an error.

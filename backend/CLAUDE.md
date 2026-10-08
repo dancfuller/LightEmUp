@@ -2150,6 +2150,52 @@ the light-show rules for free, and it can't do anything the app can't.
   act and say what it picked, and to ask only when it can't tell WHICH light or room.
   To make that possible the state carries each room's current colors as hex
   (`_ask_swatch_hex`), not just the look's name.
+- **Ten gaps closed before they were hit (v3.60.3)**, each checked against the real
+  model with a live eval (below):
+  - **Relative changes** ("a bit brighter", "warmer") start from the state, which now
+    carries each room's level (average of its lit Hue lights) and each light's color /
+    white and level. Govee lights read "last sent", segmented ones "not reported", so
+    an answer about them can't pretend to know.
+  - **House moods** are fixed in the prompt (the household's own definitions): movie
+    2700K 10%, reading 4000K 100%, bedtime 2200K 20%, nightlight 2200K 5%, relax 2700K
+    50%, party = a Featured palette. Change them there.
+  - **No room named → ask**, never guess. **Sound-alike names** ("living rum") match.
+  - **`put_back`** (undo): `_ask_with_snapshot` wraps every light-changing action and
+    `_ask_snapshot` records, once per room per REQUEST (`_ask_request`, set in the
+    endpoint), each Hue light's exact bridge state, the room record, its exclusions,
+    its show and storm, and its Govee `device_state`. `_ask_undo_rooms` restores
+    exclusions, replays the old record (a scene's payload puts back segments too;
+    white/color/power via `reapply_room`), then Hue lights EXACTLY, then any whole
+    Govee light changed since. Memory only, 2 h, one use. It can't restore a
+    segmented light the old record doesn't cover, and says so.
+  - **`schedule_once`** ("in 20 minutes", "at 10:30", "at sunset") writes an ordinary
+    one-off schedule named `Ask: …` through `upsert_schedule`, so it's visible and
+    deletable in the Schedules tab; `cancel_scheduled` removes a pending one. Pending
+    ones are listed in the state with their ids. Repeating schedules stay out of scope.
+  - **Storms**: `start_storm` / `stop_storm` over `start_lightning` / `stop_room_storm`.
+  - **Exclusions are announced**: room-wide looks append "left alone because excluded:
+    …" (`_ask_excluded_note`) and the prompt says to mention it and how to release.
+  - **A light show with nothing to move refuses** (every light segmented-and-held or
+    excluded) instead of starting one that stops itself.
+  - `_ask_room_is_on` now reads a power record's LABEL when it has no `on` field
+    (older records), as "Set here" does; a Govee-only room switched off before v3.51.5
+    read as on.
+- **The model's WORDS are not trusted for the things that matter.** The live eval
+  caught the model claiming actions it hadn't taken, so `AskEngine` enforces in code:
+  - a house-wide action is confirmed only by a refusal from an EARLIER turn
+    (`pending[sig] = (tool, args, turn)`). The model was seen being refused and then
+    re-sending `confirmed: true` in the same breath, which used to run it;
+  - a plain yes (`_YES`) straight after Ask asked a question confirms the call made in
+    that turn (`yes_now`); a yes answered in words only runs the waiting action itself;
+  - while a yes is pending the reply can never claim success;
+  - "never mind" / "undo" / "cancel that" (`_TAKE_BACK`) answered in words only, right
+    after a turn that DID something (`last_ran`), runs `cancel_scheduled` (after a
+    timer) or `put_back` — the model said "I've cancelled the timer" without doing it
+    one time in three.
+- **The live eval** (scratch `eval_ask.py`): 31 real phrasings run against the real
+  model with the Pi's real layout and state, every action FAKED and recorded, config
+  piped in over ssh and never written. ~$0.14 a run. It went 26/31 → 31/31 across this
+  work; use it to re-check any prompt change before shipping it.
 - **Segmented lights are told to hold still.** The prompt says why (cloud segment
   calls ~2s apart flash a single color) and forbids suggesting otherwise; no tool can
   change the show's `segmented` setting.
