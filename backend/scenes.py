@@ -17,6 +17,7 @@ from pydantic import BaseModel
 from discovery import (
     get_hue_lights,
     set_hue_light_state,
+    hue_unpaced_scope,
     govee_lan_turn,
     govee_lan_brightness,
     govee_lan_color,
@@ -655,8 +656,11 @@ class SceneManager:
                         }
 
                 try:
+                    # Flashes skip the v3.60.4 command spacing: several bulbs have
+                    # to light in the same instant to read as lightning.
                     async with self._hue_semaphore:
-                        await set_hue_light_state(hue_ip, username, light_id, state)
+                        with hue_unpaced_scope():
+                            await set_hue_light_state(hue_ip, username, light_id, state)
                     if event.action == "flash":
                         self._notify_flash(room_name)
                 except Exception as exc:

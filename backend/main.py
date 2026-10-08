@@ -1806,7 +1806,7 @@ LIGHTSHOW_POST_PAINT_CHECK_S = 4.0
 # Gap between a show's Hue commands, ~8/s — under the bridge's ~10/s ceiling
 # (v3.57.1). Back to back, a 9-bulb step went out in under a second and bulbs
 # missed steps. See _lightshow_judge_light.
-LIGHTSHOW_HUE_GAP_S = 0.12
+LIGHTSHOW_HUE_GAP_S = 0.12   # every Hue send is also spaced >=0.15s globally since v3.60.4 (discovery.HUE_SEND_GAP_S)
 # How many recent sends per bulb are remembered, to recognize a missed step.
 LIGHTSHOW_HUE_HISTORY = 6
 
@@ -4166,6 +4166,9 @@ HUE_APPLY_VERIFY_S = 25
 #
 # The later passes remain as BACKSTOPS, not as the primary mechanism.
 HUE_COLOR_VERIFY_S = 8
+# The first delayed look after a room's ON/OFF (v3.60.4), for the same reasons as
+# the color check above; the 25s and (for an off) 150s passes stay as backstops.
+HUE_POWER_VERIFY_S = 8
 # How far the reported color may sit from what we asked before the late pass calls
 # it a MISS rather than gamut clamping. Observed clamps on this bridge run to
 # ~0.08 (Front Door: asked [0.6128,0.3524], settled [0.6768,0.3094]); the miss
@@ -4279,6 +4282,10 @@ def _arm_power_backstops(label: str, expectations: dict, since: dict, on: bool):
     if not expectations:
         return
     reason = f"{label} turned {'on' if on else 'off'}"
+    # v3.60.4: a first look at 8s too. With only the 25s check, a missed off was
+    # still visibly on long enough to be pressed again — which turned the room ON
+    # (2026-10-08) and handed every check a "newer command" to stand aside for.
+    schedule_hue_late_verify(expectations, reason, delay=HUE_POWER_VERIFY_S, since=since)
     schedule_hue_late_verify(expectations, reason, delay=HUE_APPLY_VERIFY_S, since=since)
     if not on:
         schedule_hue_late_verify(expectations, reason, delay=HUE_LATE_VERIFY_S, since=since)
@@ -4449,6 +4456,36 @@ def _reconcile_expectations(actual: dict) -> bool:
     return changed
 
 
+# A missed ON/OFF is re-sent HUE_POWER_REPAIR_SENDS times in all, this far apart
+# (v3.60.4). One re-send was not enough: on 2026-10-08 lights 16 and 22 missed the
+# room off AND both single re-sends, and stayed lit until sent by hand. Reading the
+# bridge back between attempts can't help — it records our command as done the
+# moment it accepts it and only learns the truth minutes later — and an on/off is
+# harmless to repeat, so repeat it. The later checks still judge the outcome.
+HUE_POWER_REPAIR_SENDS = 3
+HUE_POWER_REPAIR_GAP_S = 2.0
+
+
+async def _hue_repeat_power(ip: str, username: str, states: dict, since: Optional[dict]):
+    """The 2nd and later re-sends of a missed on/off. Stops for any light that has
+    had a newer command since, exactly like the first re-send."""
+    try:
+        for attempt in range(2, HUE_POWER_REPAIR_SENDS + 1):
+            await asyncio.sleep(HUE_POWER_REPAIR_GAP_S)
+            for lid, state in states.items():
+                if since and lid in since and hue_write_seq(lid) != since[lid]:
+                    continue
+                try:
+                    with hue_repair_scope():
+                        await set_hue_light_state(ip, username, lid, state)
+                except Exception as e:
+                    log.warning("Hue verify: re-send %d failed for %s: %s", attempt, lid, e)
+        log.info("Hue verify: re-sent on/off to %s %d times in all",
+                 ", ".join(sorted(states)), HUE_POWER_REPAIR_SENDS)
+    except asyncio.CancelledError:
+        pass
+
+
 async def _hue_verify_repair(expectations: dict, compare_color: bool = False,
                              since: Optional[dict] = None):
     """expectations: {light_id: state_dict_as_sent}. Re-sends to any light whose
@@ -4589,6 +4626,10 @@ async def _hue_verify_repair(expectations: dict, compare_color: bool = False,
                     await set_hue_light_state(ip, username, str(light_id), live[light_id])
             except Exception as e:
                 log.warning("Hue verify: re-send failed for %s: %s", light_id, e)
+        power = {str(lid): live[lid] for lid, why in repaired if why == "on"}
+        if power:
+            asyncio.create_task(_hue_repeat_power(ip, username, power, since),
+                                name="hue-power-repeat")
         if repaired:
             publish_event("config")
     except Exception:

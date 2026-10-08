@@ -279,6 +279,55 @@ coroutine gets its own context copy) and normal concurrent UI requests are unaff
 **When you add a new bulk Hue path, collect `res["state"]`, set `_in_bulk_hue`, and hand the
 batch to `schedule_hue_verify`.**
 
+## A room off that missed four bulbs — spacing and repeats (v3.60.4)
+2026-10-08 02:15, Living Room off: lights 17, 19, 22 and 16 stayed on. The log:
+- the off went to all nine bulbs **inside one second** (the bridge's ~10/s ceiling);
+- the 25s check found 17/19/22 still on and re-sent them — three PUTs in 0.1s;
+- a second press (02:15:22) had turned the room back ON, which every earlier check
+  then stood aside for as a "newer command";
+- the 150s check found 16, 18 and 22 on and re-sent them — three PUTs in 0.13s;
+  18 took it, **16 and 22 missed that too**;
+- two lone offs sent ~1s apart then landed at once.
+
+The delivery-health record agreed: 181 of 193 re-sends in 7 days were to the five
+AE 280 C bulbs (16/17/18/19/22). Software can't make those bulbs strong; it can stop
+sending them bursts and stop giving up after one try.
+
+- **Every Hue command is spaced `HUE_SEND_GAP_S` (0.15s) apart**, in
+  `discovery._hue_pace`, called from `set_hue_light_state` — the one function every
+  writer uses (room control, scenes, whites, repairs, Ask, power recovery). Sends go
+  out one at a time behind a FIFO lock, each timed from the PREVIOUS SEND ACTUALLY
+  GOING, not from a precomputed slot: slots were exact, but a sleep that woke late
+  followed by one on time left a 0.139s gap. Uses `time.perf_counter` —
+  `time.monotonic` ticks every ~15.6ms on Windows, coarser than the gap. One lock
+  per event loop (an `asyncio.Lock` is bound to one).
+- **Lightning flashes are exempt** (`hue_unpaced_scope`, around the flash loop in
+  `scenes.py`): bulbs must light in the same instant to read as lightning. The
+  storm's start-up dim and its restore ARE spaced — the restore is exactly the
+  room-wide burst this fixes. **A new path that needs simultaneity must opt out
+  explicitly**; everything else gets the spacing for free.
+- A nine-light room now takes ~1.25s to send instead of <1s. The light show's own
+  0.12s sleep plus the request time already exceeds 0.15s, so shows are unchanged.
+- **A missed on/off is re-sent `HUE_POWER_REPAIR_SENDS` (3) times in all,
+  `HUE_POWER_REPAIR_GAP_S` (2s) apart** (`_hue_repeat_power`, a background task from
+  `_hue_verify_repair`). NOT read back in between: the bridge records a command as
+  done the moment it accepts it and only learns otherwise minutes later, so a read
+  2s after a re-send always says "fine" and proves nothing. An on/off is harmless to
+  repeat. Each repeat skips a light with a newer command since, and runs in
+  `hue_repair_scope` so it can't disarm the later checks. Brightness and color
+  misses still get ONE re-send — repeating those can fight a slider.
+- **Power commands get a check at `HUE_POWER_VERIFY_S` (8s)** as well as 25s (and
+  150s for an off), in `_arm_power_backstops`. With 25s first, a missed off stayed
+  visibly on long enough to be pressed again — turning the room back on.
+- Covered by a scratch test (13 assertions) whose fake bridge LOSES any command
+  arriving <0.1s after the previous one and records it as done anyway: an unpaced
+  room off loses 8 of 9 there, a paced one loses none; flashes stay unspaced; a stuck
+  off gets exactly 3 spaced sends and lands; a newer command stops the repeats;
+  brightness gets one; the 8/25/150s checks are armed. It's a MODEL of the failure,
+  built from that night's evidence — the real test is the room off itself.
+- Still worth doing in the house: a mains-powered Philips Hue bulb or smart plug
+  between the bridge and those five bulbs strengthens the mesh where it's weak.
+
 ## Setting a level on an OFF light must not turn it on (v3.45.0)
 "Before turning a room on I wanted to set its brightness, so it comes on at that
 level. Moving the slider turned the light on instead."

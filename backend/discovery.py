@@ -292,6 +292,53 @@ def hue_repair_scope():
         _hue_repair_write.reset(token)
 
 
+# ─── Spacing every Hue command (v3.60.4) ─────────────────────────────────────
+# A room off went to the bridge as nine PUTs inside one second, right at its
+# ~10 commands/second ceiling, and three of the five AE 280 C bulbs missed it
+# (Living Room, 2026-10-08 02:15). So did both re-sends, each a burst of three
+# within 0.13s. Two lone offs sent ~1s apart then landed at once. The light show
+# learned the same lesson in v3.57.1 and paced itself; this paces EVERYONE, at the
+# one function every Hue writer goes through. Sends go out ONE AT A TIME, each at
+# least HUE_SEND_GAP_S after the previous one actually went (a FIFO lock), so
+# concurrent callers (a scene's gather over nine lights) queue up instead of
+# bursting. Measured from the real send rather than from a precomputed slot: a
+# sleep can wake late, and one late send followed by an on-time one used to leave
+# a shorter gap than intended.
+#
+# Lightning is exempt (`hue_unpaced_scope`): a flash has to hit several bulbs at
+# the same moment to read as lightning, and a storm is short and deliberate.
+HUE_SEND_GAP_S = 0.15
+_hue_last_send = 0.0
+_hue_pace_locks: dict = {}       # event loop → its lock (an asyncio.Lock is bound to one)
+_hue_unpaced: contextvars.ContextVar = contextvars.ContextVar("hue_unpaced", default=False)
+
+@contextmanager
+def hue_unpaced_scope():
+    """Hue writes inside this block skip the spacing (lightning flashes)."""
+    token = _hue_unpaced.set(True)
+    try:
+        yield
+    finally:
+        _hue_unpaced.reset(token)
+
+
+async def _hue_pace():
+    global _hue_last_send
+    if _hue_unpaced.get() or HUE_SEND_GAP_S <= 0:
+        return
+    loop = asyncio.get_running_loop()
+    lock = _hue_pace_locks.get(loop)
+    if lock is None:
+        _hue_pace_locks.clear()
+        lock = _hue_pace_locks[loop] = asyncio.Lock()
+    async with lock:
+        # perf_counter, not monotonic: monotonic only ticks every ~15.6ms on
+        # Windows, which is coarser than the spacing it measures. Re-checked in a
+        # loop because a sleep can also wake a little early.
+        while (wait := _hue_last_send + HUE_SEND_GAP_S - time.perf_counter()) > 0:
+            await asyncio.sleep(wait)
+        _hue_last_send = time.perf_counter()
+
 async def set_hue_light_state(ip: str, username: str, light_id: str, state: dict) -> bool:
     """Set the state of a Hue light. state can include on, bri, hue, sat, ct, etc.
 
@@ -317,6 +364,7 @@ async def set_hue_light_state(ip: str, username: str, light_id: str, state: dict
     # pending check must not reverse it either way.
     if not _hue_repair_write.get():
         note_hue_write(light_id)
+    await _hue_pace()
     async with httpx.AsyncClient(timeout=5.0, verify=False) as client:
         resp = await client.put(
             f"http://{ip}/api/{username}/lights/{light_id}/state",
