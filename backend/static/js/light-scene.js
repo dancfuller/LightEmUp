@@ -81,7 +81,9 @@ function stripRanks(n, direction) {
 // adjacent-distinctness matters — reshuffles ROYGBIV into R,G,V,Y,B,O,I. That's
 // a set of seven nice colors, not a rainbow.
 function cycleDownStrip(colors, n, offset = 0, preserveOrder = false) {
-  const list = (colors || []).filter(Boolean);
+  // Look-alikes merged (v3.61.0): two colors a segment shows as one would read as
+  // the same color twice in a row. See ledDistinct in utils.js.
+  const list = ledDistinct((colors || []).filter(Boolean));
   if (!list.length || n <= 0) return null;
   // orderPaletteForCycle returns an array of INDICES into `list`, not colors —
   // map them back. (Getting this wrong renders every segment transparent, which

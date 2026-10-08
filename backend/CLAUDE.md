@@ -1409,6 +1409,20 @@ so "Try it now" exercises the identical path.
   re-rolls every fire. It emits a normal `SceneApplyRequest`, so **all the existing
   timing, staggering, cloud_v2 color batching, progress SSE and "Now showing" recording
   come for free** (incl. `expect_hue`, so divergence detection works on palette fires).
+- **Look-alikes are merged and fixtures are honored (v3.61.0).**
+  - `lightshow.ColorDealer` merges colors a bulb shows as the same
+    (`lightshow.led_distinct` — same rule as `ledDistinct` in utils.js; see
+    `static/js/CLAUDE.md`) before dealing. Every palette, My Colors, team-color,
+    Ask and schedule look goes through it. `_lightshow_pool` merges too (unless
+    that would leave one color — a show needs two).
+  - **`_fixture_repair`** runs right after dealing: each fixture's members, walked
+    in dealing order, get colors no earlier member has, preferring one that also
+    differs from the light's own neighbors. The Scenes panel always did this; this
+    builder never read fixtures, so a schedule or Ask could give two Triple Lamp
+    bulbs one color — 69 of 200 replayed Halloween builds on the real Living Room
+    did, 0 of 200 after. A fixture is THE general way to say "these lights read as
+    one group" (e.g. front-door lights plus the lamp post beside them); no other
+    rule should be added for that.
 - **On a LINE, colors are dealt in physical order (v3.48.2).** `_ColorDealer` never
   repeats consecutively — but only in the order it is DEALT. Devices were sorted by their
   layout node and a strip's colors dealt in one block at that spot, while on the real

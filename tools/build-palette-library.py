@@ -29,8 +29,16 @@ DEST = ROOT / "backend" / "static" / "js" / "palette-library.js"
 
 # The re-cut in v3.13.0 fixed the length of no palette but did bound it, and more
 # than 8 outruns most rooms. The floor was 4 until the LED pass (v3.58.0), which
-# allowed 3 rather than drop an autumn palette that lost its brown.
-MIN_COLORS, MAX_COLORS = 3, 8
+# allowed 3 rather than drop an autumn palette that lost its brown. 2 since the
+# look-alike pass (v3.61.0): sixteen palettes were two real colors plus shades of
+# them, which a bulb can't tell apart, and two colors honestly beats four that
+# read as two.
+MIN_COLORS, MAX_COLORS = 2, 8
+
+# Colors a bulb shows as the SAME (v3.61.0) — one rule, shared with the Pi and the
+# browser: lightshow.led_same / ledSame in utils.js.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
+import lightshow as _ls  # noqa: E402
 
 
 def led_problem(c) -> str:
@@ -102,6 +110,12 @@ def verify(palettes: list):
                 problems.append(f"{name}: bad color {c!r} — want [r, g, b] 0-255")
             elif led_problem(c):
                 problems.append(f"{name}: {c!r} is {led_problem(c)} — see led_problem()")
+        good = [c for c in colors if isinstance(c, list) and len(c) == 3]
+        for i, a in enumerate(good):
+            for b in good[i + 1:]:
+                if _ls.led_same(a, b):
+                    problems.append(f"{name}: {a!r} and {b!r} are the same color on a bulb "
+                                    f"(only darker/paler) — keep one; see lightshow.led_same")
     if problems:
         for pr in problems[:20]:
             print(f"  - {pr}", file=sys.stderr)
@@ -147,9 +161,15 @@ def verify(palettes: list):
     # Spot-check a few known palettes so a mangled file is loud rather than
     # merely well-formed. Watermelon and Rainbow are the v3.13.0 re-cut's; Noir went
     # in the LED pass (all gray, so all white on a bulb), and Spiced Cider is the
-    # autumn palette that pass cut to 3 rather than drop.
+    # autumn palette that pass cut to 3 rather than drop. The look-alike pass
+    # (v3.61.0) took Watermelon's dark green, Spiced Cider's dark orange and
+    # Halloween's dark purple; Savanna and Zen went entirely (one color on a bulb).
     by_name = {p["name"]: p for p in palettes}
-    for name, want_len in (("Watermelon", 5), ("Rainbow", 8), ("Spiced Cider", 3)):
+    for gone in ("Savanna", "Zen"):
+        if gone in by_name:
+            fail(f"spot-check: {gone!r} is back — it is one color on a bulb")
+    for name, want_len in (("Watermelon", 4), ("Rainbow", 8), ("Spiced Cider", 2),
+                           ("Halloween", 3)):
         got = by_name.get(name)
         if not got:
             fail(f"spot-check: {name!r} is missing")

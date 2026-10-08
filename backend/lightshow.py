@@ -41,6 +41,7 @@ declares which layouts it belongs to:
   which never look at a position.
 """
 
+import math
 import random
 from typing import Optional
 
@@ -140,15 +141,73 @@ def fallback_pattern(geometry: str = "none") -> str:
     return DEFAULT_PATTERN if pattern_ok(DEFAULT_PATTERN, geometry) else patterns_for(geometry)[0]["key"]
 
 
+# ─── Colors a light shows as the SAME (v3.61.0) ─────────────────────────────
+# A light shows a color's hue and saturation; how DARK it is only means less
+# light, and the scene sets the level itself. So #8C3CC8 and #5A1E78 are one
+# purple on a bulb (0.018 apart in Hue xy) — and on 2026-10-08 the Exterior Front's
+# two door lights got exactly that pair from Halloween and showed the same color
+# side by side, while every "no two neighbors alike" rule here was satisfied.
+# Colors are merged by what the BULB is sent: the same RGB → xy conversion as
+# main._rgb_to_hue_xy. Mirror of ledXY / ledSame / ledDistinct in utils.js; keep
+# the math and LED_SAME_XY in step.
+LED_SAME_XY = 0.03
+
+
+def led_xy(c) -> Optional[tuple]:
+    def g(v):
+        v = v / 255.0
+        return pow(v, 2.2) if v > 0.04045 else v / 12.92
+    r, gg, b = g(c[0]), g(c[1]), g(c[2])
+    X = r * 0.664511 + gg * 0.154324 + b * 0.162028
+    Y = r * 0.283881 + gg * 0.668433 + b * 0.047685
+    Z = r * 0.000088 + gg * 0.072310 + b * 0.986039
+    t = X + Y + Z
+    return (X / t, Y / t) if t > 0 else None
+
+
+def led_same(a, b) -> bool:
+    # Near-black has no meaningful hue; never merge it with anything.
+    if max(a[:3]) < 40 or max(b[:3]) < 40:
+        return False
+    p, q = led_xy(a), led_xy(b)
+    return bool(p and q) and math.dist(p, q) < LED_SAME_XY
+
+
+def led_distinct(colors: list) -> list:
+    """One color per look-alike group, in first-appearance order, keeping the
+    BRIGHTEST member (a Govee light shows exactly the RGB it's sent, so the dark
+    one is just a dimmer version of the same color).
+
+    Repeated until nothing merges: swapping in a group's brighter member can make
+    it a look-alike of ANOTHER color already kept (Dreamy did exactly that)."""
+    out: list = list(colors or [])
+    while True:
+        merged: list = []
+        for c in out:
+            for i, k in enumerate(merged):
+                if led_same(k, c):
+                    if max(c[:3]) > max(k[:3]):
+                        merged[i] = c
+                    break
+            else:
+                merged.append(c)
+        if len(merged) == len(out):
+            return merged
+        out = merged
+
+
 class ColorDealer:
     """Hands out palette colors so that consecutive calls never repeat.
 
     Reshuffles at each cycle boundary (and re-rolls if the new cycle would open
     with the color the last one closed on), so a long strip doesn't show the
-    same repeating ABCABC pattern down its whole length."""
+    same repeating ABCABC pattern down its whole length.
+
+    Look-alikes are merged first (v3.61.0, `led_distinct`), so "never repeats"
+    holds for what the bulbs SHOW, not just for the values sent."""
 
     def __init__(self, colors: list, rng=None):
-        self.colors = list(colors)
+        self.colors = led_distinct([tuple(c) for c in colors])
         self.rng = rng or random
         self.queue: list = []
         self.last = None

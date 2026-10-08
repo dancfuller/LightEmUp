@@ -170,7 +170,7 @@ backend/
   usage_log.py         # Usage log (v3.49.0): which screens and actions each device
                        # uses. Writes usage_log.jsonl + usage_devices.json beside it
                        # (gitignored runtime data, NOT config.json, NOT in backups)
-  palette_library.json # SOURCE OF TRUTH for the 146 curated palettes, shared by the
+  palette_library.json # SOURCE OF TRUTH for the 144 curated palettes, shared by the
                        # server and (via a generated JS file) the browser
   config.json          # LOCAL ONLY (gitignored) — user config
   config.json.example  # Template for config.json
@@ -203,7 +203,7 @@ backend/
       room-map.js         # RoomMap — interactive SVG floor plan & linear layout editor
       palette-data.js     # Static color datasets for Teams/NCAA/Flags modes (PRESET_TEAMS/NCAA/FLAGS)
       palette-library.js  # GENERATED (tools/build-palette-library.py) — PALETTE_LIBRARY +
-                          # PALETTE_CATEGORIES, the 146 curated palettes. Never hand-edit;
+                          # PALETTE_CATEGORIES, the 144 curated palettes. Never hand-edit;
                           # edit backend/palette_library.json and regenerate.
       color-mode.js       # Room color tool — palette/gradient/beacon/custom/teams/ncaa/flags + apply pipeline
       light-scene.js      # LightScenePanel — the same libraries (rainbow/palette/teams/

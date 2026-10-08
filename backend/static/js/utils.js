@@ -628,6 +628,52 @@ function rgbToHex(r, g, b) {
   return `#${chan(r)}${chan(g)}${chan(b)}`.toUpperCase();
 }
 
+// ─── Colors a light shows as the SAME (v3.61.0) ─────────────────────────────
+// A light shows a color's hue and saturation; how DARK a color is only means less
+// light, and the scene sets the level itself. So "#8C3CC8 purple" and "#5A1E78 dark
+// purple" are one color on a bulb: Exterior Front, 2026-10-08, the two door lights
+// got those two and showed the same purple, side by side. Every color-list mode
+// therefore merges look-alikes before dealing colors out, so "neighbors differ"
+// means differ ON THE BULB. Mirror of lightshow.led_xy / led_same / led_distinct
+// on the Pi — keep them in step (same math, same threshold).
+const LED_SAME_XY = 0.03;
+function ledXY(c) {
+  const g = (v) => { v = v / 255; return v > 0.04045 ? Math.pow(v, 2.2) : v / 12.92; };
+  const r = g(c.r), gg = g(c.g), b = g(c.b);
+  const X = r * 0.664511 + gg * 0.154324 + b * 0.162028;
+  const Y = r * 0.283881 + gg * 0.668433 + b * 0.047685;
+  const Z = r * 0.000088 + gg * 0.072310 + b * 0.986039;
+  const t = X + Y + Z;
+  return t > 0 ? [X / t, Y / t] : null;
+}
+function ledSame(a, b) {
+  if (!a || !b) return false;
+  // A white temperature is its own command (CT), judged by its Kelvin.
+  if (a.kelvin != null || b.kelvin != null) return a.kelvin === b.kelvin;
+  // Near-black has no meaningful hue; never merge it with anything.
+  if (Math.max(a.r, a.g, a.b) < 40 || Math.max(b.r, b.g, b.b) < 40) return false;
+  const p = ledXY(a), q = ledXY(b);
+  return !!p && !!q && Math.hypot(p[0] - q[0], p[1] - q[1]) < LED_SAME_XY;
+}
+// One color per look-alike group, in the order each group first appears, keeping
+// the BRIGHTEST member (a Govee light shows exactly the RGB it's sent, so the dark
+// one would just be a dimmer version of the same color). Repeated until nothing
+// merges: swapping in a brighter member can make it a look-alike of ANOTHER kept
+// color (the Dreamy palette did exactly that).
+function ledDistinct(colors) {
+  let out = [...(colors || [])];
+  for (;;) {
+    const merged = [];
+    for (const c of out) {
+      const i = merged.findIndex(k => ledSame(k, c));
+      if (i < 0) merged.push(c);
+      else if (Math.max(c.r, c.g, c.b) > Math.max(merged[i].r, merged[i].g, merged[i].b)) merged[i] = c;
+    }
+    if (merged.length === out.length) return merged;
+    out = merged;
+  }
+}
+
 // ─── HSL Utilities (for tonal shade generation) ─────────────────────────────
 
 function rgbToHsl(r, g, b) {

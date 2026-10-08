@@ -1468,6 +1468,50 @@ def _apply_fill_mode(device_key: str, seg_colors: list) -> list:
     return seg_colors
 
 
+def _fixture_repair(room_name: str, units: list, dealt: dict, colors: list, rng=None) -> int:
+    """Make the members of each FIXTURE in this room different colors (v3.61.0).
+
+    The Scenes panel has always forced fixture mates apart; this builder never
+    looked at fixtures, so a schedule, Ask or "Try one now" could give two bulbs of
+    the Triple Lamp the same color (6 runs in 20 in a replay against the real room).
+    A fixture is the general way to say "these lights read as one group" — e.g. two
+    front-door lights and a lamp post right beside them — so it has to mean the same
+    thing whichever path paints the room.
+
+    `units` is the dealing order (the line order on a line), `dealt` maps unit →
+    color, `colors` the palette with look-alikes already merged. Members are walked
+    in that order; one whose color a bulb would show the same as an earlier member's
+    gets a color no earlier member has — preferring one that also differs from its
+    own neighbors in the order, so fixing the fixture doesn't make a new repeat next
+    door. If the palette has fewer colors than the fixture has members, the rest are
+    left as dealt. Only whole lights count; a segmented device's segments already
+    differ along it. Returns how many lights it changed."""
+    rng = rng or random
+    present = {k for k, i in units if i is None}
+    index = {u: n for n, u in enumerate(units)}
+    changed = 0
+    for fx in (config.get("fixtures") or {}).values():
+        members = [m for m in fx.get("members") or [] if m in present]
+        if len(members) < 2:
+            continue
+        members.sort(key=lambda m: index[(m, None)])
+        used = []
+        for m in members:
+            unit = (m, None)
+            cur = dealt[unit]
+            if any(lightshow.led_same(cur, u) for u in used):
+                n = index[unit]
+                near = [dealt[units[j]] for j in (n - 1, n + 1) if 0 <= j < len(units)]
+                free = [c for c in colors if not any(lightshow.led_same(c, u) for u in used)]
+                best = [c for c in free if not any(lightshow.led_same(c, x) for x in near)]
+                pick = best or free
+                if pick:
+                    dealt[unit] = cur = tuple(rng.choice(pick))
+                    changed += 1
+            used.append(cur)
+    return changed
+
+
 def _build_palette_scene(room_name: str, palette: dict, brightness: int = 100,
                          rng=None):
     """Resolve a palette into a SceneApplyRequest for one room.
@@ -1553,6 +1597,8 @@ def _build_palette_scene(room_name: str, palette: dict, brightness: int = 100,
     dealt = {}
     for unit in units:                    # one next() per unit, in THIS order
         dealt[unit] = dealer.next()
+    # Fixture members apart, as the Scenes panel does (v3.61.0).
+    _fixture_repair(room_name, units, dealt, dealer.colors, dealer.rng)
 
     for key, kind, d in plan:
         if kind == "hue":
@@ -2193,9 +2239,12 @@ def _lightshow_pool(room_name: str, show: dict, rt: dict, rng=None) -> tuple:
     Palette hop is exempt: it draws a different palette every step, so an order
     stored against one of them means nothing."""
     raw, label = _lightshow_palette(room_name, show, rt, rng)
-    if show.get("pattern") == "hop":
-        return raw, label
-    return lightshow.apply_color_order(raw, show.get("color_order")), label
+    pool = raw if show.get("pattern") == "hop" else lightshow.apply_color_order(raw, show.get("color_order"))
+    # Look-alikes merged (v3.61.0): a show trading two colors a bulb shows as one
+    # changes nothing anyone can see. Kept as-is if merging would leave one color —
+    # a show needs two, and the panel says what it's working with.
+    merged = lightshow.led_distinct(list(pool))
+    return (merged if len(merged) >= 2 else pool), label
 
 
 def _lightshow_palette(room_name: str, show: dict, rt: dict, rng=None) -> tuple:

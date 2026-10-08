@@ -489,7 +489,7 @@ Assigns colors/temperatures across a room's devices and applies them.
   re-keyed when a seed is removed). The channel sliders commit on a throttle, so they
   update through a functional `setCustomColors` — a closure over the seed would drop
   a channel changed in between.
-- **Curated palettes are VARIABLE length (3–8; 4–8 until v3.58.0) — never pad to a fixed count (v3.13.0).**
+- **Curated palettes are VARIABLE length (2–8 since v3.61.0; 3–8 from v3.58.0, 4–8 before) — never pad to a fixed count (v3.13.0).**
   Every library palette used to be exactly 8 colors, so any theme with fewer real ideas
   was filled out with tints of colors already in it: "Watermelon" was 2 hues across 8
   slots (four reds, four greens), and an audit found near-duplicates in **152 of 160**
@@ -502,6 +502,28 @@ Assigns colors/temperatures across a room's devices and applies them.
   near-neutrals are judged on lightness alone; floor of 4. Deliberately monochromatic
   themes (Cranberry, Noir, Snowfall) are legitimate — they're just shorter now.
   **When adding a palette, list only genuinely distinct colors.**
+- **Colors a bulb shows as the SAME are one color (v3.61.0).** A light shows hue
+  and saturation; darkness is only less light, and the scene sets the level. So
+  Halloween's `#8C3CC8` purple and `#5A1E78` "dark purple" (0.018 apart in Hue xy)
+  are one purple — and on 2026-10-08 the Exterior Front's two door lights got
+  exactly that pair and showed the same color side by side, while every
+  "neighbors differ" rule was satisfied, because both sides compared values (the
+  hub exactly, this file with lightness counted as distance).
+  - **`ledDistinct` (utils.js) merges look-alikes before any color-list mode deals
+    colors**: `computePalette`, `computeCustom` (exact only — Shades mode's tonal
+    steps are the point of it), `cycleAssign` (Teams / NCAA / Flags, exact only) and
+    light-scene's `cycleDownStrip`. Same-ness is `ledSame`: Hue xy (the same RGB→xy
+    the hub sends) within `LED_SAME_XY` (0.03); whites by Kelvin; near-black never
+    merges. The brightest member of a group is kept (a Govee light shows exactly the
+    RGB it's sent). It repeats until nothing merges — swapping in a brighter member
+    can make it a look-alike of another kept color (Dreamy did).
+  - **Mirror of `lightshow.led_xy / led_same / led_distinct` on the Pi.** Keep the
+    math and the threshold identical: a parity check compared all 120,295 color
+    pairs in the library and every merged palette, with zero differences.
+  - **The library was cleaned with the same rule**: 51 palettes lost a look-alike,
+    Savanna and Zen (one color on a bulb) were dropped, and the minimum became 2
+    colors. `tools/build-palette-library.py` now refuses a look-alike pair, so one
+    can't come back. Changing `LED_SAME_XY` means re-running that generator.
 - **A palette can be listed in a second category: `also` (v3.58.3).** Each holiday
   palette keeps `category: "Holidays"` and is ALSO offered in its season — Halloween,
   Day of the Dead and Diwali under Autumn; Christmas, Hanukkah, New Year, Lunar New
@@ -771,7 +793,7 @@ add/edit form; `LocationCard` renders in Settings.
     the button says so.
 - **`palette-library.js` is GENERATED — never hand-edit it.** Source of truth is
   `backend/palette_library.json`; regenerate with `python tools/build-palette-library.py`
-  and commit both. It defines `PALETTE_LIBRARY` (146 palettes, variable 3–8 colors) and
+  and commit both. It defines `PALETTE_LIBRARY` (144 palettes, variable 2–8 colors) and
   `PALETTE_CATEGORIES`, and must load **before** `color-mode.js` and `schedules.js`.
 - **Switching action type REBUILDS the action, it doesn't merge (v3.19.1).**
   `setActionType(type, override)` keeps the target and takes that type's own fields from

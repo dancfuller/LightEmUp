@@ -1100,7 +1100,9 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
   const computePalette = useCallback(() => {
     if (placedColorLights.length === 0 || paletteColors.length === 0) return null;
 
-    const colors = paletteColors;
+    // Look-alikes merged first (v3.61.0): two colors a bulb shows as one must not
+    // count as "different" when neighbors are kept apart. See ledDistinct.
+    const colors = ledDistinct(paletteColors);
     const N = colors.length;
 
     // LINEAR layouts: a clean positional cycle (ABCABC…) down the strip. This
@@ -1453,8 +1455,11 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
   // proposal. ─────────────────────────────────────────────────────────
   const computeCustom = useCallback(() => {
     if (placedColorLights.length === 0 || customColors.length === 0) return null;
-    const M = customColors.length;
     const exact = customShadeMode === "exact";
+    // Exact colors: merge look-alikes (v3.61.0, see ledDistinct). Shades mode is
+    // left alone — its tonal steps of one color are the point of choosing it.
+    const seeds = exact ? ledDistinct(customColors) : customColors;
+    const M = seeds.length;
     const SHADES_PER_SEED = exact ? 1 : 4;
 
     // Each seed slot is either a color ({r,g,b}) or a white temperature
@@ -1463,7 +1468,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     // contributes only itself; in "shades" mode color slots get a tonal range
     // and white slots get a few temperature steps spanning ±~600K.
     const ctE = (k) => ({ ...kelvinToRGB(k), kelvin: k });
-    const shadesBySeed = customColors.map(c => {
+    const shadesBySeed = seeds.map(c => {
       const isWhite = c.kelvin != null;
       if (exact) return [isWhite ? ctE(c.kelvin) : c];
       if (isWhite) {
@@ -1529,8 +1534,10 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
   // differ). Exact colors only — no shades. Shuffle rotates the start color.
   const cycleAssign = useCallback((colors, seedKey, shadeMode = "exact") => {
     if (placedColorLights.length === 0 || !colors || colors.length === 0) return null;
-    const M = colors.length;
     const exact = shadeMode !== "shades";
+    // Team / college / flag colors: merge look-alikes when exact (v3.61.0).
+    if (exact) colors = ledDistinct(colors);
+    const M = colors.length;
     const SHADES_PER_SEED = exact ? 1 : 4;
     // exact → each color is itself; shades → a tonal range per color, advanced
     // on each wrap of the cycle so repeats aren't identical (as in Custom mode).
