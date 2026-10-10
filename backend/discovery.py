@@ -204,7 +204,12 @@ _hue_caps: dict = {}
 
 def _note_hue_caps(light_id, info: dict):
     st = info.get("state") or {}
-    ctl = (info.get("capabilities") or {}).get("control") or {}
+    caps = info.get("capabilities") or {}
+    if "certified" in caps:
+        # The bridge's own flag: false for a third-party bulb (every Innr here).
+        # Those are the ones that miss commands — see hue_early_repeat below.
+        (_hue_uncertified.add if caps.get("certified") is False else _hue_uncertified.discard)(str(light_id))
+    ctl = caps.get("control") or {}
     _hue_caps[str(light_id)] = {
         "ct": "ct" in st or "ct" in ctl,
         "color": "xy" in st or "hue" in st or "colorgamut" in ctl or "colorgamuttype" in ctl,
@@ -339,7 +344,118 @@ async def _hue_pace():
             await asyncio.sleep(wait)
         _hue_last_send = time.perf_counter()
 
+# ─── Early repeats for the bulbs that miss commands (v3.61.1) ────────────────
+# Every Living Room miss for weeks has been one of five Innr AE 280 C bulbs —
+# third-party, which the bridge marks NOT certified. Two failures: an on/off that
+# never arrives, and a color that lands as plain white. The checks can't see
+# either for up to 2.5 minutes, because the bridge records a command as done when
+# it ACCEPTS it and only learns from these bulbs later (2026-10-10 01:30: the 8s
+# and 25s checks read "off" for four of them; the 150s check finally saw them on).
+#
+# So for an uncertified bulb, don't wait to detect a miss: send the same on/off
+# again at HUE_ECHO_POWER_S, and a color or brightness change again at
+# HUE_ECHO_COLOR_S. All are harmless to repeat. Any newer command to that light
+# cancels the rest (the write count moves), so a second press is never fought and a
+# slider drag only ever repeats its LAST value, ~2s after the finger lifts. Not for
+# lightning flashes, light show steps (`hue_no_echo_scope`; the show has its own
+# missed-step handling) or a re-send (it IS a repeat). The 8/25/150s checks stay as
+# backstops.
+HUE_ECHO_POWER_S = (1.5, 4.0)
+HUE_ECHO_COLOR_S = (2.0,)
+_hue_uncertified: set = set()
+_hue_no_echo: contextvars.ContextVar = contextvars.ContextVar("hue_no_echo", default=False)
+
+
+@contextmanager
+def hue_no_echo_scope():
+    """Hue writes inside this block get no early repeats (light show steps)."""
+    token = _hue_no_echo.set(True)
+    try:
+        yield
+    finally:
+        _hue_no_echo.reset(token)
+
+
+def hue_is_uncertified(light_id) -> bool:
+    return str(light_id) in _hue_uncertified
+
+
+def _hue_echo_delays(light_id, state: dict) -> tuple:
+    if (_hue_repair_write.get() or _hue_unpaced.get() or _hue_no_echo.get()
+            or str(light_id) not in _hue_uncertified):
+        return ()
+    if "on" in state:
+        return HUE_ECHO_POWER_S
+    if any(k in state for k in ("xy", "ct", "hue", "sat", "bri")):
+        return HUE_ECHO_COLOR_S
+    return ()
+
+
+async def _hue_echo(ip: str, username: str, light_id: str, state: dict, seq: int, delays: tuple):
+    start = time.perf_counter()
+    try:
+        for d in delays:
+            while (wait := start + d - time.perf_counter()) > 0:
+                await asyncio.sleep(wait)
+            if hue_write_seq(light_id) != seq:
+                return                          # a newer command wins
+            with hue_repair_scope():            # a repeat, not a new intention
+                await set_hue_light_state(ip, username, light_id, state)
+    except asyncio.CancelledError:
+        pass
+    except Exception as e:
+        print(f"[Hue] early repeat to light {light_id} failed: {e}")
+
+
 async def set_hue_light_state(ip: str, username: str, light_id: str, state: dict) -> bool:
+    """Send one command to a Hue light; for an uncertified bulb, also schedule the
+    early repeats (see HUE_ECHO_POWER_S). The send itself is _set_hue_light_state_once."""
+    delays = _hue_echo_delays(light_id, state)
+    ok = await _set_hue_light_state_once(ip, username, light_id, state)
+    if ok and delays:
+        _start_hue_echo(ip, username, light_id, state, delays)
+    return ok
+
+
+def _start_hue_echo(ip, username, light_id, state, delays):
+    asyncio.create_task(_hue_echo(ip, username, str(light_id), dict(state),
+                                  hue_write_seq(light_id), delays),
+                        name="hue-early-repeat")
+
+
+def schedule_hue_echo(ip: str, username: str, light_id, state: dict):
+    """The early repeats for a light that was written some OTHER way than
+    set_hue_light_state — a group command (v3.61.1). Same rules."""
+    delays = _hue_echo_delays(light_id, state)
+    if delays:
+        _start_hue_echo(ip, username, light_id, state, delays)
+
+
+async def set_hue_group_action(ip: str, username: str, group_id: str, state: dict) -> bool:
+    """ONE command to a whole bridge group (v3.61.1) — a single Zigbee groupcast
+    that reaches every bulb at once, which is how the Hue app switches a room.
+    The caller counts it as a write to each member (note_hue_write) and schedules
+    their early repeats; this only sends. Spaced like every other Hue command."""
+    await _hue_pace()
+    async with httpx.AsyncClient(timeout=5.0, verify=False) as client:
+        resp = await client.put(f"http://{ip}/api/{username}/groups/{group_id}/action",
+                                json=state)
+        if resp.status_code != 200:
+            return False
+        try:
+            body = resp.json()
+        except Exception:
+            return True
+        if not isinstance(body, list):
+            return True
+        errors = [i["error"] for i in body if isinstance(i, dict) and isinstance(i.get("error"), dict)]
+        for err in errors:
+            print(f"[Hue] group {group_id} rejected {err.get('address') or '?'}: "
+                  f"{err.get('description') or err}")
+        return not errors and any(isinstance(i, dict) and "success" in i for i in body)
+
+
+async def _set_hue_light_state_once(ip: str, username: str, light_id: str, state: dict) -> bool:
     """Set the state of a Hue light. state can include on, bri, hue, sat, ct, etc.
 
     **The status code is not the answer.** The Hue v1 API answers 200 and then

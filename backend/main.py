@@ -28,6 +28,10 @@ from discovery import (
     get_hue_lights,
     get_hue_groups,
     set_hue_light_state,
+    hue_no_echo_scope,
+    set_hue_group_action,
+    schedule_hue_echo,
+    note_hue_write,
     hue_write_seq,
     hue_repair_scope,
     hue_supported_state,
@@ -2349,6 +2353,17 @@ async def _lightshow_paint(room_name: str, show: dict, cells: list[dict],
                            frame: list, write: set, seed: bool = False,
                            hue_sent: Optional[dict] = None,
                            hue_hist: Optional[dict] = None) -> set:
+    """A frame's Hue writes get no early repeats (v3.61.1): the show re-sends a
+    missed step itself, and repeating every step would double its Zigbee traffic."""
+    with hue_no_echo_scope():
+        return await _lightshow_paint_frame(room_name, show, cells, frame, write, seed,
+                                            hue_sent, hue_hist)
+
+
+async def _lightshow_paint_frame(room_name: str, show: dict, cells: list[dict],
+                                 frame: list, write: set, seed: bool = False,
+                                 hue_sent: Optional[dict] = None,
+                                 hue_hist: Optional[dict] = None) -> set:
     """Put one frame on the lights. Returns the cell keys that FAILED to send.
 
     The caller drops those from its record of what's painted, so the next frame
@@ -5044,6 +5059,76 @@ async def delete_room(room_name: str):
     return {"success": removed}
 
 
+# ─── Whole-room power as ONE Hue group command (v3.61.1) ────────────────────
+# The Hue app switches a room with a single group command — one Zigbee groupcast
+# that reaches every bulb at once. LightEmUp sent one command per bulb, and a
+# bulb that missed its own got no second chance. That is the most likely reason
+# the Living Room's on/off was reliable until LightEmUp became the main way it's
+# switched (see backend/CLAUDE.md "Early repeats…"). The bridge already has
+# groups matching LightEmUp's rooms exactly (81 Living room, 82 Bedroom, 4 Outdoor).
+HUE_GROUPS_TTL_S = 300
+_hue_groups_cache: dict = {"at": 0.0, "groups": []}
+
+
+async def _hue_group_for(light_ids: list, ip: str, username: str) -> Optional[str]:
+    """The bridge group whose lights are EXACTLY these, or None. A group with an
+    extra or a missing light would switch the wrong set, so only an exact match
+    counts. Bridge groups change rarely; read at most every HUE_GROUPS_TTL_S."""
+    want = sorted(str(x) for x in light_ids)
+    now = time.monotonic()
+    if now - _hue_groups_cache["at"] > HUE_GROUPS_TTL_S or not _hue_groups_cache["groups"]:
+        try:
+            _hue_groups_cache.update(groups=await get_hue_groups(ip, username) or [], at=now)
+        except Exception as e:
+            log.debug("Hue groups: read failed (%s)", e)
+            return None
+    matches = [g for g in _hue_groups_cache["groups"]
+               if sorted(str(x) for x in g.get("light_ids") or []) == want]
+    matches.sort(key=lambda g: g.get("type") != "Room")     # a Room before a zone
+    return str(matches[0]["id"]) if matches else None
+
+
+async def _hue_room_group_power(room_name: str, room: dict, on: bool, ip: str,
+                                username: str, results: dict, hue_sent: dict) -> bool:
+    """Send a room's on/off as one group command. Returns False — and sends
+    nothing — when the per-bulb path must be used instead: one Hue light (nothing
+    to gain), no exactly-matching group, or turning ON with a level waiting for a
+    light's next power-on (each bulb needs its own level then). If the group
+    command itself fails, also False, and the caller falls back to per-bulb.
+
+    Each member is counted as written (so the checks and early repeats know the
+    newest intention), recorded for power recovery, and handed to the same
+    verifies as before. Uncertified (Innr) members still get their early repeats,
+    one bulb at a time, on top of the groupcast."""
+    lights = [str(x) for x in room.get("hue_light_ids", [])]
+    if len(lights) < 2:
+        return False
+    if on and any(pending_brightness(f"hue:{lid}") is not None for lid in lights):
+        return False
+    gid = await _hue_group_for(lights, ip, username)
+    if not gid:
+        return False
+    for lid in lights:
+        note_hue_write(lid)
+    try:
+        ok = await set_hue_group_action(ip, username, gid, {"on": on})
+    except Exception as e:
+        log.warning("Room %r: Hue group %s failed (%s) — sending per bulb", room_name, gid, e)
+        return False
+    if not ok:
+        log.warning("Room %r: Hue group %s refused — sending per bulb", room_name, gid)
+        return False
+    log.info("Room %r: turned %s with ONE Hue group command (group %s, %d lights)",
+             room_name, "on" if on else "off", gid, len(lights))
+    for lid in lights:
+        state = {"on": on}
+        record_hue_state(lid, state)
+        hue_sent[lid] = state
+        results["hue"].append({"light_id": lid, "success": True, "group": gid})
+        schedule_hue_echo(ip, username, lid, state)
+    return True
+
+
 @app.post("/api/rooms/control")
 async def control_room(req: RoomStateRequest):
     """Control all lights in a room at once."""
@@ -5079,7 +5164,12 @@ async def control_room(req: RoomStateRequest):
 
     # Control Hue lights in the room
     hue_sent = {}
-    if ip and username:
+    # Plain power to the whole room goes out as ONE bridge group command when the
+    # bridge has a group of exactly these lights (v3.61.1); see _hue_room_group_power.
+    by_group = (bool(ip and username) and req.on is not None and not carries_look
+                and await _hue_room_group_power(req.room_name, room, bool(req.on),
+                                                ip, username, results, hue_sent))
+    if ip and username and not by_group:
         for light_id in room.get("hue_light_ids", []):
             if f"hue:{light_id}" in skip:
                 results["hue"].append({"light_id": light_id, "success": True,

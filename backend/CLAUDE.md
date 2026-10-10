@@ -328,6 +328,65 @@ sending them bursts and stop giving up after one try.
 - Still worth doing in the house: a mains-powered Philips Hue bulb or smart plug
   between the bridge and those five bulbs strengthens the mesh where it's weak.
 
+## Early repeats for the bulbs that miss — and what's NOT the cause (v3.61.1)
+2026-10-09/10: a 22:18 scene left 16/17/18/19/22 on plain white (repaired at +43s),
+and a 01:30 room off left the same five on until the 150s check. The bridge's own
+records name them: **Innr AE 280 C** (fw 2.00.02 / 2.2), `capabilities.certified:
+false`. The Philips LCT014s (10, 13) and the Innr AE 282 Cs (23, 24) in the same
+room were fine. The public Zigbee OTA index has one AE 280 C image (0x20026A30 ≈
+2.0.0.2) — what 16 and 18 already run — and the Hue bridge doesn't update
+third-party bulbs anyway.
+
+**Why the checks can't be pulled earlier:** at 01:30:44 (+8s) the bridge read four
+of them as OFF; at +150s it read them ON. It records a command as done when it
+ACCEPTS it and learns from these bulbs only later. A sooner check reads the lie.
+
+- **So uncertified bulbs get early repeats instead of earlier checks**
+  (`discovery.set_hue_light_state` → `_hue_echo`): an on/off is sent again at
+  `HUE_ECHO_POWER_S` (1.5s, 4s), a color OR brightness change at
+  `HUE_ECHO_COLOR_S` (2s). Brightness is repeated because a person's level change
+  matters as much as a color; a slider drag is safe since every new value cancels
+  the pending repeat, so only the LAST level is repeated, ~2s after letting go. Picked
+  by the bridge's `certified` flag (`_note_hue_caps` records it on every light
+  read), so no list to keep. Repeats run in `hue_repair_scope` (don't count, don't
+  repeat themselves) and stop the moment the light has a newer command. NOT for
+  lightning flashes (`hue_unpaced_scope`), light show steps (`hue_no_echo_scope`,
+  wrapped around `_lightshow_paint`) or re-sends — those must never be repeated. The
+  set_hue_light_state of old is `_set_hue_light_state_once`; `schedule_hue_echo`
+  starts the repeats for a light written some other way (a group command).
+- Covered by a scratch test (13 assertions) on the faked-httpx bridge: three spaced
+  sends for an Innr off, one for a Philips bulb, one repeat for a color, none for a
+  slider, cancellation by a newer command, each exempt scope, and a nine-light room.
+
+**Ruled out — LightEmUp's own traffic.** Daily counts from the journal (it only
+reaches back to 2026-09-27): the busiest day, Oct 4 (1,497 Hue PUTs, a light show
+running), had ZERO re-sends; the quietest (Oct 9: 29 PUTs; Oct 10: 38) had 5-6.
+Bridge GETs never touch the Zigbee radio. Also: since v3.57.1 a light show's missed
+STEPS are counted in Delivery health, so its 7-day number runs far above the real
+misses from scenes and on/off (1-9 a day here) while a show runs.
+
+**The likelier change: how rooms are switched.** The Hue app switches a room with
+ONE group command (`PUT /groups/<id>/action`, a single Zigbee groupcast); LightEmUp
+sent one unicast per bulb. The bridge already has groups matching LightEmUp's
+rooms exactly — 81 "Living room" (10,13,16,17,18,19,22,23,24), 82 "Bedroom"
+(14,15), 4 "Outdoor" (28,29 = Exterior Front's Hue lights).
+
+- **So whole-room power now goes out as ONE group command** (`_hue_room_group_power`,
+  called from `control_room`; `discovery.set_hue_group_action`). Only for plain
+  on/off (no color, no level), only when a bridge group has EXACTLY the room's Hue
+  lights (`_hue_group_for`, groups re-read at most every `HUE_GROUPS_TTL_S`), only
+  for 2+ lights, and not for an ON while any light has a pending level (each bulb
+  needs its own then). Otherwise, or if the bridge refuses the group command, the
+  room is sent per bulb exactly as before. Every member is counted as written,
+  recorded for power recovery, handed to the same verifies and backstop checks, and
+  uncertified members still get their per-bulb early repeats on top. All lights
+  off, zones, schedules and Ask reach it through `control_room`.
+- Covered by a scratch test (12 assertions) through the real `control_room` with a
+  fake bridge: one group command for off and on, Innr repeats after it, verifies
+  armed for every light, colors / pending levels / one-light rooms / no matching
+  group / a refused group all going per bulb, a drag repeating only its last level,
+  and shows and flashes never repeated.
+
 ## Setting a level on an OFF light must not turn it on (v3.45.0)
 "Before turning a room on I wanted to set its brightness, so it comes on at that
 level. Moving the slider turned the light on instead."
