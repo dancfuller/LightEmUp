@@ -41,13 +41,16 @@ const LIGHTSHOW_SOURCES = [
 
 // What a light the Scenes panel paints per segment does during a show — the
 // backend's `segmented` setting (v3.56.0). Hold is first and the default.
+// "One color each" is the default and listed first (v3.62.0): each segmented
+// light takes one of the light show's colors, sent in one fast command. Its own
+// segment colors are put back when the light show is stopped by hand.
 const LIGHTSHOW_SEGMENTED = [
+  { key: "whole", label: "One color each",
+    help: "The default. Each one joins the light show as a single color from the show, like a bulb — fast and smooth. Its own segment colors come back when you stop the light show." },
   { key: "hold", label: "Hold still",
-    help: "They keep the scene while the rest of the room runs the light show. The default: their segments change one color at a time, a couple of seconds apart, so a moving one flashes through a single color on every step." },
+    help: "They keep the scene while the rest of the room runs the light show." },
   { key: "segments", label: "Join in, segment by segment",
     help: "The colors slide along each one, segment by segment. Expect a brief flash of one color each step while the segments catch up — the Govee rate limit, not us — and slower steps." },
-  { key: "whole", label: "One color each",
-    help: "Each one joins the light show as a single color, like a bulb — fast and smooth, but its segment pattern is replaced during the light show." },
 ];
 
 // Every interval the slider can land on, 10 seconds to an hour. A plain linear
@@ -191,7 +194,7 @@ function LightshowPanel({ roomName, show, patterns, devices, favorites,
   };
 
   const excluded = s.exclude || [];
-  const segmented = s.segmented || "hold";
+  const segmented = s.segmented || "whole";
   // Segmented lights holding the scene — from the Pi, which knows which lights
   // scenes paint per segment (v3.56.0).
   const heldKeys = (s.held || []).map(h => h.key);

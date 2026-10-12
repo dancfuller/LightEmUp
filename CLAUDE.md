@@ -440,9 +440,11 @@ All endpoints are under `/api/`. Key groups:
   room's colors on a timer. **Every room is offered all eight patterns** — Walk /
   Alternate / Shuffle / Swap / Palette hop / Accent / Wipe / Comet (v3.54.0). The
   layout no longer gates them; it only sets the ORDER the colors travel in. Colors
-  move along the room's cell sequence. **Segmented lights HOLD STILL by default
-  (v3.56.0)** — the show's `segmented` setting (`hold` / `segments` / `whole`),
-  because a moving one flashes a single color on every step. When set to
+  move along the room's cell sequence. **Segmented lights join as ONE COLOR each
+  by default (v3.62.0)** — the show's `segmented` setting (`whole` / `hold` /
+  `segments`); never `segments` by default, because a light moving segment by
+  segment flashes a single color on every step. Their own segment colors are saved
+  when the show starts and put back when it's stopped by hand. When set to
   `segments`, a segmented light is ONE unit for the pattern and shows the palette
   repeating along its segments, sliding one per step (v3.55.0).
   **A light show stops itself when any Hue light in it is changed outside

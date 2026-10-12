@@ -197,6 +197,8 @@ DEFAULT_CONFIG = {
                                  # never be what switches a light on.
     # One-shot marker for migrate_lightshow_segments (v3.55.0), not a setting.
     "lightshow_segments_reset": False,
+    # One-shot marker for migrate_lightshow_whole (v3.62.0), not a setting.
+    "lightshow_segmented_whole": False,
     "room_excluded": {},         # room name → device keys EXCLUDED from that room's
                                  # whole-room looks (v3.59.0): scenes, whites, colors,
                                  # the room level, zones and light shows skip them;
@@ -482,6 +484,26 @@ def migrate_lightshow_segments(cfg: dict) -> bool:
     return True
 
 
+def migrate_lightshow_whole(cfg: dict) -> bool:
+    """One-time: a show set to "Hold still" for segmented lights becomes "One
+    color each" (v3.62.0). Asked for plainly: "Govee lights with segments are set
+    to one color per light, and that color matches the light show's colors." Hold
+    was the default until now, so a stored "hold" mostly records the old default
+    rather than a choice. Guarded by the marker KEY, so choosing Hold again in the
+    panel afterwards sticks."""
+    if cfg.get("lightshow_segmented_whole"):
+        return False
+    cfg["lightshow_segmented_whole"] = True
+    moved = [room for room, show in (cfg.get("lightshows") or {}).items()
+             if isinstance(show, dict) and show.get("segmented") == "hold"]
+    for room in moved:
+        cfg["lightshows"][room]["segmented"] = "whole"
+    if moved:
+        log.info("Lightshow: segmented lights now join as one color each in %s",
+                 ", ".join(moved))
+    return True
+
+
 def migrate_scene_address(cfg: dict) -> bool:
     """One-time: turn the old ROOM-level "address segmented devices individually /
     as a unit" scene setting into the per-device `govee_scene_address` map.
@@ -518,6 +540,8 @@ if migrate_govee_to_mac(config):
 if migrate_scene_address(config):
     save_config(config)
 if migrate_lightshow_segments(config):
+    save_config(config)
+if migrate_lightshow_whole(config):
     save_config(config)
 
 
@@ -1873,14 +1897,15 @@ LIGHTSHOW_DEFAULTS = {
     # validates. Nothing reads it.
     "segments": True,
     # What a light the Scenes panel paints PER SEGMENT does during a show:
-    #   hold     — nothing; it keeps the scene (the default, v3.56.0)
+    #   whole    — it takes part as ONE color, like a bulb (the default, v3.62.0)
+    #   hold     — nothing; it keeps the scene
     #   segments — the palette slides along its segments
-    #   whole    — it animates as one color, like a bulb
-    # Hold is the default because a moving segmented light FLASHES. Its segments
-    # can only be changed one color per rate-limited cloud call (~2s apart), and
-    # the half-done state between two calls is the whole light in one color —
-    # in a two-color look, a solid red or blue flash on every single step.
-    "segmented": "hold",
+    # Never `segments` by default: its segments change one color per rate-limited
+    # cloud call (~2s apart), so a moving one FLASHES a single color every step.
+    # `whole` is one fast LAN command per step and matches the show's colors; the
+    # light's own segment colors are saved when the show starts and put back when
+    # it is stopped by hand (_lightshow_save_segments / _lightshow_restore_segments).
+    "segmented": "whole",
     # current | palettes | favorites | custom. "current" is the default because
     # of what starting a show actually means (v3.52.0): a scene was set, maybe
     # hours ago, and the room should now MOVE. Asking for a palette first made
@@ -2009,7 +2034,7 @@ def _lightshow_cells(room_name: str, show: dict,
     # (v3.59.0): an excluded light keeps what it's showing, and a show repainting
     # it would contradict that.
     exclude = set(show.get("exclude") or []) | _room_excluded(room_name)
-    segmented = show.get("segmented") or "hold"
+    segmented = show.get("segmented") or LIGHTSHOW_DEFAULTS["segmented"]
     geometry = _lightshow_geometry(room_name)
     dev_pos, seg_pos = _lightshow_positions(room_name)
 
@@ -2858,14 +2883,20 @@ async def _lightshow_stop_for_outside(room_name: str, cells: list[dict], changed
     if wrote:
         await _lightshow_adopt_outside(room_name, cells, wrote, changed)
     _lightshow_note_outside_stop(room_name, f"{names} changed outside LightEmUp ({whys})")
-    _lightshow_disable(room_name)
+    _lightshow_disable(room_name, forget_segments=True)
     publish_event("lightshow", room=room_name, running=False)
 
 
-def _lightshow_disable(room_name: str) -> bool:
+def _lightshow_disable(room_name: str, forget_segments: bool = False) -> bool:
     """Flip the persisted `enabled` flag off. Separate from stopping the task so
     the loop can retire itself (nothing left to animate) and have that survive a
-    restart instead of coming straight back."""
+    restart instead of coming straight back.
+
+    `forget_segments` is for the show retiring ITSELF (something else changed or
+    switched off the room): the saved segment colors are dropped, as any end
+    other than a stop by hand drops them (v3.62.0)."""
+    if forget_segments:
+        _lightshow_forget_segments(room_name)
     show = (config.get("lightshows", {}) or {}).get(room_name)
     if not show or not show.get("enabled"):
         return False
@@ -2893,7 +2924,7 @@ async def _lightshow_loop(room_name: str):
             if not cells or not colors:
                 log.warning("Lightshow %r: %d cells, %d colors — nothing to animate, stopping",
                             room_name, len(cells), len(colors))
-                _lightshow_disable(room_name)
+                _lightshow_disable(room_name, forget_segments=True)
                 publish_event("lightshow", room=room_name, running=False)
                 return
             # Before painting anything: did someone turn this room off without
@@ -2904,7 +2935,7 @@ async def _lightshow_loop(room_name: str):
                          "(voice assistant / vendor app) — stopping the show",
                          room_name)
                 _lightshow_note_outside_stop(room_name, "The room was turned off outside LightEmUp")
-                _lightshow_disable(room_name)
+                _lightshow_disable(room_name, forget_segments=True)
                 publish_event("lightshow", room=room_name, running=False)
                 return
             # ANY light changed from outside — a white, a level, a color, one
@@ -2990,7 +3021,7 @@ async def _lightshow_loop(room_name: str):
                     # necessary but not sufficient; the lights we lit are still lit.
                     await _lightshow_restore_off(room_name, cells, rt.get("frame_map"))
                     _lightshow_note_outside_stop(room_name, "The room was turned off outside LightEmUp")
-                    _lightshow_disable(room_name)
+                    _lightshow_disable(room_name, forget_segments=True)
                     publish_event("lightshow", room=room_name, running=False)
                     return
                 # The same for any other outside change landing mid-paint; the
@@ -3007,7 +3038,7 @@ async def _lightshow_loop(room_name: str):
         raise
     except Exception:
         log.exception("Lightshow %r crashed — stopping", room_name)
-        _lightshow_disable(room_name)
+        _lightshow_disable(room_name, forget_segments=True)
         publish_event("lightshow", room=room_name, running=False)
     finally:
         if _lightshow_tasks.get(room_name) is asyncio.current_task():
@@ -3022,9 +3053,122 @@ def lightshow_running(room_name: str) -> bool:
     return bool(task and not task.done())
 
 
-async def _stop_lightshow_locked(room_name: str, reason=None, persist: bool = True):
+# ─── A segmented light's own colors, across a light show (v3.62.0) ──────────
+# Segmented Govee lights take part in a show as ONE color each by default. The
+# whole-light command that paints them wipes the stored segment colors
+# (control_govee → segment_state.clear), so a hexa used to stay a single color
+# after the show stopped, its scene's segment pattern gone. So the colors are
+# saved when the show starts — into the show's own config, so a restart of the
+# show (any panel edit) or of the Pi keeps them — and put back when the show is
+# stopped BY HAND. Any other end (a new look, room off, a storm, another app)
+# drops them: then the new state is what the room should show.
+
+def _lightshow_segmented_devices(room_name: str, exclude: set = frozenset()) -> list:
+    """The room's Govee lights that scenes paint per segment (as the show sees
+    them in _lightshow_cells), minus `exclude`."""
+    room = config.get("rooms", {}).get(room_name) or {}
+    out = []
+    for slug in room.get("govee_devices", []):
+        key = f"govee:{slug}"
+        if key in exclude:
+            continue
+        mac, info = _gv_info_for_slug(slug)
+        ip = (info or {}).get("ip") or gv_ip_for_slug(slug)
+        sku = (info or {}).get("sku")
+        count = gv_segment_count(slug, sku)
+        protocol = (GOVEE_SEGMENT_INFO.get(sku) or {}).get("protocol")
+        if ip and gv_scene_address(slug, sku) == "segments" and count > 1 and protocol:
+            out.append({"slug": slug, "key": key, "ip": ip, "mac": mac or slug, "sku": sku,
+                        "count": count, "protocol": protocol,
+                        "label": _device_label(key, (info or {}).get("name") or slug)})
+    return out
+
+
+def _lightshow_save_segments(room_name: str):
+    """Save each segmented light's segment colors before the show paints over
+    them. A light already saved is left alone: on a RESTART the show has been
+    painting it one color, and the stored colors are gone by now."""
+    stored = (config.get("lightshows", {}) or {}).get(room_name)
+    if stored is None:
+        return
+    show = _lightshow_cfg(room_name)
+    if (show.get("segmented") or LIGHTSHOW_DEFAULTS["segmented"]) != "whole":
+        return
+    exclude = set(show.get("exclude") or []) | _room_excluded(room_name)
+    saved = stored.setdefault("segment_restore", {})
+    changed = False
+    for d in _lightshow_segmented_devices(room_name, exclude):
+        if d["slug"] in saved:
+            continue
+        st = segment_state.get(d["ip"])
+        if not st or not st.get("colors"):
+            continue
+        saved[d["slug"]] = {"colors": {str(i): list(c) for i, c in st["colors"].items()},
+                            "brightness": int(st.get("brightness") or 100)}
+        changed = True
+    if changed:
+        schedule_save()
+
+
+def _lightshow_forget_segments(room_name: str):
+    stored = (config.get("lightshows", {}) or {}).get(room_name)
+    if stored and stored.pop("segment_restore", None) is not None:
+        schedule_save()
+
+
+async def _lightshow_restore_segments(room_name: str):
+    """Put the saved segment colors back after a stop by hand. A scoped scene
+    apply touching only those lights: the usual pacing for Govee's cloud limit,
+    progress on the light cards, and nothing written to "Now showing"."""
+    stored = (config.get("lightshows", {}) or {}).get(room_name)
+    saved = stored.pop("segment_restore", None) if stored else None
+    if not saved:
+        return
+    schedule_save()
+    devices = {d["slug"]: d for d in _lightshow_segmented_devices(room_name)}
+    cloud, razer, seeds, names = [], [], [], []
+    for slug, s in saved.items():
+        d = devices.get(slug)
+        if not d:
+            continue                       # gone from the room, or now painted whole
+        colors = {int(k): tuple(int(x) for x in v[:3]) for k, v in (s.get("colors") or {}).items()}
+        if not colors:
+            continue
+        bri = max(1, min(100, int(s.get("brightness") or 100)))
+        names.append(d["label"])
+        if d["protocol"] == "razer":
+            razer.append(SceneRazer(ip=d["ip"], mac=d["mac"], sku=d["sku"], brightness=bri,
+                                    colors=[list(colors.get(i, (0, 0, 0))) for i in range(d["count"])],
+                                    label=d["label"]))
+            continue
+        by_color: dict = {}
+        for i in sorted(colors):
+            by_color.setdefault(colors[i], []).append(i)
+        cloud.append(SceneCloudDevice(
+            ip=d["ip"], sku=d["sku"], device_mac=d["mac"], label=d["label"],
+            unit="panel" if d["sku"] == "H6061" else "segment",
+            groups=[SceneCloudGroup(segments=idx, r=c[0], g=c[1], b=c[2])
+                    for c, idx in by_color.items()]))
+        mid = colors[sorted(colors)[len(colors) // 2]]
+        seeds.append(SceneBaseSeed(ip=d["ip"], mac=d["mac"], r=mid[0], g=mid[1], b=mid[2],
+                                   brightness=bri))
+    if not (cloud or razer):
+        return
+    log.info("Lightshow %r: putting back the segment colors of %s", room_name, ", ".join(names))
+    await scene_room_apply(SceneApplyRequest(
+        room=room_name, scope=f"{room_name}|light show ended",
+        base_seeds=seeds, cloud=cloud, razer=razer, label="Segment colors put back"))
+
+
+async def _stop_lightshow_locked(room_name: str, reason=None, persist: bool = True,
+                                 segments: str = "drop"):
     """The body of stop_lightshow. Split out so start_lightshow can reuse it
-    while already holding the room's lock."""
+    while already holding the room's lock.
+
+    `segments` decides the segment colors saved when the show started (v3.62.0):
+    "restore" puts them back (a stop by hand), "keep" leaves them saved (a restart),
+    "drop" forgets them (anything that gives the room a new look or ends the show
+    for another reason — the new state wins)."""
     task = _lightshow_tasks.get(room_name)
     ev = _lightshow_stops.get(room_name)
     if ev:
@@ -3046,16 +3190,21 @@ async def _stop_lightshow_locked(room_name: str, reason=None, persist: bool = Tr
     if was_running or disabled:
         publish_event("lightshow", room=room_name, running=False)
         log.info("Lightshow %r stopped%s", room_name, f" ({reason})" if reason else "")
+    if segments == "restore":
+        await _lightshow_restore_segments(room_name)
+    elif segments == "drop":
+        _lightshow_forget_segments(room_name)
 
 
-async def stop_lightshow(room_name: str, reason=None, persist: bool = True):
+async def stop_lightshow(room_name: str, reason=None, persist: bool = True,
+                         segments: str = "drop"):
     """Stop a room's show. Called by every hand-driven whole-room path — turning
     the room off, applying a scene, a white/color preset, starting lightning —
     because a show that repaints 30 seconds after you set the room would look
     like the app ignoring you. A DEVICE-scoped scene (one light card) does NOT
     stop it: that isn't a claim about the room."""
     async with _lightshow_locks.setdefault(room_name, asyncio.Lock()):
-        await _stop_lightshow_locked(room_name, reason, persist)
+        await _stop_lightshow_locked(room_name, reason, persist, segments)
 
 
 async def start_lightshow(room_name: str):
@@ -3070,7 +3219,8 @@ async def start_lightshow(room_name: str):
 
 
 async def _start_lightshow_locked(room_name: str):
-    await _stop_lightshow_locked(room_name, persist=False)
+    await _stop_lightshow_locked(room_name, persist=False, segments="keep")
+    _lightshow_save_segments(room_name)      # before the first frame paints over them
     stored = (config.get("lightshows", {}) or {}).get(room_name) or {}
     if stored.pop("stopped_reason", None) is not None:
         stored.pop("stopped_at", None)       # a new run; the old reason no longer applies
@@ -7552,6 +7702,7 @@ def _export_envelope(include_credentials: bool = True) -> dict:
 
 _SETTING_INTERNAL = {
     "lightshow_segments_reset",  # a one-shot migration marker, not a choice
+    "lightshow_segmented_whole", # a one-shot migration marker, not a choice
     "repair_log",         # diagnostic history, not a setting; noise in a restore
     "pending_brightness", # a level waiting for the next power-on; consumed in
                           # minutes and meaningless in a year-old backup
@@ -7821,6 +7972,7 @@ async def import_config(req: ConfigImportRequest):
     migrate_govee_to_mac(config)
     migrate_scene_address(config)
     migrate_lightshow_segments(config)
+    migrate_lightshow_whole(config)
     save_config(config)          # write through now, not via the coalescing scheduler
     reload_segment_state()       # in-memory store must match the config we just loaded
     publish_event("config")      # every open browser resyncs
@@ -8604,7 +8756,8 @@ async def upsert_lightshow(req: LightshowRequest):
     if show.get("enabled"):
         await start_lightshow(req.room)
     elif was_running:
-        await stop_lightshow(req.room, "turned off in the panel", persist=False)
+        await stop_lightshow(req.room, "turned off in the panel", persist=False,
+                             segments="restore")
     publish_event("lightshow", room=req.room, running=lightshow_running(req.room))
     return {"success": True, "show": _lightshow_status(req.room)}
 
@@ -9109,14 +9262,14 @@ async def _ask_stop_light_show(room: Optional[str] = None) -> str:
         room_name = _ask_room(room)
         if not lightshow_running(room_name):
             return f"No light show is running in {room_name}"
-        await stop_lightshow(room_name, "stopped via Ask")
+        await stop_lightshow(room_name, "stopped via Ask", segments="restore")
         return f"{room_name}: light show stopped"
     running = [r for r in (config.get("rooms", {}) or {}) if lightshow_running(r)]
     if not running:
         return "No light show is running"
     if len(running) > 1:
         raise ask.AskError(f"Light shows are running in {', '.join(running)} — which one?")
-    await stop_lightshow(running[0], "stopped via Ask")
+    await stop_lightshow(running[0], "stopped via Ask", segments="restore")
     return f"{running[0]}: light show stopped"
 
 

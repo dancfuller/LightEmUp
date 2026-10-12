@@ -931,7 +931,9 @@ Lightshow panel, with a fallback set when there are none. It holds the first fra
 still under `prefers-reduced-motion`. **Don't add pattern math in JS to draw it.**
 
 `lightshow.js` replaced the "Animate segments" checkbox with **Segmented lights:
-Hold still / Join in, segment by segment / One color each** (`LIGHTSHOW_SEGMENTED`, the
+One color each / Hold still / Join in, segment by segment** (v3.62.0: "One color
+each" is the default and listed first; the light's own segment colors come back on
+a stop by hand — see `backend/CLAUDE.md`) (`LIGHTSHOW_SEGMENTED`, the
 backend's `segmented`), each with a line saying what it costs. Held lights show in
 "Which lights move" as a dashed "holds still" row that the exclude list doesn't
 toggle, and they don't count as moving.

@@ -1585,7 +1585,42 @@ span which should be running right now, and arms its end.
 - **A one-off re-entered here disables itself** (v3.51.5), as it does when the normal
   loop fires it. Without that it read as enabled for ever afterwards.
 
-## Segmented lights hold still during a show (v3.56.0)
+## Segmented lights join a show as ONE color each (v3.62.0)
+Asked for plainly: "Govee lights with segments are set to one color per light, and
+that color matches the light show's colors." So `segmented` now DEFAULTS to
+`whole` (`LIGHTSHOW_DEFAULTS`; the panel lists "One color each" first), and
+`migrate_lightshow_whole` turned every stored `hold` into `whole` once (marker key
+`lightshow_segmented_whole`, in `DEFAULT_CONFIG` and `_SETTING_INTERNAL`; choosing
+Hold again afterwards sticks). Never `segments` by default — that is the mode that
+flashes (see below).
+
+**Getting the segment pattern back.** The whole-light command that paints such a
+light wipes its stored segment colors (`control_govee` → `segment_state.clear`), so
+a hexa used to stay one color after the show, its scene's pattern gone.
+- `_lightshow_save_segments` copies each one's `segment_state` into the show's own
+  config (`lightshows[room].segment_restore`) when the show STARTS, before the first
+  frame — and leaves an existing copy alone, because on a restart (every panel edit
+  restarts a running show) the show has already painted over the stored colors.
+- `stop_lightshow(..., segments=)` decides what happens to it: `"restore"` for a
+  stop BY HAND (the Light Show panel's and the Scenes panel's Stop, both via
+  `upsert_lightshow`; Ask's stop) replays it as one scoped scene apply
+  (`_lightshow_restore_segments`: cloud groups by color + a base seed at the saved
+  brightness, so the usual rate-limit pacing and progress apply, and nothing is
+  written to "Now showing"); `"keep"` for a restart's internal stop; `"drop"` (the
+  default) for everything else — a new look, room off, a storm, rename, delete,
+  import — because then the new state is what the room should show. A show that
+  retires ITSELF (another app changed the room) drops it too
+  (`_lightshow_disable(..., forget_segments=True)` at those five call sites).
+- `segment_restore` lives inside `lightshows[room]`, which rename/delete already
+  carry, so it needs no config-key checklist entry of its own.
+- Ask's prompt says the same: segmented lights join as one color; their segments
+  never animate; "make the hexa do a light show" starts its room's show.
+- Covered by a scratch test (16 assertions): the default, Hold still honored, the
+  one-time migration, saving at start and NOT on a restart, an excluded light not
+  saved, the exact colors grouped by color at the saved brightness on a stop by
+  hand, single use, dropping on every other end, and Ask's stop restoring.
+
+## Segmented lights hold still during a show (v3.56.0) — no longer the default, see above
 Reported on the Living Room (a red/blue scene, segmented lights alternating
 R-B-R-B): on every step the segmented lights went **solid red or solid blue**, then
 back to the pattern — a flash every step. The seed was not the cause (the log shows
