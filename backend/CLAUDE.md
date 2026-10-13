@@ -2254,7 +2254,8 @@ lives in the helpers above `_apply_room_white`; every path asks them:
 
 ## Ask — natural-language control (v3.60.0)
 "Make the living room spooky but leave the hexa alone." `POST /api/ask {text}` sends
-the words to **Claude Haiku 4.5** (`ask.MODEL`), which may only call the ten actions
+the words to **Claude Haiku 5.5** (`ask.MODEL`; 4.5 until v3.62.1 — see "Haiku 5.5"
+below), which may only call the ten actions
 in `ask.build_tools`; the Pi runs them and returns one sentence. The input is a plain
 text box: the phone keyboard's own mic does the speech-to-text, which needs no HTTPS
 and no permission prompt.
@@ -2351,8 +2352,11 @@ the light-show rules for free, and it can't do anything the app can't.
     one time in three.
 - **The live eval** (scratch `eval_ask.py`): 31 real phrasings run against the real
   model with the Pi's real layout and state, every action FAKED and recorded, config
-  piped in over ssh and never written. ~$0.14 a run. It went 26/31 → 31/31 across this
-  work; use it to re-check any prompt change before shipping it.
+  piped in over ssh and never written. ~$0.016 a run on Haiku 5.5 (~$0.13 on 4.5). It
+  went 26/31 → 31/31 across this work; use it to re-check any prompt change before
+  shipping it. **Cases that depend on a room being ON set that up themselves** (the
+  eval's `setup_on`), so a run in the daytime with the room off grades the model,
+  not the house; `--model <id>` compares another model on the same state.
 - **Segmented lights are told to hold still.** The prompt says why (cloud segment
   calls ~2s apart flash a single color) and forbids suggesting otherwise; no tool can
   change the show's `segmented` setting.
@@ -2364,7 +2368,26 @@ the light-show rules for free, and it can't do anything the app can't.
 - **Memory**: per `X-Client-Id`, `CONVO_TTL_S` (3 min), so "which lamp?" → "the left
   one" and "go ahead?" → "yes" work. In memory only; a failed or step-exhausted
   request forgets it so a dangling tool call can't poison the next turn.
-- **Cost**: about 1–2 cents a request (two model calls over a ~5.5k-token prompt,
+- **Haiku 5.5 (v3.62.1).** Same tools and prompt; what changed and why:
+  - **Thinking is ON at `low` effort** (`THINKING`, `EFFORT`, sent as
+    `output_config`). With it off, 5.5 reasoned IN its reply — "The user says 'make
+    it blue' with no room named… per the rules, I should ask" — and asked its yes
+    questions with a note after the "?". 4.5 ran without thinking.
+  - **A thinking block is valid only while everything before it is resent
+    unchanged** (a 400 otherwise). Ask rewrites old turns on purpose (each loses its
+    house state), so `_block_to_dict` keeps thinking blocks verbatim for the turn's
+    own tool loop (`request_messages`) and `_kept` drops them from memory
+    (`convo.messages`). **Don't store them across turns, and don't start keeping old
+    turns' state to "fix" that** — the stale-state rule is the reason for the rewrite.
+  - **A yes counts after any reply containing "?"** (`yes_now`), not only one ending
+    in it; the shown "should I go ahead?" override is also written to memory. Without
+    this 5.5 answered "yes" with the same question 2 times in 6.
+  - `MAX_TOKENS` 2048, since thinking counts toward it.
+  - Eval: 4.5 scored 30/31 on the same state; 5.5 scored 31, 31, 30 (cool white as
+    5000K, fixed in the `set_white` description: the app's Cool White is 6500), then
+    31; the house-wide yes 6/6; no reasoning in any reply.
+- **Cost**: about $0.0005 a request on Haiku 5.5, measured (it was 1–2 cents on 4.5:
+  two model calls over a ~7k-token prompt,
   most of it the preset names). `DAILY_CAP` (200) is counted BEFORE the model is
   called, and `ask_usage` keeps the day's count and the month's estimated cost
   (`PRICE`) for the Settings card.

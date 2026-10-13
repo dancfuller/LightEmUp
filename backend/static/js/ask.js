@@ -4,7 +4,7 @@
 // There is no microphone button on purpose — the phone keyboard's own dictation
 // mic works in any text box, needs no permission prompt, and works over the Pi's
 // plain http:// (an in-page mic would need HTTPS). The Pi does the rest: Claude
-// Haiku 4.5 picks from a fixed list of LightEmUp actions, the Pi runs them on the
+// Haiku 5.5 picks from a fixed list of LightEmUp actions, the Pi runs them on the
 // same paths the buttons use, and one sentence comes back. See backend/ask.py.
 //
 // AskCard is the Settings card: the Anthropic API key, and what Ask has cost.
@@ -197,9 +197,9 @@ function AskCard({ isMobile, onKeyChanged }) {
       <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.5, marginBottom: 14 }}>
         Type or say what the lights should do in the box under the Live bar — "make the
         living room spooky but leave the hexa alone". On a phone, tap the microphone on the
-        keyboard to speak. What you ask is sent to Anthropic's Claude Haiku 4.5, which
+        keyboard to speak. What you ask is sent to Anthropic's Claude Haiku 5.5, which
         chooses from LightEmUp's own actions; the hub carries them out. Anything aimed at the
-        whole house asks first. A request costs about a cent or two.
+        whole house asks first. A request costs well under a tenth of a cent.
       </div>
 
       {err && <div style={{ fontSize: 12, color: "#f87171", marginBottom: 10 }}>{err}</div>}

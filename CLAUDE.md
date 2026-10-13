@@ -161,7 +161,7 @@ backend/
                        # it suits (line / floor plan), v3.40.0. Also owns ColorDealer
                        # (shared with the palette scheduler)
   ask.py               # Ask (v3.60.0): natural-language control via Claude Haiku
-                       # 4.5. Owns the prompt, the action (tool) list, the loop,
+                       # 5.5 (v3.62.1). Owns the prompt, the action (tool) list, the loop,
                        # a few minutes of per-browser memory, the house-wide
                        # confirmation and the daily cap. Never touches a device —
                        # main.py's _ask_* actions do, on the buttons' own paths
@@ -337,7 +337,7 @@ All endpoints are under `/api/`. Key groups:
   settings from such a file (`dry_run` previews; writes a `config.json.pre-import-*.bak`
   first; no restart needed). See `backend/CLAUDE.md` "Backup / restore"
 - `/api/ask` — one turn of Ask (v3.60.0): `{text}` in, `{reply, actions, awaiting}`
-  out. Claude Haiku 4.5 picks from a fixed list of actions (`ask.build_tools`) and the
+  out. Claude Haiku 5.5 picks from a fixed list of actions (`ask.build_tools`) and the
   Pi runs them through the existing room/zone/scene/light-show paths with
   `source: "ask"`. `/api/ask/status` (count, cap, month's cost) and `/api/ask/key`
   (config key `anthropic_api_key`, a credential). See `backend/CLAUDE.md` "Ask"

@@ -1,7 +1,7 @@
 """Ask — natural-language control of the house (v3.60.0).
 
 You type (or dictate with the phone keyboard's mic) "make the living room spooky
-but leave the hexa alone"; Claude Haiku 4.5 turns that into calls to a short,
+but leave the hexa alone"; Claude Haiku 5.5 turns that into calls to a short,
 fixed list of LightEmUp actions; the Pi validates and runs them through the same
 code paths the buttons use, and answers in one sentence.
 
@@ -21,8 +21,8 @@ THE TWO RULES THE CODE ENFORCES (not left to the model)
    repeats exactly that action with `confirmed: true` AFTER the user has
    answered. A model that sets `confirmed` on its own first try gets refused.
 2. A daily cap (DAILY_CAP requests), so a loop or a stuck client can't run up a
-   bill. A request is about 1–2 cents on Haiku 4.5: two model calls over a
-   ~5.5k-token prompt, most of it the exact palette / team / flag names.
+   bill. A request is about $0.0005 on Haiku 5.5 (measured): two model calls
+   over a ~7k-token prompt, most of it the exact palette / team / flag names.
 """
 
 import json
@@ -33,14 +33,23 @@ from typing import Any, Awaitable, Callable, Optional
 
 log = logging.getLogger("lightemup.ask")
 
-MODEL = "claude-haiku-4-5"
-MAX_TOKENS = 1024
+MODEL = "claude-haiku-5-5"
+# Thinking ON, at low effort. With it off, Haiku 5.5 reasons in its REPLY ("The
+# user says 'make it blue' with no room named… per the rules, I should ask") and
+# asks its yes-questions in ways the confirmation check missed. A thinking block
+# is valid only while everything before it is sent back unchanged, so blocks go
+# back verbatim within a turn's tool loop and are dropped from what's KEPT
+# between turns — which is what lets each old turn shed its house state.
+THINKING = {"type": "adaptive"}
+EFFORT = "low"
+MAX_TOKENS = 2048          # thinking counts toward it
 MAX_STEPS = 6              # model calls per request (tool round-trips)
 CONVO_TTL_S = 180          # a follow-up within this long continues the conversation
 CONVO_MAX_MESSAGES = 24
 DAILY_CAP = 200
-# Claude Haiku 4.5, US$ per million tokens: input, output, cache write, cache read.
-PRICE = {"in": 1.00, "out": 5.00, "cache_write": 1.25, "cache_read": 0.10}
+# Claude Haiku 5.5, US$ per million tokens: input, output, 5-minute cache write,
+# cache read. These are the rates for prompts up to 100k tokens; Ask's is ~7k.
+PRICE = {"in": 0.10, "out": 0.50, "cache_write": 0.125, "cache_read": 0.01}
 
 HOUSE = "house"
 HOUSE_WIDE_TOOLS = {"set_power", "set_white", "set_color", "set_brightness", "apply_palette"}
@@ -83,7 +92,7 @@ def build_tools(mode_keys: list) -> list:
                                 "description": "Rooms to leave alone (with targets=[\"house\"])."},
                "confirmed": _CONFIRMED},
               ["targets", "on"]),
-        _tool("set_white", "Set rooms to a white. 2700 is incandescent/soft white, 6500 cool daylight.",
+        _tool("set_white", "Set rooms to a white. 2700 is incandescent/soft white; \"cool white\" and daylight are 6500 (the app's Cool White button).",
               {"targets": _TARGETS,
                "kelvin": {"type": "integer", "minimum": 2000, "maximum": 6500},
                "brightness": _BRIGHTNESS, "confirmed": _CONFIRMED},
@@ -318,7 +327,20 @@ def _block_to_dict(b) -> Optional[dict]:
         return {"type": "text", "text": b.text}
     if t == "tool_use":
         return {"type": "tool_use", "id": b.id, "name": b.name, "input": b.input}
+    # Sent back exactly as received, or the API rejects the turn.
+    if t == "thinking":
+        return {"type": "thinking", "thinking": b.thinking, "signature": b.signature}
+    if t == "redacted_thinking":
+        return {"type": "redacted_thinking", "data": b.data}
     return None
+
+
+def _kept(blocks: list) -> list:
+    """What memory keeps of an assistant turn: no thinking. A thinking block only
+    stays valid while every earlier turn is resent unchanged, and Ask rewrites old
+    turns (they lose their house state), so carrying one forward would be a 400."""
+    out = [b for b in blocks if b["type"] not in ("thinking", "redacted_thinking")]
+    return out or [{"type": "text", "text": "…"}]
 
 
 class AskEngine:
@@ -418,7 +440,9 @@ class AskEngine:
         last_q = next((m for m in reversed(convo.messages) if m["role"] == "assistant"), None)
         last_q = " ".join(b.get("text", "") for b in (last_q or {}).get("content", [])
                           if isinstance(b, dict) and b.get("type") == "text").strip()
-        convo.yes_now = bool(_YES.match(text)) and last_q.endswith("?")
+        # Anywhere in the reply, not just at its end: Haiku 5.5 often adds a note
+        # after its question ("…go ahead? Everything else is already off.").
+        convo.yes_now = bool(_YES.match(text)) and "?" in last_q
         # The live state rides with THIS turn only; earlier turns keep just the words,
         # so a stale "the study is off" can't contradict the current one.
         convo.messages.append({"role": "user", "content": text})
@@ -431,11 +455,12 @@ class AskEngine:
             for _ in range(MAX_STEPS):
                 response = await client.messages.create(
                     model=MODEL, max_tokens=MAX_TOKENS, system=system, tools=tools,
+                    thinking=THINKING, output_config={"effort": EFFORT},
                     messages=request_messages)
                 cost += self._account(response)
                 blocks = [d for d in (_block_to_dict(b) for b in response.content) if d]
                 request_messages.append({"role": "assistant", "content": blocks})
-                convo.messages.append({"role": "assistant", "content": blocks})
+                convo.messages.append({"role": "assistant", "content": _kept(blocks)})
                 reply = " ".join(b["text"] for b in blocks if b["type"] == "text").strip()
                 if response.stop_reason == "refusal":
                     reply = reply or "I can't help with that one."
@@ -507,6 +532,8 @@ class AskEngine:
             # Something is waiting for a yes, so nothing happened; never let the reply
             # say otherwise.
             reply = "That changes every room in the house — should I go ahead?"
+            if convo.messages and convo.messages[-1]["role"] == "assistant":
+                convo.messages[-1] = {"role": "assistant", "content": [{"type": "text", "text": reply}]}
         if not reply:
             reply = "Done." if done else "I'm not sure what to do with that — could you rephrase it?"
         log.info("Ask %r -> %s | %s ($%.4f)", text, "; ".join(done) or "no action", reply, cost)
