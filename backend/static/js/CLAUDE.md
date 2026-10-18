@@ -1118,6 +1118,23 @@ Apply skips them; the Light Show panel lists them as "excluded in the room".
   room (so "Schedule this look" captures every light) and the backend drops excluded
   lights at apply time.
 
+## room-section.js — the Whole Room panel (v3.62.2)
+The room drawer's "Controls" view is now labelled **Whole Room** (opener, tab and
+the "Every light in {room}" heading): "Controls" didn't say it acts on every light
+at once. The view key, and the usage surface `room:controls`, keep their names.
+- **Color or White.** Under the brightness slider, a Color | White choice (shown
+  when the room has both kinds of light; a white-ambiance-only room gets White
+  alone). White is a `ColorTempSlider` plus 2200–6500K chips, **staged** like the
+  color picker: nothing is sent until "Apply 4000K to {room}". It goes through
+  `onRoomWhite(room, kelvin, brightness)` → `POST /api/rooms/white` at the room's
+  CURRENT level (the header's Soft / Cool White still force 100%). A live white
+  slider was rejected: each call is a whole-room apply with pacing, verifies and a
+  "Now showing" record.
+- The panel opens on White when "Now showing" is a white, and the staged pick is
+  held until that record catches up, so the slider doesn't jump back meanwhile.
+- Verified with the room POSTs faked (`tools/preview/_shoot_wholeroom.mjs`,
+  scratch) at 1440 and 402px.
+
 ## room-section.js — the room header row (v3.25.0)
 Name · light count · **Soft White · Cool White · brightness · power**, all on one line.
 The white presets used to sit in a separate "Set room to" block two rows down, which put

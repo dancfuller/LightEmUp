@@ -1208,23 +1208,28 @@ function App() {
   // then had to POST separately to make up for). `_apply_room_white` on the Pi
   // already did all of that for the scheduler — this just points the buttons at it,
   // so a scheduled 2700K and pressing Soft White are finally the same code path.
-  const roomWhite = async (roomName, kelvin) => {
-    trackUse("act", { s: "room", room: roomName, a: kelvin <= 3500 ? "soft-white" : "cool-white" });
+  // `brightness` (%) is 100 for the header shortcuts; the Whole Room panel's
+  // White passes the room's own level (v3.62.2).
+  const roomWhite = async (roomName, kelvin, brightness = 100) => {
+    trackUse("act", { s: "room", room: roomName,
+      a: brightness !== 100 ? "white" : kelvin <= 3500 ? "soft-white" : "cool-white" });
     api("/rooms/white", {
       method: "POST",
-      body: JSON.stringify({ room_name: roomName, kelvin, brightness: 100 }),
+      body: JSON.stringify({ room_name: roomName, kelvin, brightness }),
     }).catch(e => console.error("Room white error:", e));
 
     const room = rooms[roomName] || {};
-    const hueIds = new Set(room.hue_light_ids || []);
-    const goveeSlugs = new Set(room.govee_devices || []);
+    const skip = new Set(roomExcluded[roomName] || []);
+    const hueIds = new Set((room.hue_light_ids || []).filter(id => !skip.has(`hue:${id}`)));
+    const goveeSlugs = new Set((room.govee_devices || []).filter(s => !skip.has(`govee:${s}`)));
+    const bri254 = Math.max(1, Math.round(brightness * 254 / 100));
     if (hueIds.size > 0) {
       setHueLights(prev => prev.map(l => hueIds.has(l.id)
-        ? { ...l, state: { ...l.state, on: true, brightness: 254 } } : l));
+        ? { ...l, state: { ...l.state, on: true, brightness: bri254 } } : l));
     }
     if (goveeSlugs.size > 0) {
       setGoveeDevices(prev => prev.map(d => goveeSlugs.has(goveeSlug(d))
-        ? { ...d, state: { ...d.state, on: true, brightness: 100 } } : d));
+        ? { ...d, state: { ...d.state, on: true, brightness } } : d));
     }
   };
 

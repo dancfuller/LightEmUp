@@ -2430,7 +2430,7 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
           background: "rgba(251,191,36,0.1)", border: "1px solid rgba(251,191,36,0.3)",
           borderRadius: 8, lineHeight: 1.4,
         }}>
-          Finish setting up the room layout in Controls for better color separation in this room.
+          Finish setting up the room layout in Room Map for better color separation in this room.
         </div>
       )}
 

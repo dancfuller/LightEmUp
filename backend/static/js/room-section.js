@@ -307,6 +307,11 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
   // the room is dim.
   const [roomBrightness, setRoomBrightness] = useState(null);
   const [roomColor, setRoomColor] = useState(null);
+  // The Whole Room panel sets a color OR a white (v3.62.2); it offered only a
+  // color, so a 4000K room meant a schedule or the Scenes panel. Opens on White
+  // when the room was last set to one.
+  const [roomTone, setRoomTone] = useState(lastApplied?.kind === "white" ? "white" : "color");
+  const [stagedKelvin, setStagedKelvin] = useState(null);
   const [colorModeApplied, setColorModeApplied] = useState(null);
 
   // Is a backend scene apply running for THIS room? app.js re-broadcasts the
@@ -339,6 +344,9 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
   ];
   const anyOn = allLights.some(l => l.state?.on);
   const anyColor = allLights.some(l => l.capabilities?.has_color);
+  // A white needs a light that can show one: any color light (by RGB if not
+  // natively), or a Hue white-ambiance bulb. Dimmable-only bulbs can't.
+  const anyWhite = allLights.some(l => l.capabilities?.has_color || l.capabilities?.has_color_temp);
 
   // What the room is ACTUALLY at, averaged over the lights that are ON — an off
   // light's remembered brightness isn't what you're looking at. Hue reports
@@ -392,7 +400,7 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
   const views = [
     { key: "lightning", label: lightningActive ? "⚡ Storm" : "⚡ Lightning", accent: "#fbbf24" },
     { key: "scenes", label: "Scenes", accent: "#34d399" },
-    { key: "controls", label: "Controls", accent: "#a5b4fc" },
+    { key: "controls", label: "Whole Room", accent: "#a5b4fc" },
   ];
   if (canLightshow) {
     views.push({ key: "lightshow", label: showRunning ? "✨ Light Show ●" : "✨ Light Show",
@@ -429,7 +437,7 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
   // Both shortcuts force full brightness. Brightness scale is vendor-specific:
   // Hue's `bri` is 1–254, Govee's is 0–100, so 100% is 254 vs 100 respectively.
   const SOFT_WHITE_K = 2700, COOL_WHITE_K = 6500;
-  const setRoomWhite = (kelvin, label) => {
+  const setRoomWhite = (kelvin, brightnessPct = 100) => {
     // ONE backend call for a real room (v3.43.0). This used to fan out from the
     // browser — one PUT per light, all in the same tick — which skipped the
     // sequential pacing, the Hue read-back-and-repair, the Govee power verify and
@@ -438,17 +446,18 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
     // `_apply_room_white` the scheduler uses, so the two can no longer disagree,
     // and it records "Now showing" itself.
     if (isRealRoom && onRoomWhite) {
-      onRoomWhite(name, kelvin);
+      onRoomWhite(name, kelvin, brightnessPct);
       return;
     }
     // "Unassigned" is not a backend room, so it keeps the client-side fan-out —
     // there is no room endpoint that could take it.
-    hueLights.forEach(l => onControlHue(l, { on: true, brightness: 254, color_temp: kelvinToMired(kelvin) }));
-    goveeDevices.forEach(d => onControlGovee(d, { on: true, brightness: 100, color_temp_kelvin: kelvin }));
+    const bri254 = Math.max(1, Math.round(brightnessPct * 254 / 100));
+    hueLights.forEach(l => onControlHue(l, { on: true, brightness: bri254, color_temp: kelvinToMired(kelvin) }));
+    goveeDevices.forEach(d => onControlGovee(d, { on: true, brightness: brightnessPct, color_temp_kelvin: kelvin }));
   };
   const whiteBtn = (label, kelvin, fg, bg, border) => (
     <button
-      onClick={() => setRoomWhite(kelvin, label)}
+      onClick={() => setRoomWhite(kelvin)}
       title={`Set every light in this room to ${kelvin}K white at full brightness`}
       style={{
         padding: isMobile ? "6px 12px" : "6px 16px", borderRadius: 8,
@@ -518,13 +527,39 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
     />
   );
 
-  // Room-level controls panel (override + brightness + color).
+  // The white the room was last set to, if it was one — what "Applied ✓" means.
+  const appliedKelvin = lastApplied?.kind === "white" ? lastApplied.kelvin : null;
+  const shownKelvin = stagedKelvin ?? appliedKelvin ?? SOFT_WHITE_K;
+  const whiteStaged = stagedKelvin != null || appliedKelvin == null;
+  const applyStagedWhite = () => {
+    // At the room's current level: the header's Soft / Cool White force full
+    // brightness, but here the slider right above is the level you chose.
+    setRoomWhite(shownKelvin, shownBrightness);
+    if (!isRealRoom) setStagedKelvin(null);   // no record will come back for it
+  };
+  // A real room's pick stays staged until the Pi's record of it arrives, so the
+  // slider doesn't jump back to the previous white in between.
+  useEffect(() => {
+    if (stagedKelvin != null && appliedKelvin === stagedKelvin) setStagedKelvin(null);
+  }, [lastApplied?.at]);
+  const toneBtn = (key, label) => (
+    <button key={key} onClick={() => setRoomTone(key)} style={{
+      flex: 1, padding: "6px 8px", borderRadius: 5, border: "none",
+      background: roomTone === key ? "#6366f1" : "transparent",
+      color: roomTone === key ? "#fff" : "#94a3b8",
+      fontSize: 12, fontWeight: 600, cursor: "pointer",
+    }}>{label}</button>
+  );
+  const tone = anyColor && anyWhite ? roomTone : (anyColor ? "color" : "white");
+  const swatch = kelvinToRGB(shownKelvin);
+
+  // The Whole Room panel: power, level, and a color or a white for every light.
   const controlsPanel = (
     <div>
-      {/* Override header + on/off toggle */}
+      {/* Header + on/off toggle */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, gap: 8, flexWrap: "wrap" }}>
         <div style={{ fontSize: 12, fontWeight: 600, color: "#a5b4fc", textTransform: "uppercase", letterSpacing: 0.8 }}>
-          Override all lights in {name}
+          Every light in {name}
         </div>
         <button
           onClick={() => onControlRoom(name, { on: !anyOn })}
@@ -544,7 +579,58 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
         onChange={applyRoomBrightness} color="#fbbf24" unit="%"
       />
 
-      {anyColor && (
+      {anyColor && anyWhite && (
+        <div style={{
+          display: "flex", gap: 4, margin: "4px 0 12px",
+          background: "#0f172a", borderRadius: 6, padding: 3,
+        }}>
+          {toneBtn("color", "Color")}
+          {toneBtn("white", "White")}
+        </div>
+      )}
+
+      {anyWhite && tone === "white" && (
+        <div style={{ marginTop: 4 }}>
+          <ColorTempSlider kelvin={shownKelvin} onChange={setStagedKelvin} />
+          <div style={{ display: "grid", gridTemplateColumns: `repeat(${isMobile ? 3 : 6}, 1fr)`, gap: 6 }}>
+            {[2200, 2700, 3000, 4000, 5000, 6500].map(k => {
+              const c = kelvinToRGB(k);
+              const on = shownKelvin === k;
+              return (
+                <button key={k} onClick={() => setStagedKelvin(k)} style={{
+                  padding: "6px 4px", borderRadius: 8, cursor: "pointer",
+                  border: `1px solid ${on ? "#6366f1" : "#334155"}`,
+                  background: on ? "rgba(99,102,241,0.15)" : "transparent",
+                  color: "#e2e8f0", fontSize: 11, fontWeight: 600,
+                  display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6,
+                }}>
+                  <span style={{ width: 10, height: 10, borderRadius: "50%", flexShrink: 0,
+                    background: `rgb(${c.r},${c.g},${c.b})` }} />
+                  {k}K
+                </button>
+              );
+            })}
+          </div>
+          {/* Staged like the color: nothing reaches the lights until Apply. */}
+          <button onClick={applyStagedWhite} disabled={!whiteStaged} style={{
+            width: "100%", marginTop: 12, padding: "11px 12px", borderRadius: 10,
+            border: "none", cursor: whiteStaged ? "pointer" : "default",
+            display: "flex", alignItems: "center", justifyContent: "center", gap: 10,
+            background: whiteStaged ? "#6366f1" : "#1e293b",
+            color: whiteStaged ? "#fff" : "#64748b",
+            fontSize: 13, fontWeight: 700, transition: "all 0.15s",
+          }}>
+            <span style={{
+              width: 18, height: 18, borderRadius: 5, flexShrink: 0,
+              background: `rgb(${swatch.r},${swatch.g},${swatch.b})`,
+              border: "1px solid rgba(255,255,255,0.25)",
+            }} />
+            {whiteStaged ? `Apply ${shownKelvin}K to ${name}` : "Applied ✓"}
+          </button>
+        </div>
+      )}
+
+      {anyColor && tone === "color" && (
         <div style={{ marginTop: 4 }}>
           <ColorPicker
             size={160}
@@ -748,7 +834,9 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
         <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 6 : 8, flexWrap: "wrap" }}>
           {openerBtn("lightning", lightningActive ? "⚡ Storm" : "⚡ Lightning", lightningActive ? "#fbbf24" : "#94a3b8")}
           {openerBtn("scenes", "Scenes", "#34d399")}
-          {openerBtn("controls", "Controls", "#a5b4fc")}
+          {/* "Controls" read as any controls at all; this sets every light at
+              once (v3.62.2). The usage key stays `controls`. */}
+          {openerBtn("controls", "Whole Room", "#a5b4fc")}
           {/* A running show is a state of the ROOM, so it has to be visible from
               the room header — not only once you've opened the panel. */}
           {canLightshow && openerBtn("lightshow",
