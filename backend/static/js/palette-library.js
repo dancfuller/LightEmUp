@@ -62,7 +62,7 @@ const PALETTE_LIBRARY = [
   { name: "Christmas", category: "Holidays", also: ["Winter"], featured: true, colors: [{r:220,g:20,b:20},{r:0,g:120,b:0},{r:218,g:165,b:0},{r:240,g:240,b:240},{r:0,g:80,b:30}] },
   { name: "Hanukkah", category: "Holidays", also: ["Winter"], colors: [{r:65,g:105,b:225},{r:135,g:206,b:235},{r:255,g:255,b:255},{r:30,g:60,b:160}] },
   { name: "New Year", category: "Holidays", also: ["Winter"], colors: [{r:255,g:215,b:0},{r:255,g:253,b:255},{r:184,g:115,b:51}] },
-  { name: "Halloween", category: "Holidays", also: ["Autumn"], featured: true, colors: [{r:255,g:140,b:0},{r:140,g:60,b:200},{r:200,g:60,b:0}] },
+  { name: "Halloween", category: "Holidays", also: ["Autumn"], featured: true, colors: [{r:255,g:140,b:0},{r:140,g:60,b:200},{r:90,g:230,b:0}] },
   { name: "Valentine's", category: "Holidays", also: ["Winter"], colors: [{r:255,g:60,b:120},{r:200,g:30,b:80},{r:255,g:180,b:200},{r:240,g:200,b:220}] },
   { name: "Fourth of July", category: "Holidays", also: ["Summer"], colors: [{r:220,g:30,b:30},{r:240,g:240,b:240},{r:30,g:60,b:200},{r:255,g:80,b:80},{r:80,g:120,b:240}] },
   { name: "St. Patrick's", category: "Holidays", also: ["Spring"], colors: [{r:30,g:160,b:80},{r:80,g:200,b:80},{r:140,g:220,b:140},{r:200,g:240,b:160},{r:255,g:215,b:0}] },
