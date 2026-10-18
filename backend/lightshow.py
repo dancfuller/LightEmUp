@@ -204,13 +204,24 @@ class ColorDealer:
     same repeating ABCABC pattern down its whole length.
 
     Look-alikes are merged first (v3.61.0, `led_distinct`), so "never repeats"
-    holds for what the bulbs SHOW, not just for the values sent."""
+    holds for what the bulbs SHOW, not just for the values sent.
 
-    def __init__(self, colors: list, rng=None):
+    `spacing` (v3.62.5) is how many of the previous colors a new one must differ
+    from. 1 is the rule above. A LINE deals with 2: on the Exterior Front a lamp
+    post stands in front of the wall between a door light and a spotlight, so
+    from the street all three read as neighbors, while on the line the post sits
+    between the other two and kept only ITS neighbors apart — door light and
+    spotlight came out the same color. Spacing is capped at len(colors) - 1, so a
+    two-color palette keeps the plain rule, and three colors become a strict
+    rotation (the only way to keep every three in a row different)."""
+
+    def __init__(self, colors: list, rng=None, spacing: int = 1):
         self.colors = led_distinct([tuple(c) for c in colors])
         self.rng = rng or random
         self.queue: list = []
         self.last = None
+        self.spacing = max(1, min(int(spacing), len(self.colors) - 1))
+        self.recent: list = []
 
     def _refill(self):
         pool = list(self.colors)
@@ -222,9 +233,29 @@ class ColorDealer:
     def next(self):
         if not self.colors:
             return (255, 255, 255)
+        if self.spacing > 1:
+            return self._next_spaced()
         if not self.queue:
             self._refill()
         self.last = self.queue.pop(0)
+        return self.last
+
+    def _next_spaced(self):
+        # Take the first queued color that none of the last `spacing` colors
+        # match; if the queue has none, add a fresh shuffle behind it. Spacing
+        # is below len(colors), so a fresh shuffle always holds one.
+        avoid = self.recent[-self.spacing:]
+        for _ in range(2):
+            for i, c in enumerate(self.queue):
+                if c not in avoid:
+                    self.last = self.queue.pop(i)
+                    self.recent = (self.recent + [self.last])[-self.spacing:]
+                    return self.last
+            pool = list(self.colors)
+            self.rng.shuffle(pool)
+            self.queue.extend(pool)
+        self.last = self.queue.pop(0)     # unreachable while spacing < len(colors)
+        self.recent = (self.recent + [self.last])[-self.spacing:]
         return self.last
 
 

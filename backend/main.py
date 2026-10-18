@@ -1496,7 +1496,8 @@ def _apply_fill_mode(device_key: str, seg_colors: list) -> list:
     return seg_colors
 
 
-def _fixture_repair(room_name: str, units: list, dealt: dict, colors: list, rng=None) -> int:
+def _fixture_repair(room_name: str, units: list, dealt: dict, colors: list, rng=None,
+                    reach: int = 1) -> int:
     """Make the members of each FIXTURE in this room different colors (v3.61.0).
 
     The Scenes panel has always forced fixture mates apart; this builder never
@@ -1513,7 +1514,8 @@ def _fixture_repair(room_name: str, units: list, dealt: dict, colors: list, rng=
     own neighbors in the order, so fixing the fixture doesn't make a new repeat next
     door. If the palette has fewer colors than the fixture has members, the rest are
     left as dealt. Only whole lights count; a segmented device's segments already
-    differ along it. Returns how many lights it changed."""
+    differ along it. `reach` is how far either side counts as a neighbor (2 on a
+    line, matching the dealer's spacing). Returns how many lights it changed."""
     rng = rng or random
     present = {k for k, i in units if i is None}
     index = {u: n for n, u in enumerate(units)}
@@ -1529,7 +1531,8 @@ def _fixture_repair(room_name: str, units: list, dealt: dict, colors: list, rng=
             cur = dealt[unit]
             if any(lightshow.led_same(cur, u) for u in used):
                 n = index[unit]
-                near = [dealt[units[j]] for j in (n - 1, n + 1) if 0 <= j < len(units)]
+                near = [dealt[units[j]] for j in range(n - reach, n + reach + 1)
+                        if j != n and 0 <= j < len(units)]
                 free = [c for c in colors if not any(lightshow.led_same(c, u) for u in used)]
                 best = [c for c in free if not any(lightshow.led_same(c, x) for x in near)]
                 pick = best or free
@@ -1558,7 +1561,11 @@ def _build_palette_scene(room_name: str, palette: dict, brightness: int = 100,
         return None
 
     brightness = max(1, min(100, int(brightness)))
-    dealer = _ColorDealer(colors, rng)
+    on_line = _lightshow_geometry(room_name) == "line"
+    # On a line, no color repeats either of the two before it (v3.62.5): a light
+    # standing in front of the wall, like the Exterior Front's lamp post, sits
+    # BETWEEN two wall lights on the line while all three look adjacent.
+    dealer = _ColorDealer(colors, rng, spacing=2 if on_line else 1)
 
     hue_keys = [f"hue:{lid}" for lid in room.get("hue_light_ids", [])]
     govee_keys = [f"govee:{slug}" for slug in room.get("govee_devices", [])]
@@ -1611,7 +1618,7 @@ def _build_palette_scene(room_name: str, palette: dict, brightness: int = 100,
             units.extend((key, i) for i in range(d["count"]))
         else:
             units.append((key, None))
-    if _lightshow_geometry(room_name) == "line":
+    if on_line:
         dev_pos, seg_pos = _lightshow_positions(room_name)
 
         def at(key, idx):
@@ -1626,7 +1633,8 @@ def _build_palette_scene(room_name: str, palette: dict, brightness: int = 100,
     for unit in units:                    # one next() per unit, in THIS order
         dealt[unit] = dealer.next()
     # Fixture members apart, as the Scenes panel does (v3.61.0).
-    _fixture_repair(room_name, units, dealt, dealer.colors, dealer.rng)
+    _fixture_repair(room_name, units, dealt, dealer.colors, dealer.rng,
+                    reach=dealer.spacing)
 
     for key, kind, d in plan:
         if kind == "hue":

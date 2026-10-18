@@ -1496,6 +1496,22 @@ so "Try it now" exercises the identical path.
   floor plan still deals in device order, byte-identically** (the replay compared the
   payloads): a strip stays one run there, the same call the Scenes panel makes. The
   browser had the same bug by a different route; see `lineOrder` in `static/js/CLAUDE.md`.
+- **On a line, no color repeats either of the TWO before it (v3.62.5).** The Exterior
+  Front's lamp post stands in the yard, in front of the wall between the garage-side
+  door light and the first spotlight. From the street all three read as neighbors, but
+  on the line the post sits between the other two, so "no two neighbors alike" kept
+  only the post apart from each and the door light and spotlight came out the same
+  (green/orange/green in the reporting photo). `ColorDealer(spacing=2)` on a line;
+  `_fixture_repair(reach=2)` to match. Spacing is capped at colors − 1, so two colors
+  keep the plain rule (a triangle of neighbors can't be done in two) and three become
+  a strict rotation. A floor plan stays spacing 1, byte-identically. Chosen over a
+  per-light "stands in front of the wall" flag: no new setting, and it covers any light
+  set off the wall. **The Scenes panel needed nothing** — on a line it lays a fixed
+  A-B-C cycle, which already keeps any three in a row apart. Light shows are
+  unchanged (Walk keeps order; the shuffling modes don't apply this rule). Replayed on
+  the Pi's real Exterior Front line (11 places): the old rule put a color two places
+  from itself 762 times in 300 Halloween builds and 185 in 300 Christmas; now 0, with
+  no neighbor repeats and two-color palettes still clean.
 - **Why not snapshot ten payloads in the browser and pick one?** A category is ten
   devices-worth of resolved JSON, which would bloat `config.json` (rewritten on every
   mutation, on an SD card) by an order of magnitude, go stale the moment a light is added
