@@ -84,7 +84,7 @@ function AskBar({ enabled, onDone, isMobile }) {
           autoComplete="off"
           autoCapitalize="sentences"
           disabled={busy}
-          aria-label="Ask LightEmUp"
+          aria-label="Tell LightEmUp what to do"
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
           style={{
@@ -116,7 +116,7 @@ function AskBar({ enabled, onDone, isMobile }) {
             border: "2px solid rgba(199,210,254,0.35)", borderTopColor: "#c7d2fe",
             animation: "spin 0.8s linear infinite",
           }} />}
-          {busy ? "Working" : "Ask"}
+          {busy ? "Working" : "Go"}
         </button>
       </form>
       {(busy || reply) && (
@@ -197,7 +197,7 @@ function AskCard({ isMobile, onKeyChanged }) {
       <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.5, marginBottom: 14 }}>
         Type or say what the lights should do in the box under the Live bar — "make the
         living room spooky but leave the hexa alone". On a phone, tap the microphone on the
-        keyboard to speak. What you ask is sent to Anthropic's Claude Haiku 5.5, which
+        keyboard to speak. What you type or say is sent to Anthropic's Claude Haiku 5.5, which
         chooses from LightEmUp's own actions; the hub carries them out. Anything aimed at the
         whole house asks first. A request costs well under a tenth of a cent.
       </div>

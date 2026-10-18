@@ -1245,12 +1245,15 @@ anything until it's set up.
   `enterKeyHint="send"` makes the keyboard's return key read Send.
 - **It must be obvious where to start and that something is happening (v3.60.1).**
   Reported: after sending, nothing showed the hub was working, and it wasn't clear
-  whether to tap the box or "Ask". So "Ask" is grey and disabled until there is text,
+  whether to tap the box or the button. So the button is grey and disabled until there is text,
   then solid indigo; the box has a "💬 Tap to type or speak" prompt and an indigo focus
   ring. While waiting the button spins ("Working"), a pulsing line repeats the request
   ("Working on it… “…”"), and after 6s it says "Still working — setting the lights…".
   Sending blurs the input so a phone keyboard closes and doesn't hide that line.
-- **Grey "Ask" still does something (v3.60.3):** people press it before typing, so
+- **The button says "Go", not "Ask" (v3.62.3).** You are telling the lights what to
+  do, not asking a question; "Ask" stays the FEATURE's name (Settings card, "set by
+  Ask" credits, `Ask: …` timers). The input's aria-label is "Tell LightEmUp what to do".
+- **Grey "Go" still does something (v3.60.3):** people press it before typing, so
   pressing it with an empty box focuses the input (opening a phone keyboard) instead
   of doing nothing. It is therefore NOT `disabled` or `aria-disabled` while empty —
   only while a request runs.
