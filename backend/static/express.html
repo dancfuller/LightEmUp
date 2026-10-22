@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0a0f1e">
+  <title>LightEmUp Express</title>
+  <link rel="icon" type="image/png" sizes="192x192" href="/express-icon.png">
+  <link rel="apple-touch-icon" href="/express-icon.png">
+  <!--
+    LightEmUp Express (v3.63.0): big buttons for a phone's home screen. Deliberately
+    plain HTML with no React/Babel/CDN — the point is to beat "open the app, scroll to
+    the room" to the light switch. Opening the page changes nothing; pressing a button
+    POSTs /api/express/press. The buttons are set up in Settings → LightEmUp Express.
+    See backend/CLAUDE.md "LightEmUp Express".
+  -->
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #0a0f1e; color: #e2e8f0; min-height: 100vh;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      padding: 20px 16px 32px;
+    }
+    main { max-width: 760px; margin: 0 auto; }
+    header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; }
+    h1 { font-size: 18px; font-weight: 700; color: #94a3b8; letter-spacing: 0.3px; }
+    h1 b { color: #e2e8f0; }
+    header a { color: #64748b; font-size: 13px; text-decoration: none; padding: 6px 2px; }
+    #buttons { display: grid; grid-template-columns: 1fr; gap: 12px; }
+    @media (min-width: 600px) { #buttons { grid-template-columns: 1fr 1fr; } }
+    .pill {
+      display: flex; align-items: center; gap: 14px; width: 100%; min-height: 68px;
+      padding: 12px 22px; border-radius: 999px; cursor: pointer; text-align: left;
+      font: inherit; font-size: 18px; font-weight: 700; color: #e2e8f0;
+      border: 2px solid #334155; background: #1e293b;
+      -webkit-tap-highlight-color: transparent; transition: transform 0.08s, border-color 0.2s;
+    }
+    .pill:active { transform: scale(0.97); }
+    .pill .dot { width: 22px; height: 22px; border-radius: 50%; flex-shrink: 0; }
+    .pill .label { flex: 1; line-height: 1.25; }
+    .pill .state { width: 26px; text-align: center; font-size: 20px; flex-shrink: 0; }
+    .pill.off { background: #111827; color: #cbd5e1; }
+    .pill.off .dot { border: 3px solid #475569; }
+    .pill.on { background: rgba(99,102,241,0.18); border-color: rgba(129,140,248,0.5); }
+    .pill.busy { opacity: 0.7; }
+    .pill.busy .state { animation: spin 0.9s linear infinite; }
+    .pill.ok { border-color: #22c55e; }
+    .pill.ok .state { color: #22c55e; }
+    .pill.fail { border-color: #ef4444; }
+    .pill.fail .state { color: #ef4444; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #msg { margin-top: 16px; font-size: 15px; line-height: 1.5; color: #94a3b8; text-align: center; min-height: 22px; }
+    #msg.fail { color: #fca5a5; }
+    #retry { display: block; margin: 16px auto 0; padding: 12px 24px; border-radius: 999px;
+      border: 1px solid #334155; background: #1e293b; color: #e2e8f0; font: inherit; font-weight: 600; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1><b>LightEmUp</b> Express</h1>
+    <a href="/">Open the app ›</a>
+  </header>
+  <div id="buttons"></div>
+  <div id="msg">Loading…</div>
+  <button id="retry" hidden>Try again</button>
+</main>
+<script>
+(function () {
+  var box = document.getElementById("buttons"), msg = document.getElementById("msg"),
+      retry = document.getElementById("retry");
+
+  // Kelvin → a display color for the dot, same idea as the app's kelvinToRGB.
+  function kelvinCss(k) {
+    var t = k / 100, r, g, b;
+    r = t <= 66 ? 255 : 329.7 * Math.pow(t - 60, -0.1332);
+    g = t <= 66 ? 99.47 * Math.log(t) - 161.12 : 288.12 * Math.pow(t - 60, -0.0755);
+    b = t >= 66 ? 255 : t <= 19 ? 0 : 138.52 * Math.log(t - 10) - 305.04;
+    var c = function (v) { return Math.round(Math.max(0, Math.min(255, v))); };
+    return "rgb(" + c(r) + "," + c(g) + "," + c(b) + ")";
+  }
+
+  function say(text, fail) { msg.textContent = text || ""; msg.className = fail ? "fail" : ""; }
+
+  function render(buttons) {
+    box.innerHTML = "";
+    if (!buttons.length) {
+      say("No buttons yet. Add them in the app under Settings → LightEmUp Express.");
+      return;
+    }
+    say("");
+    buttons.forEach(function (b) {
+      var a = b.action || {};
+      var el = document.createElement("button");
+      el.className = "pill " + (a.type === "power" && !a.on ? "off" : a.type === "power" ? "on" : "white");
+      var dot = document.createElement("span"); dot.className = "dot";
+      if (a.type === "white") {
+        var col = kelvinCss(a.kelvin || 2700);
+        dot.style.background = col;
+        dot.style.boxShadow = "0 0 14px " + col;
+        el.style.borderColor = col.replace("rgb", "rgba").replace(")", ",0.45)");
+      } else if (a.on) {
+        dot.style.background = "#818cf8";
+      }
+      var label = document.createElement("span"); label.className = "label"; label.textContent = b.label;
+      var state = document.createElement("span"); state.className = "state";
+      el.appendChild(dot); el.appendChild(label); el.appendChild(state);
+      el.onclick = function () { press(b, el, state); };
+      box.appendChild(el);
+    });
+  }
+
+  function press(b, el, state) {
+    if (el.classList.contains("busy")) return;     // a second tap while one is in flight
+    el.classList.remove("ok", "fail"); el.classList.add("busy");
+    state.textContent = "◌"; say("");
+    var ctl = new AbortController();
+    var timer = setTimeout(function () { ctl.abort(); }, 15000);
+    fetch("/api/express/press", {
+      method: "POST", signal: ctl.signal,
+      headers: { "Content-Type": "application/json", "X-Client-Id": "express" },
+      body: JSON.stringify({ id: b.id }),
+    }).then(function (res) {
+      if (res.ok) return null;
+      return res.json().then(function (j) { return j.detail || ("Error " + res.status); },
+                            function () { return "Error " + res.status; });
+    }).then(function (err) {
+      clearTimeout(timer); el.classList.remove("busy");
+      if (err) return failed(b, el, state, err);
+      el.classList.add("ok"); state.textContent = "✓";
+      setTimeout(function () { el.classList.remove("ok"); state.textContent = ""; }, 4000);
+    }, function (e) {
+      clearTimeout(timer); el.classList.remove("busy");
+      failed(b, el, state, e && e.name === "AbortError"
+        ? "LightEmUp didn't answer within 15 seconds."
+        : "Couldn't reach LightEmUp. Is this phone on the home network?");
+    });
+  }
+  function failed(b, el, state, why) {
+    // Never look like success when nothing happened.
+    el.classList.add("fail"); state.textContent = "!";
+    say("“" + b.label + "” didn't work: " + why, true);
+  }
+
+  function load() {
+    retry.hidden = true; say("Loading…");
+    fetch("/api/express").then(function (r) {
+      if (!r.ok) throw new Error(r.status);
+      return r.json();
+    }).then(function (j) { render(j.buttons || []); }, function () {
+      say("Couldn't reach LightEmUp. Is this phone on the home network?", true);
+      retry.hidden = false;
+    });
+  }
+  retry.onclick = load;
+  load();
+})();
+</script>
+</body>
+</html>

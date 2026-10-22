@@ -2067,6 +2067,7 @@ function App() {
             <DeliveryHealthCard isMobile={isMobile} />
             <UsageLogCard isMobile={isMobile} />
             <AskCard isMobile={isMobile} onKeyChanged={() => loadAll()} />
+            <ExpressCard rooms={rooms} zones={zones} isMobile={isMobile} />
             <PowerRecoveryCard settings={powerRecovery} onChange={updatePowerRecovery} isMobile={isMobile} />
 
             <LocationCard location={location} onChange={updateLocation} isMobile={isMobile} />

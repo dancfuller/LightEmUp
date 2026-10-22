@@ -11,7 +11,7 @@ utils → audio → components-shared → light-card → favorite-lights → lig
 room-map → palette-data → palette-library → color-mode → light-scene → location-data →
 schedules → lightshow → segment-reset-debug → room-section → zones → room-assignment →
 setup-wizard → server-logs → ct-calibration → delivery-health → usage-log → backup-restore →
-ask → app
+ask → express → app
 
 A new file must be added to index.html in the correct slot (after its dependencies).
 
@@ -1268,6 +1268,19 @@ anything until it's set up.
   back).
 - Verified with the routes faked (`tools/preview/_shoot_ask.mjs`, scratch) at 1440 and
   402px: idle, waiting, done, the Yes / No confirmation, and the card.
+
+## express.js — Settings → LightEmUp Express (v3.63.0)
+`ExpressCard` edits the buttons on `/express` (see `backend/CLAUDE.md` "LightEmUp
+Express"). Each row: a pill-shaped label field, the lights (All lights / a zone / a
+room), Off / On / White, and for White the named temperatures (Candlelight 2200K,
+Incandescent 2700K, … Cool white 6500K) plus 10–100%. ↑ ↓ reorder, ✕ removes.
+- **Every change saves the WHOLE list** and takes the backend's answer as truth, like
+  schedules; a failed save restores the previous list and says "Not saved".
+- **A label you never edited follows the button** (`expressAutoLabel`): switching
+  "Living Room off" to White renames it "Living Room · Incandescent 100%". Once typed
+  by hand, a label sticks. Labels save on blur / Enter, not per keystroke.
+- A button whose room or zone no longer exists shows "(missing)" and an amber note.
+- Copy link uses the `execCommand` fallback: the Pi's plain http isn't a secure context.
 
 ## Usage log — `trackUse` (utils.js) and usage-log.js (v3.49.0)
 Records which screens and actions each device uses so the interface can be arranged

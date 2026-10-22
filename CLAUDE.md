@@ -176,6 +176,9 @@ backend/
   config.json.example  # Template for config.json
   static/
     index.html         # HTML shell — CSS, CDN imports, script tags
+    express.html       # /express — LightEmUp Express (v3.63.0): big buttons for a phone's
+                       # home screen. Plain HTML + a few lines of JS, NO React/Babel/CDN.
+                       # Opening it changes nothing. express-icon.png is its icon
     js/                   # Load order is set by <script> tags in index.html (authoritative)
       utils.js            # React hooks, api() wrapper, color math, useIsMobile, useThrottledControl,
                           # the color clipboard (copyColorToClipboard/useColorClipboard — the
@@ -236,6 +239,8 @@ backend/
       ask.js              # AskBar (app chrome under the Live bar; a text box the
                           # phone keyboard's mic can dictate into) + AskCard (Settings:
                           # the Anthropic key and what Ask has cost), v3.60.0
+      express.js          # ExpressCard — Settings card that edits the Express buttons
+                          # (v3.63.0); the page itself is static/express.html
       backup-restore.js   # BackupRestoreCard — Settings export/import of every setting
                           # (downloads to the browser; import previews then replaces)
       app.js              # App component — state, routing, SSE client, API orchestration
@@ -336,6 +341,12 @@ All endpoints are under `/api/`. Key groups:
   `?include_credentials=false` strips the bridge token. `/api/config/import` replaces all
   settings from such a file (`dry_run` previews; writes a `config.json.pre-import-*.bak`
   first; no restart needed). See `backend/CLAUDE.md` "Backup / restore"
+- `/express` (a page, not under /api) + `/api/express` — LightEmUp Express (v3.63.0): big
+  buttons for a phone's home screen ("All lights off", "Living Room · Incandescent
+  100%"). `GET`/`POST /api/express` read and replace the button list (config key
+  `express_buttons`); `POST /api/express/press {id}` runs one through the same paths
+  as the room toggle, Soft White, the zone bar and "All lights off". Edited in
+  Settings → LightEmUp Express. See `backend/CLAUDE.md` "LightEmUp Express"
 - `/api/ask` — one turn of Ask (v3.60.0): `{text}` in, `{reply, actions, awaiting}`
   out. Claude Haiku 5.5 picks from a fixed list of actions (`ask.build_tools`) and the
   Pi runs them through the existing room/zone/scene/light-show paths with

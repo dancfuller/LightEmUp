@@ -173,6 +173,11 @@ DEFAULT_CONFIG = {
     "favorites": [],      # saved colors [[r,g,b],…]. Empty is falsy on purpose:
                           # /api/config falls back to DEFAULT_FAVORITES (defined much
                           # further down, so it can't be referenced from here).
+    "express_buttons": [],  # LightEmUp Express (v3.63.0): the big buttons on /express,
+                            # in the user's order. Each: {id, label, target: "all" |
+                            # "room" | "zone", name, action: {type: "power", on} |
+                            # {type: "white", kelvin, brightness}}. Room/zone-NAME
+                            # keyed by value, so rename/delete carry them.
     "favorite_lights": [],  # device keys ("hue:12" / "govee:<slug>") pinned to the
                             # Favorites strip at the top of Rooms and All Lights
                             # (v3.33.0). ORDER IS THE USER'S — it's the order the
@@ -5211,6 +5216,8 @@ async def delete_room(room_name: str):
         if room_name in members:
             zone["rooms"] = [r for r in members if r != room_name]
             removed = True
+    if _express_drop("room", room_name):
+        removed = True
     if removed:
         save_config(config)
         publish_event("config")
@@ -7732,6 +7739,7 @@ _SETTING_LABELS = {
     "fixtures": "Fixtures",
     "favorites": "Favorite colors",
     "favorite_lights": "Favorite lights",
+    "express_buttons": "Express buttons",
     "location": "Location (for sunrise/sunset)",
     "power_recovery": "Power-outage recovery",
     "lightning_scenes": "Saved lightning scenes",
@@ -8525,6 +8533,7 @@ async def rename_zone(req: ZoneRenameRequest):
     for entry in (config.get("room_last_applied", {}) or {}).values():
         if entry.get("source") == "zone" and entry.get("source_detail") == old:
             entry["source_detail"] = new
+    _express_rename("zone", old, new)
 
     save_config(config)
     publish_event("config")
@@ -8593,6 +8602,7 @@ async def delete_zone(zone_name: str):
     if zone_name not in zones:
         raise HTTPException(404, f"No zone '{zone_name}'")
     del zones[zone_name]
+    _express_drop("zone", zone_name)
     save_config(config)
     publish_event("config")
     return {"success": True}
@@ -8828,6 +8838,7 @@ async def rename_room(req: RoomRenameRequest):
             action["room"] = new
     for zone in (config.get("zones", {}) or {}).values():
         zone["rooms"] = [new if r == old else r for r in zone.get("rooms", [])]
+    _express_rename("room", old, new)
 
     save_config(config)
     publish_event("config")
@@ -9850,6 +9861,130 @@ async def ask_set_key(req: AskKeyRequest):
 # ─── Static Files (frontend) ─────────────────────────────────────────────────
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+# ─── LightEmUp Express (v3.63.0) ────────────────────────────────────────────
+# A page of big buttons for a phone's home screen: "All lights off", "Living Room
+# · Incandescent 100%"… Reported: saying "Hey Google" beat opening LightEmUp to
+# turn a room off, because the app's first paint downloads React + Babel and
+# compiles ~20 files in the browser. /express is plain HTML with a few lines of
+# JS, and each button runs through the paths the app's own controls use.
+
+EXPRESS_MAX_BUTTONS = 24
+
+
+def _express_clean(raw: list) -> list:
+    """Validate a whole button list from the Settings card. Anything malformed
+    is a 400 rather than silently dropped: a button that vanished on save would
+    be found missing at bedtime."""
+    import uuid
+    if not isinstance(raw, list) or len(raw) > EXPRESS_MAX_BUTTONS:
+        raise HTTPException(400, f"Express takes a list of at most {EXPRESS_MAX_BUTTONS} buttons")
+    out, seen = [], set()
+    for b in raw:
+        if not isinstance(b, dict):
+            raise HTTPException(400, "Each Express button must be an object")
+        target = b.get("target")
+        name = (b.get("name") or "").strip() if target != "all" else None
+        if target not in ("all", "room", "zone"):
+            raise HTTPException(400, f"Unknown Express target {target!r}")
+        if target != "all" and not name:
+            raise HTTPException(400, f"An Express button for a {target} needs its name")
+        a = b.get("action") or {}
+        if a.get("type") == "power":
+            action = {"type": "power", "on": bool(a.get("on"))}
+        elif a.get("type") == "white" and target != "all":
+            # "All lights" has no white path: /api/all/control is power only.
+            k, bri = a.get("kelvin"), a.get("brightness")
+            action = {"type": "white",
+                      "kelvin": max(2000, min(6500, int(2700 if k is None else k))),
+                      "brightness": max(1, min(100, int(100 if bri is None else bri)))}
+        else:
+            raise HTTPException(400, f"Unsupported Express action {a.get('type')!r} for {target}")
+        bid = str(b.get("id") or "") or uuid.uuid4().hex[:8]
+        while bid in seen:
+            bid = uuid.uuid4().hex[:8]
+        seen.add(bid)
+        label = (b.get("label") or "").strip()[:60] or "Button"
+        out.append({"id": bid, "label": label, "target": target, "name": name, "action": action})
+    return out
+
+
+def _express_rename(target: str, old: str, new: str):
+    for b in config.get("express_buttons", []) or []:
+        if b.get("target") == target and b.get("name") == old:
+            b["name"] = new
+
+
+def _express_drop(target: str, name: str) -> bool:
+    """A deleted room or zone takes its buttons with it, like zone membership."""
+    buttons = config.get("express_buttons", []) or []
+    kept = [b for b in buttons if not (b.get("target") == target and b.get("name") == name)]
+    if len(kept) == len(buttons):
+        return False
+    config["express_buttons"] = kept
+    return True
+
+
+class ExpressSaveRequest(BaseModel):
+    buttons: list
+
+
+class ExpressPressRequest(BaseModel):
+    id: str
+
+
+@app.get("/api/express")
+async def get_express():
+    return {"buttons": config.get("express_buttons", []) or []}
+
+
+@app.post("/api/express")
+async def save_express(req: ExpressSaveRequest):
+    config["express_buttons"] = _express_clean(req.buttons)
+    save_config(config)
+    publish_event("config")
+    return {"success": True, "buttons": config["express_buttons"]}
+
+
+@app.post("/api/express/press")
+async def press_express(req: ExpressPressRequest):
+    """Run one button. Same code paths as the app's own controls: the room
+    toggle (`control_room`), Soft White (`_apply_room_white`), the zone bar
+    (`control_zone`) and "All lights off" (`control_all`)."""
+    b = next((x for x in config.get("express_buttons", []) or [] if x.get("id") == req.id), None)
+    if not b:
+        raise HTTPException(404, "That button no longer exists. Reload the page.")
+    target, name, action = b["target"], b.get("name"), b["action"]
+    if target == "all":
+        await control_all(AllControlRequest(on=bool(action.get("on"))))
+    elif target == "zone":
+        await control_zone(ZoneControlRequest(
+            zone_name=name, type=action["type"], on=action.get("on"),
+            kelvin=action.get("kelvin"), brightness=action.get("brightness", 100)))
+    else:
+        if name not in (config.get("rooms", {}) or {}):
+            raise HTTPException(404, f"Room '{name}' not found")
+        if action["type"] == "power":
+            await control_room(RoomStateRequest(room_name=name, on=bool(action.get("on"))))
+        else:
+            await _apply_room_white(name, int(action["kelvin"]), int(action["brightness"]))
+    log.info("Express: %s", b["label"])
+    return {"success": True}
+
+
+@app.get("/express")
+async def serve_express():
+    """The Express page. Plain HTML, never cached, so a deploy is seen at once.
+    Opening it changes nothing; only pressing a button does."""
+    return FileResponse(STATIC_DIR / "express.html",
+                        headers={"Cache-Control": "no-cache, must-revalidate"})
+
+
+@app.get("/express-icon.png")
+async def serve_express_icon():
+    return FileResponse(STATIC_DIR / "express-icon.png",
+                        headers={"Cache-Control": "public, max-age=86400"})
+
 
 @app.get("/")
 async def serve_frontend():

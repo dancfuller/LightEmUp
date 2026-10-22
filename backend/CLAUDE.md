@@ -2422,6 +2422,41 @@ the light-show rules for free, and it can't do anything the app can't.
   order, zones, both light-show branches, an ambiguous light going back as a question,
   room-then-light order, the cap, no key, a rejected key, and the cost tally.
 
+## LightEmUp Express — `/express` home-screen buttons (v3.63.0)
+Reported: turning the living room off on the way to bed was faster by saying "Hey
+Google" than by opening LightEmUp, because the app's first paint downloads React and
+Babel from a CDN and compiles ~20 JSX files in the phone's browser. Express is one
+page of big pill buttons ("All lights off", "Living Room · Incandescent 100%",
+"Inside off"…) meant to be pinned to the home screen.
+- `GET /express` serves `static/express.html`: plain HTML, a few lines of JS, no CDN,
+  never cached. It reads `GET /api/express` and renders the buttons in order.
+- **Opening the page changes nothing; pressing a button does.** An earlier cut of
+  this (never shipped) was one link per action that fired on open. The pinned setup
+  visit fired too, and every action needed its own icon. One page of buttons fixes both.
+- **Config key `express_buttons`**, an ordered list: `{id, label, target: "all" |
+  "room" | "zone", name, action}` where action is `{type: "power", on}` or
+  `{type: "white", kelvin, brightness}`. `POST /api/express` replaces the whole list
+  and `_express_clean` validates it — a malformed button is a 400, never silently
+  dropped (a vanished button is found missing at bedtime). "All lights" is power
+  only: `/api/all/control` has no white path.
+- **Room- and zone-NAME keyed by value**, so `rename_room` / `rename_zone` repoint
+  them (`_express_rename`) and `delete_room` / `delete_zone` drop them
+  (`_express_drop`), the same as zone membership.
+- `POST /api/express/press {id}` runs one through the app's own paths:
+  `control_room` (the room toggle), `_apply_room_white` (Soft White, at the button's
+  level), `control_zone` (the zone bar), `control_all` ("All lights off"). No new
+  control path, so pacing, verify and "Now showing" all apply. A missing room is a
+  404 with the reason, which the page shows on the button.
+- The page guards a double tap (a button in flight ignores taps), shows ✓ on the
+  button for 4 s, and on failure a red button plus the reason. It must never look
+  like success when nothing happened.
+- `express-icon.png` (192px power symbol). Without a manifest (a real PWA needs
+  HTTPS), how a launcher uses it is up to Chrome.
+- Verified: a scripted backend test with every device call stubbed (28 checks: each
+  of the six default kinds of button reaches the right function with the right
+  arguments, validation, clamping, rename/delete carry, the missing-room 404) and
+  `tools/preview/_shoot_express.mjs` (scratch) with the API faked, at 402 and 1440px.
+
 ## Whole-room actions belong on the backend (v3.43.0)
 Three controls used to fan out **from the browser** — one HTTP request per light,
 all issued in the same tick, fire-and-forget: **Soft White**, **Cool White**, and
