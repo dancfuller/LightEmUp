@@ -6,6 +6,9 @@ config.json
 # Runtime clean-shutdown marker (power-recovery: planned reboot vs outage)
 backend/.clean_shutdown
 
+# Downloaded tools (deploy/install-esbuild.sh puts the frontend compiler here)
+.tools/
+
 # Python
 __pycache__/
 *.pyc

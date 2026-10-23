@@ -141,7 +141,7 @@ yourself hand-listing keys to export, that's the bug this checklist exists to pr
 ## Architecture
 
 - **Backend**: Python FastAPI in `backend/main.py`, device layer in `backend/discovery.py`, scene engine in `backend/scenes.py`
-- **Frontend**: Modular React app — `backend/static/index.html` is a thin shell that loads 10 component files from `backend/static/js/` via `<script type="text/babel" src="...">` tags. React 18 and Babel load from CDN; Babel transpiles JSX in-browser. No build step.
+- **Frontend**: Modular React app — `backend/static/index.html` is a thin shell that loads ~27 component files from `backend/static/js/` via `<script type="text/babel" src="...">` tags. React 18 loads from a CDN. **The Pi compiles the JSX with esbuild when the server starts** and `GET /` serves the compiled scripts from `/jsc/` (v3.64.0); in-browser Babel is only the fallback (esbuild missing, or `/?babel=1`). Nobody runs a build step by hand. See `backend/CLAUDE.md` "Precompiled frontend".
 - **Config**: `backend/config.json` (gitignored) stores bridge credentials, room assignments, nicknames, room layouts, and scene settings. Copy `config.json.example` to get started.
 - **Server**: Runs on port 8420 (`http://localhost:8420`)
 
@@ -250,6 +250,9 @@ deploy/
                        # Aborts BEFORE pulling if it can't sudo (no TTY), so a deploy
                        # never half-lands.
   install-sudoers.sh   # One-time: narrow NOPASSWD rule so deploys need no terminal.
+  install-esbuild.sh   # Puts the pinned esbuild binary (the frontend compiler) at
+                       # .tools/esbuild (gitignored). update.sh runs it every deploy;
+                       # idempotent, sha256-checked, never fatal (v3.64.0)
   lightemup.service    # systemd unit
 tools/
   build-palette-library.py # Regenerates backend/static/js/palette-library.js from
@@ -267,9 +270,10 @@ tools/
 
 ## Frontend Conventions
 
-- **No build step**: All JS is in `backend/static/js/*.js` as JSX, transpiled by Babel standalone in the browser. Files share the global scope and must be loaded in dependency order (defined by script tags in `index.html`).
+- **No build step to run**: All JS is in `backend/static/js/*.js` as JSX. The server compiles it at startup (esbuild, file by file, no bundling) — edit, restart, reload. Files share the global scope and must be loaded in dependency order (defined by script tags in `index.html`).
+- **Declare a `const` above its first use during render.** In-browser Babel turned `const` into `var`, so an early read was a silent `undefined`; compiled, it throws and blanks the app (v3.64.0 found one in `color-mode.js`).
 - **React hooks at top of utils.js**: `const { useState, useEffect, useCallback, useRef } = React;` — available to all files.
-- **Global functions**: Components and utilities are plain `function` declarations at file top level (not `export`). They're global because Babel standalone executes each file in the same scope.
+- **Global functions**: Components and utilities are plain `function` declarations at file top level (not `export`). They're global because each file runs as a classic script in the same page scope.
 - **Optimistic UI**: All device control actions update local state immediately without waiting for API response. API calls are fire-and-forget with `.catch()` for logging.
 - **Color spaces**: Hue devices report CIE `xy` coordinates — use `hueXYToRGB()` for accurate conversion. Govee devices use direct RGB. `getInitialColor()` handles both.
 - **Device keys**: `hue:{light_id}` or `govee:{ip_address}` — used for nicknames, room layouts, and state tracking.
@@ -307,7 +311,7 @@ Every UI change must work well on both desktop (16:9) and modern phones in portr
 1. **Govee port 4002 conflicts**: If the server holds a socket on 4002 (e.g. during discovery), concurrent requests will fail. The discovery code uses `SO_REUSEADDR` and falls back to a random port.
 1b. **Govee discovery is lossy; presence is assumed (v2.16.0)**: a Govee device's identity is its stable device id, not its IP (which is DHCP). One rescan re-broadcasts several times and known-but-silent devices still surface (badged offline) and stay controllable. `GET /api/discover/govee` returns each device with a `responding` flag. **Identity is now MAC-keyed (v3.0.0):** every Govee association is stored under a colon-free slug of the device's stable mac and the IP is resolved at send time, so a DHCP IP change no longer orphans associations. A one-time `schema_version`→2 migration re-keyed the config (backed up to `config.json.pre-mac-migration.bak`). See `backend/CLAUDE.md` for the helpers and the identity-vs-address boundary.
 2. **Razer protocol 60s timeout**: Per-segment control via the Razer protocol auto-disables after 60 seconds with no LED data. The scene engine sends keepalive packets.
-3. **Babel script order matters**: The `<script>` tags in `index.html` must be in dependency order. `utils.js` first (defines hooks, API, color utils), `app.js` last (uses everything).
+3. **Script order matters**: The `<script>` tags in `index.html` must be in dependency order. `utils.js` first (defines hooks, API, color utils), `app.js` last (uses everything).
 4. **config.json is gitignored**: It contains local network IPs and credentials. Always use `config.json.example` as the template.
 5. **Hue bridge pairing**: Requires physical button press on the bridge within 30 seconds of the pair API call.
 6. **Never insert a function between an `@app.…` decorator and its `def` (v3.58.2).** A

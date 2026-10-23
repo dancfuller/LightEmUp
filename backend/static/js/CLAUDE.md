@@ -1,6 +1,10 @@
 # backend/static/js/ — Frontend internals
 
-In-browser React 18 + Babel standalone. **No build step.** Each file runs in the
+React 18 from a CDN, written as JSX. **You never run a build step:** the Pi compiles
+these files with esbuild when it starts and serves the result (`/jsc/…`, v3.64.0 — see
+`backend/CLAUDE.md` "Precompiled frontend"); in-browser Babel is only the fallback
+(`/?babel=1`). Because Babel used to turn `const` into `var`, **a `const` read during
+render above its declaration now throws** — declare before use. Each file runs in the
 global scope; top-level `function`/`const` declarations are effectively global. Files
 load in the dependency order set by `<script>` tags in `../index.html` — that order is
 authoritative (utils first, app last). See root `CLAUDE.md` for the mobile/responsive
@@ -1578,8 +1582,9 @@ narrate into `loadingStatus` (only when `isFirst`) — "Loading your rooms and s
 "Loading your lights…" — rendered under a pulsing 🔆 on the full-screen loader.
 **Instant pre-mount loader (v3.5.1):** `index.html` ships a static HTML/CSS loader
 *inside* `#root` (pulsing 🔆 + "LightEmUp" + "Starting up…", using the global `pulse`
-keyframe) so something shows the moment the page paints — before the CDN React/Babel
-scripts download and Babel transpiles the ~15 files. `createRoot(root).render()` replaces
+keyframe) so something shows the moment the page paints — before the CDN React
+scripts and the app's own scripts load (since v3.64.0 precompiled on the Pi, well under
+a second). `createRoot(root).render()` replaces
 it on mount; app.js's loader uses the same `pulse` keyframe + layout so the handoff is
 seamless (no flash). Previously the navy `<body>` sat empty during that window.
 `controlHueLight` / `controlGoveeDevice` spread `cmd` into

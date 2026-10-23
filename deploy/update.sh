@@ -48,6 +48,11 @@ git pull --ff-only
 echo ">>> pip install (in case requirements.txt changed)"
 ./backend/venv/bin/pip install -r backend/requirements.txt
 
+# The server compiles the frontend with esbuild at startup (v3.64.0). Never fatal:
+# without it the page falls back to compiling in the browser, slowly but correctly.
+echo ">>> esbuild (frontend compiler)"
+bash ./deploy/install-esbuild.sh || echo "!!! esbuild install failed; the page will use in-browser Babel" >&2
+
 # ── Refresh the systemd unit only if it actually changed ─────────────────────
 # Compare WITHOUT sudo. The installed unit is world-readable, so sudo bought
 # nothing here and cost a password prompt on EVERY deploy. It was also actively

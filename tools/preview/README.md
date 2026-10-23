@@ -9,6 +9,10 @@ committed/deployed. Read-only: it never writes to the Pi.
   `/events` (SSE) to the Pi. Non-GET `/api` calls are stubbed with a success so
   the frontend's optimistic UI still reflects changes locally, but the Pi (the
   server of record) is never mutated.
+- `/` is **precompiled with esbuild exactly as the Pi does it** (v3.64.0 — same
+  options as `main.py`'s `_ESBUILD_ARGS`; keep them in step), recompiled from the
+  working tree on every page load. `/?babel=1` serves the old in-browser Babel page,
+  for comparing the two.
 - `shoot.mjs` drives the installed Edge/Chrome (Playwright `channel`, no browser
   download) to load the page, optionally click into a state, and write a PNG.
 

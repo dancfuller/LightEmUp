@@ -13,12 +13,17 @@ import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, extname, join } from 'node:path';
+import { transform } from 'esbuild';
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 const TARGET = process.env.PI || 'http://lightemup:8420';
 const STATIC_DIR = process.env.STATIC_DIR || join(__dir, '..', '..', 'backend', 'static');
 const PORT = Number(process.env.PORT || 8421);
 const t = new URL(TARGET);
+// Same options as main.py's _ESBUILD_ARGS — keep them in step.
+const ESBUILD_OPTS = { loader: 'jsx', target: 'es2020', charset: 'utf8' };
+const BABEL_TAG = /<script type="text\/babel" src="js\/([^"?]+\.js)"><\/script>/g;
+let compiled = new Map();
 
 const MIME = {
   '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css',
@@ -44,9 +49,36 @@ const server = http.createServer(async (req, res) => {
     req.pipe(preq);
     return;
   }
+  // The page shell, precompiled exactly as the Pi does it (main.py
+  // _compile_frontend + serve_frontend, v3.64.0), so a screenshot exercises the
+  // code production runs. `/?babel=1` gives the old in-browser Babel path.
+  if (url === '/' || url.startsWith('/?')) {
+    let html = await readFile(join(STATIC_DIR, 'index.html'), 'utf8');
+    if (!/[?&]babel=1/.test(url)) {
+      try {
+        compiled = new Map();
+        for (const [, name] of html.matchAll(BABEL_TAG)) {
+          const src = await readFile(join(STATIC_DIR, 'js', name), 'utf8');
+          compiled.set(name, (await transform(src, ESBUILD_OPTS)).code);
+        }
+        html = html.replace(/\s*<script src="[^"]*babel-standalone[^"]*"><\/script>/, '')
+          .replace(BABEL_TAG, (_, name) => `<script defer src="jsc/${name}?v=${Date.now()}"></script>`);
+      } catch (e) {
+        console.error('esbuild failed, serving the Babel page:', e.message);
+      }
+    }
+    res.writeHead(200, { 'content-type': 'text/html', 'cache-control': 'no-store' });
+    res.end(html);
+    return;
+  }
+  if (url.startsWith('/jsc/')) {
+    const code = compiled.get(url.slice(5).split('?')[0]);
+    res.writeHead(code == null ? 404 : 200, { 'content-type': 'text/javascript', 'cache-control': 'no-store' });
+    res.end(code ?? 'not compiled');
+    return;
+  }
   // Static from the working tree.
   let p = url.split('?')[0];
-  if (p === '/') p = '/index.html';
   const filePath = join(STATIC_DIR, p.replace(/\.\.+/g, ''));
   try {
     const data = await readFile(filePath);

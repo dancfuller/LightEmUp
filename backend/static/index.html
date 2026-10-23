@@ -54,8 +54,9 @@
 <body>
   <div id="root">
     <!-- Instant static loader (pure HTML/CSS, no JS). Shows the moment the page
-         paints, covering the gap while the CDN React/Babel scripts download and
-         Babel transpiles the ~15 component files in-browser — before React mounts.
+         paints, covering the gap while React and the component files load —
+         before React mounts. (The server swaps the text/babel tags below for
+         precompiled scripts, v3.64.0; Babel only runs as a fallback.)
          ReactDOM.createRoot(...).render() replaces #root's children on mount, so
          this vanishes into app.js's own loading screen. Kept visually identical
          (pulsing 🔆 + name) so the handoff is seamless, no flash. -->

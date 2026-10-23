@@ -857,6 +857,12 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
 
   // Get the active layout for this room
   const layout = roomLayouts?.[roomName];
+  // Declared HERE, above the useCallback dependency lists below that read it
+  // during render (v3.64.0). It used to sit ~1300 lines further down, which only
+  // worked because in-browser Babel turned `const` into `var`: those lists saw
+  // `undefined` (the callbacks themselves run later and saw the real value).
+  // Precompiled, `const` keeps its rules and reading it early throws.
+  const isLinear = layout?.mode === "linear";
   const devices = layout?.devices || {};
   const segments = layout?.segments || {};
   const gridSize = layout?.grid_size || 40;
@@ -2194,7 +2200,6 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     return ["Featured", "All", ...ordered];
   })();
 
-  const isLinear = layout?.mode === "linear";
   // Preset modes (Teams/NCAA/Flags) are exact-color only — no Color/White space.
   const isPresetMode = mode === "teams" || mode === "ncaa" || mode === "flags";
   const availableDirections = isLinear

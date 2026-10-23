@@ -2457,6 +2457,45 @@ page of big pill buttons ("All lights off", "Living Room · Incandescent 100%",
   arguments, validation, clamping, rename/delete carry, the missing-room 404) and
   `tools/preview/_shoot_express.mjs` (scratch) with the API faked, at 402 and 1440px.
 
+## Precompiled frontend — the server compiles the JSX, not the browser (v3.64.0)
+Reported: the full app took far longer to open than Express. Measured, a page load
+spent ~0.5s downloading everything, ~0.6s on all the `/api` calls together, and
+**~3.7s in Babel standalone** compiling the ~1 MB of JSX in the browser (preset-env:
+JSX + down-levelling to ES5 + an inline source map per file). It repeated on every load
+(nothing cached the result) and runs several times slower on a phone.
+- **At startup** `_compile_frontend()` runs esbuild once over every
+  `<script type="text/babel" src="js/…">` file named in `index.html`, keeping the
+  output in memory (`_compiled_js`, plus a content hash `_compiled_tag`). Startup, not a
+  deploy step: every deploy restarts the server, so the compiled code can never be out
+  of date with the files on disk, and there's no build output to commit or forget.
+  It takes well under a second.
+- `GET /` then drops the Babel `<script>` and rewrites each tag to
+  `<script defer src="jsc/<file>?v=<hash>">`. `defer` keeps the order and runs them
+  after parsing, which is when Babel ran them (so `#root` exists). `GET /jsc/{file}`
+  serves from memory, cached as immutable (the hash is in the URL).
+- **Never makes the page broken, only slow:** esbuild missing, a non-zero exit, or any
+  exception → a warning in the log and the old Babel page. `/?babel=1` forces the old
+  page on purpose, for comparing.
+- **esbuild** is one static binary at `~/lightemup/.tools/esbuild` (gitignored),
+  installed by `deploy/install-esbuild.sh`, which `update.sh` runs on every deploy
+  (idempotent; pinned version AND tarball sha256; no Node/npm/sudo). `ESBUILD=<path>`
+  overrides the lookup, then `PATH`.
+- Options (`_ESBUILD_ARGS`): `--loader:.js=jsx --target=es2020`. No ES5 down-levelling
+  and no bundling: each file stays a classic script, so its top-level declarations
+  remain globals shared by the next file, exactly as before.
+  `tools/preview/serve.mjs` runs the same compile, so screenshots test what ships —
+  **keep the two option lists in step.**
+- **The one semantic difference: `const`/`let` now keep their rules.** Babel turned
+  them into `var`, so reading one before its line gave `undefined` instead of throwing.
+  The switch surfaced exactly one such case: `color-mode.js` read `isLinear` in
+  `useCallback` dependency lists ~1300 lines above its declaration, and opening Scenes
+  blanked the app. ESLint `no-use-before-define` over every file found no other
+  case that runs during render. Any code that reads a `const` before declaring it now
+  throws, so keep declarations above their first use during render.
+- Verified: on this PC rooms were on screen after **0.6–0.7s instead of 4.6s**, every
+  tab showed identical text in both modes, there were no page errors, and every room
+  panel and every Scenes color mode opened on a line room and a floor-plan room.
+
 ## Whole-room actions belong on the backend (v3.43.0)
 Three controls used to fan out **from the browser** — one HTTP request per light,
 all issued in the same tick, fire-and-forget: **Soft White**, **Cool White**, and

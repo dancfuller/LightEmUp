@@ -9986,20 +9986,102 @@ async def serve_express_icon():
                         headers={"Cache-Control": "public, max-age=86400"})
 
 
+# ── Precompiled frontend (v3.64.0) ──────────────────────────────────────────
+# The app is JSX, which browsers can't run. It used to ship as-is with Babel
+# standalone compiling all ~1 MB of it IN THE BROWSER on every page load: ~4s on
+# a desktop and far longer on a phone, before anything drew. Nothing cached the
+# result. Now the server compiles it once, at startup, with esbuild (a single
+# binary, ~100x faster than Babel), and the page loads plain scripts.
+#
+# Compiling at STARTUP rather than as a deploy step means the compiled code can
+# never be out of date with the files on disk: every deploy restarts the server.
+# If esbuild is missing or any file fails to compile, the page falls back to the
+# old in-browser Babel path, so this can make the page slow, never broken.
+# `/?babel=1` forces that path on purpose, for comparing the two.
+#
+# tools/preview/serve.mjs does the same rewrite with the same esbuild options —
+# keep the two in step.
+import re
+_BABEL_TAG = re.compile(r'<script type="text/babel" src="js/([^"?]+\.js)"></script>')
+_ESBUILD_ARGS = ["--loader:.js=jsx", "--target=es2020", "--charset=utf8", "--log-level=error"]
+_compiled_js: dict = {}      # file name -> compiled bytes; empty = use Babel
+_compiled_tag = ""           # content hash of all compiled files, for ?v=
+
+
+def _find_esbuild():
+    import shutil
+    root = Path(__file__).parent.parent
+    for p in (os.environ.get("ESBUILD"), root / ".tools" / "esbuild",
+              root / ".tools" / "esbuild.exe"):
+        if p and Path(p).is_file():
+            return str(p)
+    return shutil.which("esbuild")
+
+
+def _compile_frontend():
+    global _compiled_js, _compiled_tag
+    import hashlib, tempfile
+    try:
+        names = _BABEL_TAG.findall((STATIC_DIR / "index.html").read_text(encoding="utf-8"))
+        exe = _find_esbuild()
+        if not exe:
+            log.warning("Frontend: esbuild not found, the browser will compile with Babel "
+                        "(slow). Run deploy/install-esbuild.sh.")
+            return
+        t0 = time.monotonic()
+        with tempfile.TemporaryDirectory() as out:
+            r = subprocess.run([exe, *[str(STATIC_DIR / "js" / n) for n in names],
+                                *_ESBUILD_ARGS, f"--outdir={out}"],
+                               capture_output=True, text=True, timeout=120)
+            if r.returncode != 0:
+                log.warning("Frontend: esbuild failed, falling back to Babel:\n%s",
+                            (r.stderr or r.stdout)[-2000:])
+                return
+            files = {n: (Path(out) / n).read_bytes() for n in names}
+        h = hashlib.sha256()
+        for n in names:
+            h.update(n.encode() + b"\0" + files[n])
+        _compiled_js, _compiled_tag = files, h.hexdigest()[:12]
+        log.info("Frontend: compiled %d files (%d KB) in %.1fs", len(files),
+                 sum(map(len, files.values())) // 1024, time.monotonic() - t0)
+    except Exception as e:
+        log.warning("Frontend: compile failed, falling back to Babel: %s", e)
+
+
+_compile_frontend()
+
+
+@app.get("/jsc/{name}")
+async def serve_compiled_js(name: str):
+    body = _compiled_js.get(name)
+    if body is None:
+        raise HTTPException(404, "Not compiled")
+    # The URL carries a hash of the content, so it can be cached for good.
+    return Response(body, media_type="text/javascript; charset=utf-8",
+                    headers={"Cache-Control": "public, max-age=31536000, immutable"})
+
+
 @app.get("/")
-async def serve_frontend():
+async def serve_frontend(request: Request):
     index = STATIC_DIR / "index.html"
     if not index.exists():
         return {"message": "Frontend not found. Place index.html in /static/"}
     html = index.read_text(encoding="utf-8")
-    # Cache-bust the in-browser JS. The js/*.js files have no content hash and
-    # browsers cache them aggressively, so after a deploy the UI would keep
-    # running stale scripts until a manual hard-refresh (and the footer version
-    # comes from the API, so it looks updated while the JS isn't). Tag each local
-    # script src with the build hash so a new build loads fresh automatically.
-    ver = GIT_HASH or APP_VERSION
-    import re
-    html = re.sub(r'(src=")(js/[^"?]+\.js)(")', rf'\1\2?v={ver}\3', html)
+    if _compiled_js and request.query_params.get("babel") != "1":
+        # Drop the compiler and load the precompiled scripts. `defer` keeps their
+        # order and runs them after the page is parsed, which is when Babel ran
+        # them too (#root exists by then).
+        html = re.sub(r'\s*<script src="[^"]*babel-standalone[^"]*"></script>', "", html)
+        html = _BABEL_TAG.sub(
+            lambda m: f'<script defer src="jsc/{m.group(1)}?v={_compiled_tag}"></script>', html)
+    else:
+        # Cache-bust the in-browser JS. The js/*.js files have no content hash and
+        # browsers cache them aggressively, so after a deploy the UI would keep
+        # running stale scripts until a manual hard-refresh (and the footer version
+        # comes from the API, so it looks updated while the JS isn't). Tag each local
+        # script src with the build hash so a new build loads fresh automatically.
+        ver = GIT_HASH or APP_VERSION
+        html = re.sub(r'(src=")(js/[^"?]+\.js)(")', rf'\1\2?v={ver}\3', html)
     # Never cache the shell itself, so the updated ?v= tags are always seen.
     return HTMLResponse(html, headers={"Cache-Control": "no-cache, must-revalidate"})
 
