@@ -115,8 +115,17 @@ fixes nothing.** The two vendors need opposite treatments:
   `get_hue_lights()` (a single request no matter how many lights) and re-sends only to
   lights that didn't take. **Only `on` and `bri` are
   compared** — color (xy/ct) is NOT, because the bridge gamut-clamps and rounds it, so
-  exact comparison would false-repair forever. Unreachable lights are skipped (a re-send
-  wouldn't land either). **`bri` is only compared while the light is ON** — verified live
+  exact comparison would false-repair forever. **Unreachable lights are RE-SENT, not
+  skipped (v3.66.0)**: their whole expected state, once per pass, recorded in Delivery
+  health as `unreachable`, and kept out of the all-changed count (so a voice "off"
+  still wins and an unreachable bulb is never re-lit against it). They used to be
+  skipped on a wall-switch theory that doesn't hold here — **every socket in Dan's
+  house is always powered** (switches taped on), so unreachable = weak Zigbee link —
+  and the flag lags: the Hue app's commands landed on Driveway while the bridge called
+  it unreachable 13 reads in 20. A light the bridge doesn't list at all is still
+  skipped. (The light show / lightning "was the room turned off?" checks still ignore
+  unreachable lights: there the question is evidence, and an unreachable bulb's
+  reported state is the bridge's model, not evidence.) **`bri` is only compared while the light is ON** — verified live
   that most bulbs simply refuse a level change while off (a brightness-only command to a
   dark room left 7 of 9 lights unchanged, *identically* across 3 retries — deterministic
   device behavior, not packet loss), so checking `bri` on an off light would re-send

@@ -4880,11 +4880,24 @@ async def _hue_verify_repair(expectations: dict, compare_color: bool = False,
             live[lid] = sent
 
         repaired = []
+        unreachable = []
         judged = 0
         for light_id, sent in live.items():
             cur = actual.get(str(light_id))
-            if not cur or not cur.get("reachable", True):
-                continue   # unreachable/unknown: a re-send won't land either
+            if not cur:
+                continue   # the bridge doesn't list it at all: nothing to send to
+            if not cur.get("reachable", True):
+                # RE-SEND, don't skip (v3.66.0). This used to `continue` on the
+                # theory that an unreachable bulb is on a flipped wall switch and
+                # can't take a re-send. In this house every socket is always
+                # powered, so unreachable means a weak Zigbee link — and the flag
+                # LAGS: on 2026-10-23 the Hue app's commands landed on Driveway
+                # while the bridge reported it unreachable 13 reads in 20. Its
+                # reported state is the bridge's model, not the bulb's, so it
+                # can't be judged: send the whole expected state once, and keep it
+                # out of `judged` so it can't trip the all-changed rule below.
+                unreachable.append(light_id)
+                continue
             judged += 1
             want_on = sent.get("on")
             if want_on is not None and bool(cur.get("on")) != bool(want_on):
@@ -4966,6 +4979,11 @@ async def _hue_verify_repair(expectations: dict, compare_color: bool = False,
             log.info("Hue verify: all %d light(s) changed since they were set — treating it as "
                      "a deliberate change (voice or another app) and not reversing it", judged)
             return
+
+        # Once per pass, never a loop: the passes themselves (0.6s, 8s, 25s, and
+        # 150s for an off) are the retries. Counted in Delivery health as
+        # "unreachable", so a marginal bulb shows up there instead of nowhere.
+        repaired += [(lid, "unreachable") for lid in unreachable]
 
         for light_id, why in repaired:
             # The newer-command filter above ran right after the bridge read, but

@@ -56,7 +56,9 @@ function DeliveryHealthCard({ isMobile }) {
     // asked for a color and isn't in color mode at all, which points at the
     // bulb (third-party firmware) rather than at the radio.
     white: "fell back to white",
-    unreachable: "off the network",
+    // A Govee light with no reply, or a Hue light the bridge has lost (v3.66.0:
+    // those are re-sent and counted too, not skipped).
+    unreachable: "couldn't be reached",
   };
   const kindWords = Object.entries(
     Object.entries(data.by_kind || {}).reduce((acc, [k, n]) => {
