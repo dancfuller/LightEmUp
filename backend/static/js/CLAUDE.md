@@ -1598,8 +1598,10 @@ refreshes itself (v3.50.0):** `loadAll()` when it comes back into view after mor
 5 s hidden, and a lights-only `refreshHueLights()` (one bridge GET) every 60 s while
 visible. That tick is skipped within 5 s of any write from this page
 (`apiLastWriteAt()`, stamped by `api()` in utils.js): a read racing a command can
-return the state from just before it and flip the card back. Govee isn't polled,
-since that is a LAN scan. A defer answer saying the light
+return the state from just before it and flip the card back. The page doesn't poll
+Govee: the Pi does (v3.65.0, the background status check), and its `govee` SSE event
+triggers the usual debounced `loadAll`. Its interval is the "Check status" row
+(`GoveeStatusCheck`, app.js) at the top of Settings → Govee Devices. A defer answer saying the light
 was actually on (`was_on`, or a room's `live`) triggers the same Hue re-read. `ctCalibrated = {...ctCorrection, ...ctRgb}` drives the badges.
 - **Global master control (v3.4.0, backend-driven v3.43.0):** a bar under the nav
   (visible on every tab) with **just "All Off"**. `controlAll(on)` now makes ONE

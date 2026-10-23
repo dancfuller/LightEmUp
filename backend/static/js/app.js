@@ -126,6 +126,59 @@ function PowerRecoveryCard({ settings, onChange, isMobile }) {
   );
 }
 
+// ─── Govee status check (v3.65.0) ────────────────────────────────────────────
+// Settings → Govee Devices: how often the Pi re-reads every Govee light in the
+// background, so a room Alexa or Google Home switched shows right the moment the
+// app opens. The check itself runs on the Pi (main.py _govee_status_loop).
+function GoveeStatusCheck({ isMobile }) {
+  const [info, setInfo] = useState(null);
+  const [err, setErr] = useState(null);
+  useEffect(() => {
+    api("/govee/status-refresh").then(setInfo).catch(() => setErr("Couldn't load"));
+  }, []);
+  if (!info) return err ? <div style={{ fontSize: 11, color: "#f87171", marginBottom: 10 }}>{err}</div> : null;
+  const change = (minutes) => {
+    const prev = info.minutes;
+    setInfo(i => ({ ...i, minutes }));
+    setErr(null);
+    api("/govee/status-refresh", { method: "POST", body: JSON.stringify({ minutes }) })
+      .catch(e => { setInfo(i => ({ ...i, minutes: prev })); setErr(`Not saved: ${e.message}`); });
+  };
+  const last = info.last;
+  let summary = null;
+  if (last?.skipped) summary = `Last check skipped (${last.skipped}).`;
+  else if (last) {
+    const bits = [`${last.read} read`];
+    bits.push(last.changed.length ? `${last.changed.length} had changed (${last.changed.join(", ")})` : "none had changed");
+    if (last.silent.length) bits.push(`${last.silent.length} didn't answer`);
+    summary = `Last check ${relativeTime(last.at)}: ${bits.join(" · ")}.`;
+  }
+  return (
+    <div style={{ background: "#0f172a", border: "1px solid #334155", borderRadius: 10, padding: isMobile ? 10 : 12, marginBottom: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 13, color: "#e2e8f0", fontWeight: 600 }}>Check status</span>
+        <select
+          value={info.minutes}
+          onChange={e => change(Number(e.target.value))}
+          aria-label="How often to check Govee status"
+          style={{ background: "#1e293b", color: "#e2e8f0", border: "1px solid #334155", borderRadius: 6, padding: "4px 8px", fontSize: 12 }}
+        >
+          {info.choices.map(m => (
+            <option key={m} value={m}>{m === 0 ? "Off" : m === 60 ? "every hour" : `every ${m} min`}</option>
+          ))}
+        </select>
+      </div>
+      <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 6, lineHeight: 1.5 }}>
+        Alexa, Google Home and the Govee app change these lights without telling
+        LightEmUp. The Pi reads each one in the background so the app opens showing
+        what's really on.
+        {err && <span style={{ color: "#f87171" }}> {err}</span>}
+      </div>
+      {summary && <div style={{ fontSize: 11, color: "#64748b", marginTop: 4 }}>{summary}</div>}
+    </div>
+  );
+}
+
 // ─── Settings device row ─────────────────────────────────────────────────────
 // One device line in Settings → Hue Bridge / Govee Devices. Shows status,
 // display name, a Flash button to physically locate the device (POST
@@ -736,7 +789,8 @@ function App() {
   // light Google had switched on still read "off", and dragging its level saved
   // it for a power-on that never came (v3.50.0). Refresh everything when the page
   // comes back into view, and re-read the Hue lights once a minute while it is in
-  // view (one bridge GET). Govee stays on its own Re-scan, which is a LAN scan.
+  // view (one bridge GET). Govee is kept current by the Pi's background status
+  // check (v3.65.0), which sends a "govee" event when it finds a change.
   const refreshHueLights = useCallback(() => {
     api("/hue/lights").then(h => h?.lights && setHueLights(h.lights)).catch(() => {});
   }, []);
@@ -1936,6 +1990,7 @@ function App() {
                   style={{ padding: "4px 12px", borderRadius: 6, border: "1px solid #334155", background: "transparent", color: rescanning ? "#475569" : "#a5b4fc", fontSize: 11, fontWeight: 600, cursor: rescanning ? "wait" : "pointer" }}
                 >{rescanning ? "Scanning…" : "Re-scan"}</button>
               </div>
+              <GoveeStatusCheck isMobile={isMobile} />
               {(goveeDevices.length > 0 || missingGovee.length > 0) ? (
                 <div>
                   <div style={{ fontSize: 11, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>

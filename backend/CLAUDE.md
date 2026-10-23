@@ -156,7 +156,10 @@ looking for one next time.
   request**.
 - **`record_govee_state` still records INTENT, deliberately.** It's what power recovery
   replays after an outage, and replaying a command that failed to land is not a recovery.
-  What actually happened is reported separately, on the room record.
+  What actually happened is reported separately, on the room record. (The one
+  exception, v3.65.0: a live scan's *observed* power + level overwrite it, when they
+  differ — see "Render-ready state" below. That's what was actually true, which is the
+  better thing to replay.)
 - **The outcome is ALWAYS logged, including the all-clear (v3.32.0)** —
   `Govee verify: N device(s) - N already correct, N repaired, N unreachable, N still
   wrong`. The happy path used to be silent, which is the worst possible record for the
@@ -1095,6 +1098,31 @@ not in the browser (v2.14.0):
   `/api/discover/govee` in the background to refresh reachability + state. Devices are
   optimistically `responding: true` (assume-presence); the live scan corrects offline
   ones. `missing` is `[]` (only the live scan can know who's absent).
+- **The first paint is only as good as `device_state` (v3.65.0).** Once the page
+  opened in ~0.6s, the live scan landing ~7s later visibly flipped lights, and some
+  of those flips were the record being WRONG, not old. Two fixes:
+  - `record_govee_state` records `on: true` for a color, a white or a level >0 sent
+    without an explicit `on`. Those wake a Govee light, but only an explicit `on`
+    was being stored, so a scene's base seed (color + level, no `on`) left the
+    Outdoor Spot Lights recorded OFF while they were plainly on.
+  - The live scan writes what it SAW (power + level, never color: devStatus color is
+    unreliable) back into `device_state` via `_remember_observed_govee`, and only when
+    a value differs. That covers changes made outside LightEmUp (Google Home, the
+    Govee app) from the next open on.
+- **Govee status check (v3.65.0)** closes the rest of the gap: Alexa and Google Home
+  switch whole rooms a few times a day without telling LightEmUp. `_govee_status_loop`
+  (started in `lifespan`, after power recovery) runs `_govee_status_check` every
+  `govee_status_refresh_min` minutes (config key, default 5, `0` = off, one of
+  `GOVEE_STATUS_CHOICES`): one devStatus read per known light, sequential, under the
+  shared state lock, **no discovery broadcast** — a dozen lights take a few seconds,
+  plus 2s for each one that doesn't answer. Each answer goes through
+  `_remember_observed_govee`; a silent light is left as it was. Skipped while a
+  lightning storm runs. Publishes `govee` (open browsers reload) only when something
+  changed, and logs the names. `GET/POST /api/govee/status-refresh` reads/sets the
+  interval and returns the last check's summary (in memory, not config) for the
+  Settings → Govee Devices "Check status" row.
+  What's still possible: a change made outside LightEmUp within the last interval
+  shows on the first paint until the page's own scan lands.
 - `GET /api/hue/lights` attaches `state.color` (RGB from the reported xy via
   `_hue_xy_to_rgb`) so the frontend paints the current color from backend data.
 - `GET /api/govee/segment-state` returns the UI shape directly:

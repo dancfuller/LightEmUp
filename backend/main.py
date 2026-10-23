@@ -173,6 +173,10 @@ DEFAULT_CONFIG = {
     "favorites": [],      # saved colors [[r,g,b],…]. Empty is falsy on purpose:
                           # /api/config falls back to DEFAULT_FAVORITES (defined much
                           # further down, so it can't be referenced from here).
+    "govee_status_refresh_min": 5,  # Govee status check (v3.65.0): minutes between the
+                            # Pi's background reads of every Govee light's power +
+                            # level, so changes made by Alexa / Google Home show up
+                            # on the next page open. 0 = off. GOVEE_STATUS_CHOICES
     "express_buttons": [],  # LightEmUp Express (v3.63.0): the big buttons on /express,
                             # in the user's order. Each: {id, label, target: "all" |
                             # "room" | "zone", name, action: {type: "power", on} |
@@ -664,6 +668,14 @@ def record_govee_state(ip: str, mac: str = None, **fields):
     store = config.setdefault("device_state", {})
     key = gv_key_for_ip(ip, mac)
     entry = store.get(key, {})
+    # A color, a white or a level WAKES a Govee light, so record it as on (v3.65.0).
+    # Only an explicit `on` used to be recorded, and a scene's base seed sends color
+    # + level with no `on` — so a light turned on that way stayed recorded as OFF,
+    # and every page load painted it off until the live scan corrected it.
+    if fields.get("on") is None and (
+            fields.get("r") is not None or fields.get("color_temp_kelvin") is not None
+            or (fields.get("brightness") or 0) > 0):
+        fields["on"] = True
     if fields.get("r") is not None:
         entry.pop("color_temp_kelvin", None)
     if fields.get("color_temp_kelvin") is not None:
@@ -3787,8 +3799,14 @@ async def lifespan(app: FastAPI):
     # _recovery_done like everything else that drives lights at startup.
     global _lightshow_resume_task
     _lightshow_resume_task = asyncio.create_task(_resume_lightshows())
+    # Keeps Govee's last-known state current between page loads (v3.65.0).
+    global _govee_status_task
+    _govee_status_task = asyncio.create_task(_govee_status_loop())
 
     yield
+
+    if _govee_status_task is not None:
+        _govee_status_task.cancel()
 
     # Stop the scheduler loop promptly (it also honors CancelledError).
     if _scheduler_stop is not None:
@@ -4017,6 +4035,117 @@ async def discover_govee_cached():
     return {"devices": _govee_cached_devices(), "missing": []}
 
 
+def _remember_observed_govee(dev: dict, state: dict):
+    """Write what a live read SAW (power + level) into device_state (v3.65.0).
+
+    device_state is what the page paints first (`/discover/govee/cached`), so
+    anything the live scan learns that it doesn't keep is shown wrong again on the
+    next open — a light Google Home turned off stayed "on" there forever. Power
+    and level only: LAN devStatus doesn't report color reliably, so the color we
+    last SET stays the record. Writes only on a real difference, so an unchanged
+    house doesn't save the config or look "changed" to Ask's undo. Also what power
+    recovery replays: what was last true, rather than an older command.
+    Returns whether anything changed."""
+    if "on" not in state:
+        return False
+    key = gv_key_for_ip(dev.get("ip"), dev.get("mac"))
+    entry = config.setdefault("device_state", {}).setdefault(key, {})
+    seen = {"on": bool(state["on"])}
+    if state.get("brightness"):
+        seen["brightness"] = int(state["brightness"])
+    if all(entry.get(k) == v for k, v in seen.items()):
+        return False
+    entry.update(seen)
+    entry["observed_at"] = _now_iso()
+    schedule_save()
+    return True
+
+
+# ─── Govee status check (v3.65.0) ───────────────────────────────────────────
+# Alexa and Google Home switch whole rooms a few times a day, and nothing tells
+# LightEmUp. Hue is read live on every page load (one bridge GET), but a Govee
+# light only answers a per-device LAN read, so the page paints Govee from
+# device_state and corrects it with a ~7s scan after it opens — visibly. This
+# loop keeps device_state current in the background so the FIRST paint is right.
+#
+# Each check is one devStatus read per known light, sequential (they share port
+# 4002, under the same lock the scan and the verify use), with no discovery
+# broadcast. A light that doesn't answer is left as it was. Skipped while a
+# lightning storm runs (latency-sensitive). Open browsers get a "govee" event
+# only when something actually changed.
+GOVEE_STATUS_CHOICES = (0, 1, 2, 5, 10, 15, 30, 60)
+_govee_status_last: dict = {}       # last check's summary, for the Settings row
+_govee_status_task = None
+
+
+def _govee_status_minutes() -> int:
+    v = config.get("govee_status_refresh_min", 5)
+    return v if v in GOVEE_STATUS_CHOICES else 5
+
+
+async def _govee_status_check() -> dict:
+    if scene_manager.get_active_rooms():
+        return {"at": _now_iso(), "skipped": "a lightning storm is running"}
+    read, changed, silent = 0, [], []
+    for mac, info in list(_known_govee().items()):
+        ip = info.get("ip")
+        if not ip:
+            continue
+        name = (config.get("nicknames", {}) or {}).get(gv_key(mac)) or info.get("name") or mac
+        try:
+            state = await govee_lan_get_state(ip)
+        except Exception:
+            state = None
+        if not state:
+            silent.append(name)
+            continue
+        read += 1
+        if _remember_observed_govee({"ip": ip, "mac": mac}, state):
+            changed.append(name)
+    if changed:
+        log.info("Govee status check: %d changed outside LightEmUp (%s)",
+                 len(changed), ", ".join(changed))
+        publish_event("govee")
+    return {"at": _now_iso(), "read": read, "changed": changed, "silent": silent}
+
+
+async def _govee_status_loop():
+    await _recovery_done.wait()        # never read lights a recovery is still setting
+    last = 0.0
+    while True:
+        await asyncio.sleep(15)        # short tick, so a changed interval applies soon
+        mins = _govee_status_minutes()
+        if not mins or time.monotonic() - last < mins * 60:
+            continue
+        last = time.monotonic()
+        try:
+            _govee_status_last.clear()
+            _govee_status_last.update(await _govee_status_check())
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("Govee status check failed")
+
+
+class GoveeStatusRefreshRequest(BaseModel):
+    minutes: int
+
+
+@app.get("/api/govee/status-refresh")
+async def get_govee_status_refresh():
+    return {"minutes": _govee_status_minutes(), "choices": list(GOVEE_STATUS_CHOICES),
+            "last": _govee_status_last or None}
+
+
+@app.post("/api/govee/status-refresh")
+async def set_govee_status_refresh(req: GoveeStatusRefreshRequest):
+    if req.minutes not in GOVEE_STATUS_CHOICES:
+        raise HTTPException(400, f"minutes must be one of {list(GOVEE_STATUS_CHOICES)}")
+    config["govee_status_refresh_min"] = req.minutes
+    save_config(config)
+    return {"success": True, "minutes": req.minutes}
+
+
 @app.get("/api/discover/govee")
 async def discover_govee():
     """Discover Govee devices via LAN and fetch their current state.
@@ -4034,6 +4163,7 @@ async def discover_govee():
         try:
             state = await govee_lan_get_state(dev["ip"])
             if state:
+                _remember_observed_govee(dev, state)
                 dev["state"] = {
                     "on": state.get("on", False),
                     "brightness": state.get("brightness", 0),
@@ -7740,6 +7870,7 @@ _SETTING_LABELS = {
     "favorites": "Favorite colors",
     "favorite_lights": "Favorite lights",
     "express_buttons": "Express buttons",
+    "govee_status_refresh_min": "Govee status check",
     "location": "Location (for sunrise/sunset)",
     "power_recovery": "Power-outage recovery",
     "lightning_scenes": "Saved lightning scenes",
@@ -7783,6 +7914,8 @@ def _render_setting(key: str, value):
                 "off": "Do nothing"}.get(mode, mode)
     if key == "known_devices":
         return len((value or {}).get("govee") or {})
+    if key == "govee_status_refresh_min":
+        return f"every {value} min" if value else "off"
     if isinstance(value, (dict, list)):
         return len(value)
     if isinstance(value, bool):

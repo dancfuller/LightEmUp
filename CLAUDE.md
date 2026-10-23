@@ -477,6 +477,11 @@ All endpoints are under `/api/`. Key groups:
   room is already showing, read from `room_last_applied`, so starting one doesn't
   mean rebuilding a look that's already on. See `backend/CLAUDE.md` "Room lightshows"
   + "Animating what a room already shows"
+- `/api/govee/status-refresh` — the Govee status check (v3.65.0): how often the Pi
+  re-reads every Govee light's power + level in the background (config key
+  `govee_status_refresh_min`, default 5, 0 = off), so changes made by Alexa / Google
+  Home are on the first paint. Settings → Govee Devices. See `backend/CLAUDE.md`
+  "Render-ready state"
 - `/api/govee/segment-*` — per-segment mode and count config (the `segment-mode` one is
   the **lightning** scene's switch, not the color tool's)
 - `/api/govee/scene-address` — per-device "do room scenes paint this as segments or as
