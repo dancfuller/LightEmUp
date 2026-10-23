@@ -1274,6 +1274,9 @@ anything until it's set up.
   402px: idle, waiting, done, the Yes / No confirmation, and the card.
 
 ## express.js — Settings → LightEmUp Express (v3.63.0)
+**Getting there (v3.64.1):** an "Express ›" link ends the tab row in app.js — a
+plain `<a href="/express">`, not a tab, because it's a separate page (the one
+pinned to a phone's home screen). Express's own "Open the app ›" comes back.
 `ExpressCard` edits the buttons on `/express` (see `backend/CLAUDE.md` "LightEmUp
 Express"). Each row: a pill-shaped label field, the lights (All lights / a zone / a
 room), Off / On / White, and for White the named temperatures (Candlelight 2200K,

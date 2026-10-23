@@ -79,6 +79,7 @@ const server = http.createServer(async (req, res) => {
   }
   // Static from the working tree.
   let p = url.split('?')[0];
+  if (p === '/express') p = '/express.html';   // main.py's GET /express
   const filePath = join(STATIC_DIR, p.replace(/\.\.+/g, ''));
   try {
     const data = await readFile(filePath);

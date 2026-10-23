@@ -1588,6 +1588,18 @@ function App() {
             }}
           >{tab}</button>
         ))}
+        {/* LightEmUp Express (v3.64.1): a plain link, not a tab — it's its own
+            page, the one people pin to a phone's home screen. Its "Open the app ›"
+            comes back here. */}
+        <a
+          href="/express"
+          title="LightEmUp Express — big buttons for your home screen"
+          style={{
+            padding: isMobile ? "7px 12px" : "8px 20px", borderRadius: 8,
+            color: "#64748b", fontSize: isMobile ? 12 : 13, fontWeight: 600,
+            textDecoration: "none", whiteSpace: "nowrap", transition: "all 0.2s",
+          }}
+        >Express ›</a>
       </nav>
 
       {/* Global master control — only "All Off" is globally useful; you rarely
