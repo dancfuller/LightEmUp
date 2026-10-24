@@ -120,6 +120,16 @@ yourself hand-listing keys to export, that's the bug this checklist exists to pr
   so after a deploy — which restarts and bumps the hash — browsers auto-load fresh JS.
   No more manual hard-refresh. The one exception is the *first* load after upgrading
   from a pre-2.19.8 build, where the old cached shell must be hard-refreshed once.)
+- **Python packages never update themselves.** `backend/requirements.txt` pins the five
+  direct packages exactly, and `update.sh`'s `pip install -r` only installs what those
+  pins *force* — the packages underneath them (starlette, pydantic, anyio, certifi…)
+  stay at whatever was resolved when they were first installed. That's how starlette sat
+  18 months stale. To update: bump the pins, test the new set locally (old-vs-new route
+  smoke + the backend test scripts — see v3.66.1), commit, deploy, then bring the rest
+  current once on the Pi with
+  `ssh pi@lightemup 'cd ~/lightemup && backend/venv/bin/pip install --upgrade --upgrade-strategy eager -r backend/requirements.txt && ./deploy/update.sh'`
+  (no sudo needed for pip; `update.sh` does the restart and version check). The OS
+  (`apt full-upgrade`) is separate and needs Dan's sudo password.
 
 ### Testing with physical lights
 - Before running any debug/diagnostic test that drives real lights, **ask which room**
