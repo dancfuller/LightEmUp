@@ -54,6 +54,39 @@
     #retry { display: block; margin: 16px auto 0; padding: 12px 24px; border-radius: 999px;
       border: 1px solid #334155; background: #1e293b; color: #e2e8f0; font: inherit; font-weight: 600; }
     [hidden] { display: none !important; }
+    /* Ask (v3.67.0): the same /api/ask as the app's Ask bar, in plain JS. */
+    #ask { margin-bottom: 18px; }
+    #ask form { display: flex; gap: 10px; }
+    #ask input {
+      flex: 1 1 auto; min-width: 0; min-height: 56px; padding: 12px 20px;
+      border-radius: 999px; border: 2px solid #475569; background: #0f172a; color: #f1f5f9;
+      font: inherit; font-size: 17px; outline: none;   /* 16px+ or iOS zooms on focus */
+    }
+    #ask input:focus { border-color: #6366f1; box-shadow: 0 0 0 3px rgba(99,102,241,0.25); }
+    #ask input:disabled { color: #94a3b8; }
+    #go {
+      flex: 0 0 auto; min-width: 76px; min-height: 56px; padding: 0 20px; border-radius: 999px;
+      font: inherit; font-size: 17px; font-weight: 700; cursor: pointer;
+      display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+      border: 2px solid #334155; background: transparent; color: #64748b;
+      -webkit-tap-highlight-color: transparent;
+    }
+    #go.ready { border-color: #4f46e5; background: #4f46e5; color: #fff; }
+    #go.busy { border-color: #4f46e5; background: rgba(79,70,229,0.15); color: #c7d2fe; }
+    #go .spin { width: 14px; height: 14px; border-radius: 50%; border: 2px solid rgba(199,210,254,0.35);
+      border-top-color: #c7d2fe; animation: spin 0.8s linear infinite; }
+    #reply { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px;
+      margin: 10px 6px 0; font-size: 15px; line-height: 1.45; }
+    #reply .text.done { color: #86efac; }
+    #reply .text.ask { color: #fcd34d; }
+    #reply .text.error { color: #fca5a5; }
+    #reply .text.info { color: #cbd5e1; }
+    #reply .text.busy { color: #c7d2fe; animation: pulse 1.6s ease-in-out infinite; }
+    #reply .said { color: #64748b; }
+    #reply button { padding: 8px 20px; border-radius: 999px; font: inherit; font-size: 15px; font-weight: 700;
+      border: 1px solid #475569; background: transparent; color: #cbd5e1; cursor: pointer; }
+    #reply button.yes { background: #4f46e5; border-color: #4f46e5; color: #fff; }
+    @keyframes pulse { 50% { opacity: 0.55; } }
   </style>
 </head>
 <body>
@@ -62,6 +95,17 @@
     <h1><b>LightEmUp</b> Express</h1>
     <a href="/">Open the app ›</a>
   </header>
+  <!-- Hidden if /api/ask/status says no key is saved. Shown from the start, so the
+       buttons below never jump down under a thumb. No mic button: the phone
+       keyboard's own dictation mic works here, and an in-page mic needs https. -->
+  <section id="ask">
+    <form>
+      <input id="say" placeholder="💬 Tap to type or speak" enterkeyhint="send"
+             autocomplete="off" autocapitalize="sentences" aria-label="Tell LightEmUp what to do">
+      <button id="go" type="submit">Go</button>
+    </form>
+    <div id="reply" role="status" hidden></div>
+  </section>
   <div id="buttons"></div>
   <div id="msg">Loading…</div>
   <button id="retry" hidden>Try again</button>
@@ -155,6 +199,74 @@
   }
   retry.onclick = load;
   load();
+
+  // ── Ask ────────────────────────────────────────────────────────────────
+  // One id per page load keys Ask's few minutes of memory, so "yes" answers this
+  // phone's question and not another one's.
+  var askId = "express-" + Math.random().toString(36).slice(2, 10);
+  var askBox = document.getElementById("ask"), form = askBox.querySelector("form"),
+      input = document.getElementById("say"), go = document.getElementById("go"),
+      reply = document.getElementById("reply"), busy = false, slowTimer = null;
+
+  function paintGo() {
+    go.className = busy ? "busy" : input.value.trim() ? "ready" : "";
+    go.innerHTML = busy ? '<span class="spin"></span>Working' : "Go";
+  }
+  function showReply(text, tone, said, awaiting) {
+    reply.innerHTML = ""; reply.hidden = false;
+    var t = document.createElement("span"); t.className = "text " + tone; t.textContent = text;
+    reply.appendChild(t);
+    if (said) {
+      var s = document.createElement("span"); s.className = "said"; s.textContent = "“" + said + "”";
+      t.appendChild(document.createTextNode(" ")); t.appendChild(s);
+    }
+    if (awaiting) ["Yes", "No"].forEach(function (w) {
+      var b = document.createElement("button"); b.type = "button"; b.textContent = w;
+      if (w === "Yes") b.className = "yes";
+      b.onclick = function () { send(w.toLowerCase()); };
+      reply.appendChild(b);
+    });
+  }
+
+  function send(words) {
+    var said = (words || input.value).trim();
+    if (!said || busy) return;
+    busy = true; input.disabled = true; paintGo();
+    input.blur();   // close the phone keyboard so the progress line shows
+    showReply("Working on it…", "busy", said);
+    slowTimer = setTimeout(function () { showReply("Still working — setting the lights…", "busy", said); }, 6000);
+    var ctl = new AbortController(), timer = setTimeout(function () { ctl.abort(); }, 90000);
+    fetch("/api/ask", {
+      method: "POST", signal: ctl.signal,
+      headers: { "Content-Type": "application/json", "X-Client-Id": askId },
+      body: JSON.stringify({ text: said }),
+    }).then(function (res) {
+      return res.json().then(function (j) {
+        if (!res.ok) throw new Error(j.detail || ("Error " + res.status));
+        return j;
+      });
+    }).then(function (r) {
+      input.value = "";
+      showReply(r.reply || "Done.", r.error ? "error" : r.awaiting ? "ask"
+                : (r.actions || []).length ? "done" : "info", "", !!r.awaiting);
+    }, function (e) {
+      showReply(e && e.name === "AbortError" ? "LightEmUp didn't answer within 90 seconds."
+                : e && e.message && !/fetch|network/i.test(e.message) ? e.message
+                : "Couldn't reach LightEmUp. Is this phone on the home network?", "error");
+    }).then(function () {
+      clearTimeout(timer); clearTimeout(slowTimer);
+      busy = false; input.disabled = false; paintGo();
+    });
+  }
+
+  form.onsubmit = function (e) { e.preventDefault(); send(); };
+  // A grey Go pressed before typing puts the cursor in the box (and opens the
+  // keyboard) instead of doing nothing — same as the app.
+  go.onclick = function (e) { if (!busy && !input.value.trim()) { e.preventDefault(); input.focus(); } };
+  input.oninput = paintGo;
+
+  fetch("/api/ask/status").then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (s) { if (s && !s.enabled) askBox.hidden = true; }, function () {});
 })();
 </script>
 </body>

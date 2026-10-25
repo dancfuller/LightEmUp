@@ -188,7 +188,8 @@ backend/
     index.html         # HTML shell — CSS, CDN imports, script tags
     express.html       # /express — LightEmUp Express (v3.63.0): big buttons for a phone's
                        # home screen. Plain HTML + a few lines of JS, NO React/Babel/CDN.
-                       # Opening it changes nothing. express-icon.png is its icon
+                       # Opening it changes nothing. An Ask box tops it (v3.67.0, same
+                       # /api/ask as the app). express-icon.png is its icon
     js/                   # Load order is set by <script> tags in index.html (authoritative)
       utils.js            # React hooks, api() wrapper, color math, useIsMobile, useThrottledControl,
                           # the color clipboard (copyColorToClipboard/useColorClipboard — the

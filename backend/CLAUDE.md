@@ -2493,6 +2493,19 @@ page of big pill buttons ("All lights off", "Living Room · Incandescent 100%",
   of the six default kinds of button reaches the right function with the right
   arguments, validation, clamping, rename/delete carry, the missing-room 404) and
   `tools/preview/_shoot_express.mjs` (scratch) with the API faked, at 402 and 1440px.
+- **The Ask box is the page's first item (v3.67.0).** It POSTs the same `/api/ask` as
+  the app's Ask bar, in plain JS (no React), and mirrors its behavior: grey Go that
+  focuses the box when empty, "Working on it… / Still working" while waiting, the
+  reply tinted by outcome, **Yes / No** when `awaiting`. Its `X-Client-Id` is
+  `express-<random>` **per page load**, so Ask's few minutes of memory — and a "yes"
+  to a house-wide question — belong to that phone, never to another Express page.
+  - **Visible from the first paint, hidden only if `/api/ask/status` says there's no
+    key.** Shown-after-the-check pushed every button down ~75px a moment after the
+    page drew, under a thumb already reaching for "Living Room off".
+  - It costs the page nothing measurable: one ~20 ms status GET in parallel with
+    `/api/express`. The wait is Haiku (and any scene) after Go, as in the app.
+  - Verified with `/api/ask` faked (`tools/preview/_shoot_express_ask.mjs`, scratch):
+    27 checks at 402 and 1440px, incl. the confirm round trip and the no-key page.
 
 ## Precompiled frontend — the server compiles the JSX, not the browser (v3.64.0)
 Reported: the full app took far longer to open than Express. Measured, a page load
