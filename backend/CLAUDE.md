@@ -2417,7 +2417,30 @@ the light-show rules for free, and it can't do anything the app can't.
   `_ask_context()["layout"]`: rooms with each light marked hue / govee / segmented,
   zones, every palette by category, every team / college / country name, and the
   light-show modes. The live state (on/off, "Now showing", exclusions, running shows)
-  rides on the current user turn only, so an older turn can't contradict it.
+  is a **second, uncached system block** read fresh each turn, so it's never stale and
+  nothing older can contradict it. Every user turn is just the person's words.
+- **Ask ran one request behind (fixed v3.67.1).** The state used to ride in the user
+  message, just ahead of the words, while earlier turns were stored as plain words.
+  Haiku read the newest request as the state's last line and answered the PREVIOUS
+  message. Live: "change exterior front to 1% warm incandescent", the turn after a
+  Halloween scene, got "they're showing Halloween", and the next request did the 1%.
+  The eval reproduced it 10/10 once its fake actions went through the real undo
+  snapshot. The state's "The last Ask change touched: Exterior Front" read as proof
+  the new request was done. Three fixes:
+  - the state moved into the system prompt (above);
+  - the undo lines say "an earlier Ask request" / "previous request (already done; not
+    the current one)";
+  - **one nudge in code**: a reply to a command (`_COMMAND`: change / set / make /
+    turn…) that calls no tool and asks nothing (a "?" in an "anything else?" sign-off
+    doesn't count, `_CLOSER`) gets one more model call with `_NUDGE`. The describing
+    reply is dropped from memory, and the nudge is logged ("nudging once"), so the
+    Pi's journal shows if the model starts drifting again.
+
+  After the fix, the follow-up eval (`eval_ask.py --followup`, `--old` runs the HEAD
+  `ask.py` for a before/after) went 0/10 → 10/10 with no nudges needed, and 31/31
+  on the main set. **Keep the eval's fakes going through `_ask_with_snapshot`**:
+  without the undo lines in the state, the bug didn't show at all (15/15 "passed"
+  on the broken code).
 - **Memory**: per `X-Client-Id`, `CONVO_TTL_S` (3 min), so "which lamp?" → "the left
   one" and "go ahead?" → "yes" work. In memory only; a failed or step-exhausted
   request forgets it so a dangling tool call can't poison the next turn.
@@ -2427,11 +2450,11 @@ the light-show rules for free, and it can't do anything the app can't.
     it blue' with no room named… per the rules, I should ask" — and asked its yes
     questions with a note after the "?". 4.5 ran without thinking.
   - **A thinking block is valid only while everything before it is resent
-    unchanged** (a 400 otherwise). Ask rewrites old turns on purpose (each loses its
-    house state), so `_block_to_dict` keeps thinking blocks verbatim for the turn's
-    own tool loop (`request_messages`) and `_kept` drops them from memory
-    (`convo.messages`). **Don't store them across turns, and don't start keeping old
-    turns' state to "fix" that** — the stale-state rule is the reason for the rewrite.
+    unchanged** (a 400 otherwise). The state system block changes every turn, so
+    `_block_to_dict` keeps thinking blocks verbatim for the turn's own tool loop
+    (`request_messages`), and `_kept` drops them from memory (`convo.messages`).
+    **Don't store them across turns, and don't freeze the state to "fix" that**: a
+    fresh state each turn is the point.
   - **A yes counts after any reply containing "?"** (`yes_now`), not only one ending
     in it; the shown "should I go ahead?" override is also written to memory. Without
     this 5.5 answered "yes" with the same question 2 times in 6.

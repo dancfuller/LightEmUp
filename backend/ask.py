@@ -188,6 +188,10 @@ Otherwise ask which room in one short question naming the likely ones. Never gue
 a room.
 
 How to read requests:
+- Every message is a NEW request. When it tells you to change something ("change", \
+"set", "make", "turn", "put", "switch", "go back to"), do it with a tool, even if the \
+state already looks like that and even if an earlier turn did something similar. \
+Never answer a request by describing what the lights are showing.
 - A look plus a place, with no verb, is a request to SET it: "eagles colors outside", \
 "living room red", "cool white in the study". Don't ask whether they meant a \
 question.
@@ -279,7 +283,8 @@ Never set confirmed: true otherwise. When they say yes, the action has NOT happe
 until you call it again — never say it's done without that call.
 
 Questions ("what's the bedroom showing?", "is the porch light on?", "what color is \
-the lamp?"): answer from the state; don't call tools. Be honest about what it is: \
+the lamp?"): answer from the state; don't call tools. Only a question is answered \
+this way; a request to change something never is. Be honest about what it is: \
 Hue lights are read from the bridge, so they are what's on now. Govee lights say \
 "last sent" — that's what LightEmUp last told them, and the Govee app or Google could \
 have changed them since, so say "was last set to". Segmented lights' colors aren't \
@@ -297,6 +302,16 @@ _YES = re.compile(r"^\s*(yes|yeah|yep|yup|sure|ok|okay|do it|go ahead|go for it|
 _TAKE_BACK = re.compile(r"^\s*(never ?mind|cancel( that| it)?|undo( that| it)?|forget (it|that)|"
                         r"put it back|scratch that|go back)\b[\w\s,.!'-]{0,30}$", re.I)
 _NO = re.compile(r"^\s*(no|nope|nah|cancel|never ?mind|don't|stop|forget it)\b", re.I)
+# A request to change something, not a question about the lights. Used only to catch
+# a reply that describes the house instead of acting (v3.67.1).
+_COMMAND = re.compile(r"^\s*(?:(?:yes|ok(?:ay)?|hey|so|and|now|actually|please)[\s,.!]+)*"
+                      r"(?:(?:can|could|would|will) you\s+)?(?:please\s+)?"
+                      r"(change|set|make|turn|switch|put|go back|bring|dim|brighten|start|"
+                      r"stop|apply|give|paint|light up)\b", re.I)
+# "Is there anything else you'd like?" is a sign-off, not a question that needs an answer.
+_CLOSER = re.compile(r"[^.!?]*\banything else\b[^.!?]*\?", re.I)
+_NUDGE = ("That was a request to change the lights, not a question about them. Carry it "
+          "out now with the tools, then say in one sentence what you did.")
 
 
 class _Convo:
@@ -337,8 +352,8 @@ def _block_to_dict(b) -> Optional[dict]:
 
 def _kept(blocks: list) -> list:
     """What memory keeps of an assistant turn: no thinking. A thinking block only
-    stays valid while every earlier turn is resent unchanged, and Ask rewrites old
-    turns (they lose their house state), so carrying one forward would be a 400."""
+    stays valid while everything before it is resent unchanged, and the state system
+    block changes every turn, so carrying one forward would be a 400."""
     out = [b for b in blocks if b["type"] not in ("thinking", "redacted_thinking")]
     return out or [{"type": "text", "text": "…"}]
 
@@ -429,8 +444,15 @@ class AskEngine:
                              "is missing) — redeploy to install it.", "actions": [], "error": "sdk"}
 
         ctx = await self.context()
+        # The live state is a second system block AFTER the cached one, read fresh each
+        # turn. It used to ride in the user's message just ahead of the words, and
+        # Haiku read the newest request as the state's last line and answered the
+        # PREVIOUS message instead: one turn behind, every turn (v3.67.1).
         system = [{"type": "text", "text": SYSTEM_RULES + "\n\n" + ctx["layout"],
-                   "cache_control": {"type": "ephemeral"}}]
+                   "cache_control": {"type": "ephemeral"}},
+                  {"type": "text", "text": "CURRENT STATE OF THE HOUSE, read just before the "
+                                           "person's latest message (it does not reflect "
+                                           "that message yet):\n" + ctx["state"]}]
         tools = build_tools(ctx.get("modes") or ["walk"])
         convo = self._convo(client_id)
         convo.at = time.time()
@@ -443,14 +465,13 @@ class AskEngine:
         # Anywhere in the reply, not just at its end: Haiku 5.5 often adds a note
         # after its question ("…go ahead? Everything else is already off.").
         convo.yes_now = bool(_YES.match(text)) and "?" in last_q
-        # The live state rides with THIS turn only; earlier turns keep just the words,
-        # so a stale "the study is off" can't contradict the current one.
+        # Every user turn is just the words, so the newest request looks exactly like
+        # the earlier ones, and only the current state is ever sent.
         convo.messages.append({"role": "user", "content": text})
-        request_messages = convo.messages[:-1] + [{"role": "user", "content": [
-            {"type": "text", "text": "Current state of the house:\n" + ctx["state"]},
-            {"type": "text", "text": text}]}]
+        request_messages = list(convo.messages)
 
         done, awaiting, cost, reply, called, ran = [], False, 0.0, "", False, []
+        nudged = False
         try:
             for _ in range(MAX_STEPS):
                 response = await client.messages.create(
@@ -466,6 +487,17 @@ class AskEngine:
                     reply = reply or "I can't help with that one."
                     break
                 if response.stop_reason != "tool_use":
+                    # "Change the exterior front to 1% incandescent", a turn after a
+                    # Halloween scene, got "the exterior front is showing Halloween"
+                    # and nothing done (v3.67.1): a follow-up command read as a question
+                    # about the state. A reply that neither acts nor asks gets one nudge.
+                    if (not called and not nudged and not convo.pending
+                            and "?" not in _CLOSER.sub("", reply) and _COMMAND.match(text)):
+                        nudged = True
+                        log.info("Ask %r: reply didn't act (%r), nudging once", text, reply)
+                        convo.messages.pop()     # memory keeps the turn that acted
+                        request_messages.append({"role": "user", "content": _NUDGE})
+                        continue
                     break
                 results = []
                 for b in blocks:

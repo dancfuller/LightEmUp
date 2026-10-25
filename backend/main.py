@@ -9921,7 +9921,11 @@ async def _ask_context() -> dict:
             bits.append(f"{pat} light show running")
         snap = _ask_undo.get(r)
         if snap and time.time() - snap["at"] < ASK_UNDO_MAX_AGE_S:
-            bits.append(f"can be put back to how it was {round((time.time() - snap['at']) / 60)} min ago")
+            # Says "an earlier request" outright: "the last Ask change touched Exterior
+            # Front" beside a new "change the exterior front…" read to Haiku as proof
+            # the NEW request was done, so it described the room instead (v3.67.1).
+            bits.append("put_back can undo an earlier Ask request here "
+                        f"(made {round((time.time() - snap['at']) / 60)} min ago)")
         state.append("; ".join(bits))
         if mine:
             state.append("    " + " | ".join(light_line(l) for l in mine))
@@ -9930,7 +9934,8 @@ async def _ask_context() -> dict:
         state.append("Timers set by Ask (pending): " + "; ".join(
             f"[{s['id']}] {s['name'][len(ASK_SCHEDULE_PREFIX):]}" for s in pending))
     if _ask_undo_last.get("rooms"):
-        state.append("The last Ask change touched: " + ", ".join(_ask_undo_last["rooms"]))
+        state.append("Ask's previous request (already done; not the current one) changed: "
+                     + ", ".join(_ask_undo_last["rooms"]))
     return {"layout": layout, "state": "\n".join(state),
             "modes": [p["key"] for p in lightshow.PATTERNS]}
 
