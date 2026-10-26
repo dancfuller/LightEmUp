@@ -1397,8 +1397,17 @@ for one room (or, for everything except `scene`, a zone).
   entry carries `mac`/`device_mac`, and firing maps it through `gv_ip_for_slug(gv_slug(
   mac))`; entries that no longer resolve are dropped + logged. So is an entry with
   no mac at all (v3.51.5): its stored IP may belong to a different device by now. **If you add a Govee list
-  to the apply payload, add it to the tuple in `_freshen_scene_payload` too.** Hue keys
-  by stable `light_id` and needs nothing.
+  to the apply payload, add it to the tuple in `_freshen_scene_payload` too.**
+- **Hue entries follow the NAME, not the id (v3.67.2, `_rehome_hue_entries`).** A
+  `light_id` is stable for the bulb, not for the spot. Dan moves bulbs between fixtures
+  (the Driveway's Innr swapped with the Dining Room Lamp's Philips) and renames them in
+  the Hue app so the names stay with the places. Replayed by id, "Set here" painted the
+  Living Room lamp with the Driveway's green and left the Driveway alone. Now each entry
+  goes to the room light whose nickname equals the entry's recorded `label`. If no light
+  has that name, the entry keeps its id while that light is still in the room, and is
+  dropped once it isn't. One light never gets two entries. A `scope`d (one-light) payload
+  is left alone. This covers all three replays: "Set here", scheduled scenes and Ask's
+  put_back. `_room_status` likewise skips an `expect_hue` light that has left the room.
 - `white`/`color` actions go through `_apply_room_white` / `_apply_room_color`, which
   reuse `control_hue_light`/`control_govee` and mirror the frontend's per-vendor split
   (Hue mireds + bri 1–254, Govee kelvin + bri 0–100).

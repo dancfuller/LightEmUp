@@ -1149,15 +1149,53 @@ def _schedule_due(sched: dict, now, location: dict = None, sun_resolver=None) ->
     return False
 
 
+def _rehome_hue_entries(room: str, hue: list) -> list:
+    """Point a stored scene's Hue entries at the room's lights AS THEY ARE NOW
+    (v3.67.2). A light_id is stable for the bulb, not for the spot: swap the
+    Driveway bulb with the Dining Room Lamp's and rename them in the Hue app, and a
+    replay by id paints the Living Room lamp with the Driveway's color and misses
+    the Driveway entirely. So each entry goes to the room light that now carries the
+    entry's recorded name (`label`, the nickname when the look was set). With no
+    such light it keeps its id while that light is still in the room, and is
+    dropped once it isn't: a replay never drives a light outside its room."""
+    members = [str(i) for i in ((config.get("rooms", {}) or {}).get(room) or {})
+               .get("hue_light_ids", [])]
+    if not members:
+        return hue
+    by_name = {}
+    for lid in members:
+        nm = _device_label(f"hue:{lid}", "")
+        if nm:
+            by_name.setdefault(nm, []).append(lid)
+    kept, taken = [], set()
+    for h in hue:
+        old = str(h.get("light_id"))
+        named = by_name.get(h.get("label") or "") or []
+        lid = named[0] if len(named) == 1 else (old if old in members else None)
+        if lid is None or lid in taken:
+            log.info("Scene replay in %s: %r (light %s) is no longer in the room; skipped",
+                     room, h.get("label"), old)
+            continue
+        if lid != old:
+            log.info("Scene replay in %s: %r is light %s now (was %s)",
+                     room, h.get("label"), lid, old)
+        taken.add(lid)
+        kept.append({**h, "light_id": lid})
+    return kept
+
+
 def _freshen_scene_payload(payload: dict):
     """Copy a stored scene room-apply payload with every Govee entry's IP
     re-resolved from its mac (DHCP-robust). Govee entries whose device can't be
-    resolved (never seen / gone) are dropped; Hue entries are always kept (stable
-    light_id). Returns None if nothing addressable remains."""
+    resolved (never seen / gone) are dropped. Hue entries are re-pointed at the
+    room's current lights by name (_rehome_hue_entries). Returns None if nothing
+    addressable remains."""
     if not payload:
         return None
     import copy
     p = copy.deepcopy(payload)
+    if p.get("room") and not p.get("scope"):
+        p["hue"] = _rehome_hue_entries(p["room"], p.get("hue") or [])
     for listname, mac_field in (("base_seeds", "mac"), ("govee_whole", "mac"),
                                 ("razer", "mac"), ("cloud", "device_mac")):
         kept = []
@@ -7494,8 +7532,12 @@ async def _room_status(room_name: str, lights_by_id: dict) -> dict:
     # from the record because WE changed them, so they are not evidence of
     # anything else touching the room.
     animated = set(entry.get("animated") or [])
+    # A light moved to another room since (v3.67.2) says nothing about THIS room:
+    # judging it here reported "Driveway changed" for a Living Room look.
+    members = {str(i) for i in ((config.get("rooms", {}) or {}).get(room_name) or {})
+               .get("hue_light_ids", [])}
     for light_id, sent in expect.items():
-        if f"hue:{light_id}" in animated:
+        if f"hue:{light_id}" in animated or str(light_id) not in members:
             continue
         verdict = _hue_state_matches(sent, lights_by_id.get(str(light_id)))
         if verdict is True:
