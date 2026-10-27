@@ -200,6 +200,10 @@ DEFAULT_CONFIG = {
                                  # Bounded by REPAIR_LOG_MAX / REPAIR_LOG_DAYS. This is
                                  # the only way to see radio trouble WITHOUT reading
                                  # journalctl — see Settings → Delivery health.
+    "hue_dropouts": [],          # each time the Hue bridge lost a room light (v3.68.0):
+                                 # {key, label, start, end (None while still lost),
+                                 # blips}. Written by the once-a-minute check in the
+                                 # scheduler loop; bounded by HUE_DROPOUT_DAYS/_MAX.
     "pending_brightness": {},    # device key → level (%) chosen while the device was
                                  # OFF, applied the next time it is turned on and
                                  # then cleared (v3.45.0). Dragging a level must
@@ -633,6 +637,75 @@ def record_repair(key: str, label: str, kind: str):
         schedule_save()      # debounced; a burst of repairs costs one write
     except Exception:
         log.exception("Could not record a repair (continuing)")
+
+
+# Dropouts (v3.68.0): how long each Hue light stays lost from the bridge, which the
+# repair log can't say: it only sees a light when a command is sent to it. The
+# Driveway sat unreachable through a whole evening and the only trace was re-sends
+# at the moment someone applied a look. Kept long enough to compare weeks.
+HUE_DROPOUT_DAYS = 60
+HUE_DROPOUT_MAX = 300
+# A light that comes back and is lost again within this long is ONE dropout. The
+# bridge's `reachable` flag flaps on a marginal link (13 reads in 20, once), and
+# each flap as its own entry would bury the real ones.
+HUE_DROPOUT_MERGE_S = 180
+
+
+def _track_hue_dropouts(states: dict, now=None) -> bool:
+    """Open or close a dropout for each room light from one bridge read
+    ({light id: state}, as _hue_states_by_id returns). Returns True if anything
+    changed. An empty read records nothing: a bridge that can't be read is not
+    every light in the house being lost. A light missing from the read entirely
+    is a phantom (re-paired, removed), not a dropout, and is left alone."""
+    from datetime import datetime, timedelta, timezone
+    if not states:
+        return False
+    now = now or datetime.now(timezone.utc)
+    stamp = now.isoformat(timespec="seconds")
+    log_ = config.setdefault("hue_dropouts", [])
+    claimed = {f"hue:{i}" for room in (config.get("rooms", {}) or {}).values()
+               for i in room.get("hue_light_ids", [])}
+    open_ = {e["key"]: e for e in log_ if e.get("end") is None}
+    changed = False
+    for key in sorted(claimed):
+        st = states.get(key[4:])
+        if st is None:
+            continue
+        down = st.get("reachable") is False
+        if down and key not in open_:
+            label = _device_label(key, st.get("name") or key)
+            last = next((e for e in reversed(log_) if e["key"] == key), None)
+            try:
+                recent = last is not None and \
+                    (now - datetime.fromisoformat(last["end"])).total_seconds() <= HUE_DROPOUT_MERGE_S
+            except (ValueError, TypeError, KeyError):
+                recent = False
+            if recent:
+                last["end"] = None
+                last["blips"] = int(last.get("blips") or 0) + 1
+            else:
+                log_.append({"key": key, "label": label, "start": stamp, "end": None, "blips": 0})
+                log.info("Hue bridge lost %s (%s)", label, key)
+            changed = True
+        elif not down and key in open_:
+            open_[key]["end"] = stamp
+            log.info("Hue bridge has %s (%s) back", open_[key].get("label"), key)
+            changed = True
+    for key, e in open_.items():
+        if key not in claimed:          # moved out of every room while lost
+            e["end"] = stamp
+            changed = True
+    if changed:
+        cutoff = now - timedelta(days=HUE_DROPOUT_DAYS)
+        kept = []
+        for e in log_:
+            try:
+                if e.get("end") is None or datetime.fromisoformat(e["end"]) >= cutoff:
+                    kept.append(e)
+            except (ValueError, TypeError):
+                continue
+        config["hue_dropouts"] = kept[-HUE_DROPOUT_MAX:]
+    return changed
 
 
 def pending_brightness(key: str) -> Optional[int]:
@@ -3693,6 +3766,13 @@ async def _scheduler_loop():
             if fired:
                 schedule_save()
                 publish_event("config")
+            # One bridge read a minute keeps the dropout record (v3.68.0). Never
+            # allowed to disturb the schedules above.
+            try:
+                if _track_hue_dropouts(await _hue_states_by_id(quiet=True)):
+                    schedule_save()
+            except Exception:
+                log.exception("Dropout check failed (continuing)")
             # Sleep to just past the top of the next minute; wake early on stop.
             delay = 60 - datetime.now().second + 0.5
             try:
@@ -6341,7 +6421,24 @@ async def delivery_health():
         except Exception:
             pass      # a diagnostic that fails is not an error worth surfacing
 
+    # Dropouts (v3.68.0), newest first. Minutes are worked out here so the card
+    # needn't know that a still-open one runs to "now".
+    dropouts = []
+    for e in reversed(config.get("hue_dropouts") or []):
+        try:
+            start = datetime.fromisoformat(e["start"])
+            end = datetime.fromisoformat(e["end"]) if e.get("end") else now
+        except (ValueError, TypeError, KeyError):
+            continue
+        if (now - end).days >= REPAIR_LOG_DAYS:
+            break
+        dropouts.append({**e, "open": not e.get("end"),
+                         "minutes": max(0, round((end - start).total_seconds() / 60))})
+        if len(dropouts) >= 20:
+            break
+
     return {
+        "dropouts": dropouts,
         "last_24h": sum(1 for _, a in aged if a <= 24),
         "last_7d": sum(1 for _, a in aged if a <= 24 * 7),
         "kept": len(aged),
@@ -7593,8 +7690,10 @@ async def rooms_status():
     return {"rooms": out}
 
 
-async def _hue_states_by_id() -> dict:
-    """{light id: state + name} from ONE bridge read; empty if it can't be read."""
+async def _hue_states_by_id(quiet: bool = False) -> dict:
+    """{light id: state + name} from ONE bridge read; empty if it can't be read.
+    `quiet` is for the once-a-minute dropout check, which would otherwise log a
+    traceback every minute the bridge is down."""
     ip = config.get("hue_bridge_ip")
     username = config.get("hue_username")
     lights_by_id = {}
@@ -7603,7 +7702,8 @@ async def _hue_states_by_id() -> dict:
             for l in await get_hue_lights(ip, username):
                 lights_by_id[str(l["id"])] = {**(l.get("state") or {}), "name": l.get("name")}
         except Exception:
-            log.warning("Room status: could not read the bridge", exc_info=True)
+            if not quiet:
+                log.warning("Room status: could not read the bridge", exc_info=True)
     return lights_by_id
 
 
@@ -7909,6 +8009,7 @@ _SETTING_INTERNAL = {
     "lightshow_segments_reset",  # a one-shot migration marker, not a choice
     "lightshow_segmented_whole", # a one-shot migration marker, not a choice
     "repair_log",         # diagnostic history, not a setting; noise in a restore
+    "hue_dropouts",       # diagnostic history, likewise
     "pending_brightness", # a level waiting for the next power-on; consumed in
                           # minutes and meaningless in a year-old backup
     "device_state",       # last state we sent each device — rebuilt by use

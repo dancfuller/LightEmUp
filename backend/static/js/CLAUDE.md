@@ -1122,6 +1122,19 @@ Apply skips them; the Light Show panel lists them as "excluded in the room".
   room (so "Schedule this look" captures every light) and the backend drops excluded
   lights at apply time.
 
+## Unreachable lights in the room header (v3.68.0)
+A red **"Unreachable · names"** row sits under the excluded row, outside the
+collapsed gate, for any of the room's Hue lights reading `reachable: false`. Before
+this, applying a look to a room with a lost light showed a quiet "Now showing", since
+`/rooms/status` counts an unreachable light as *unknown*, never as diverged.
+- It reads `hueLights[].state.reachable` directly: the states app.js already re-reads
+  once a minute while the page is in view. No extra endpoint, no extra bridge read.
+- It's a separate row, not a third state of `RoomLastApplied`. It isn't a claim about
+  the look (nothing else changed the room); it's a fact about a light, true even with
+  no record.
+- The fix hint ("off and on at the fixture…") is desktop-only; on a phone it lives in
+  the tooltip. The history of these is in Delivery health ("Lost from the Hue bridge").
+
 ## room-section.js — the Whole Room panel (v3.62.2)
 The room drawer's "Controls" view is now labelled **Whole Room** (opener, tab and
 the "Every light in {room}" heading): "Controls" didn't say it acts on every light
@@ -1224,6 +1237,11 @@ level), `color` (wrong color), `white` (**fell back to white** — v3.46.1, a bu
 that left color mode entirely, which points at the bulb rather than the radio)
 and `unreachable`. A kind with no word falls through as its raw key, so a new
 backend kind degrades rather than breaking.
+
+**"Lost from the Hue bridge" (v3.68.0)** lists the `dropouts` the endpoint returns:
+the light, when it was lost, and for how long. A light still lost gets a red border
+and reads "still lost · 42 min". `blips` (it came back and was lost again within a
+few minutes) goes in the tooltip only. `formatMinutes` lives in this file.
 
 **`by_kind` is summed by PHRASE, not by key.** A Hue light that wouldn't switch (`on`)
 and a Govee one that wouldn't (`power`) are the same fact to a reader and share a

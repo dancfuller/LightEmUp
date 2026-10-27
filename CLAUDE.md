@@ -377,8 +377,10 @@ All endpoints are under `/api/`. Key groups:
   lights (v3.46.0). Counts over 24h/7d, a dense 14-day series, worst offenders, and the
   Hue **Zigbee channel** alongside — because the usual cause of a rising count is a WiFi
   AP wandering onto it, and the two facts are only useful together. Config key
-  `repair_log` (internal — diagnostic history, not a setting). See `backend/CLAUDE.md`
-  "Delivery health"
+  `repair_log` (internal — diagnostic history, not a setting). Also `dropouts`
+  (v3.68.0): each time the bridge lost a room's Hue light and for how long, from a
+  once-a-minute check on the Pi (config key `hue_dropouts`, internal). See
+  `backend/CLAUDE.md` "Delivery health"
 - `/api/usage/events`, `/api/usage/device`, `/api/usage/summary` — the usage log
   (v3.49.0): batches of "opened this screen" / "did this" events per browser, a
   name per browser, and a per-device summary including how often a screen was opened

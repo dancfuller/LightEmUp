@@ -830,6 +830,38 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
           );
         })()}
 
+        {/* UNREACHABLE lights (v3.68.0). The bridge can't reach them, so they
+            didn't get the look just applied, while the strip above still says
+            "Now showing". Read from the Hue states the page re-reads every
+            minute. */}
+        {(() => {
+          const lost = hueLights.filter(l => l.state && l.state.reachable === false);
+          if (!lost.length) return null;
+          const names = lost.map(l => { const d = getDeviceDisplayName(l, nicknames); return d.nickname || d.friendlyName; });
+          return (
+            <div title="The Hue bridge can't reach these lights, so they won't take anything sent to them. If one is switched on at the wall, turning it off for ten seconds and on again usually brings it back."
+              style={{
+                display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
+                padding: isMobile ? "6px 9px" : "6px 11px", borderRadius: 9,
+                background: "rgba(69,10,10,0.45)", border: "1px solid #7f1d1d",
+              }}>
+              <span style={{
+                fontSize: 9, fontWeight: 700, letterSpacing: 0.7, textTransform: "uppercase",
+                color: "#f87171",
+              }}>Unreachable</span>
+              <span style={{
+                fontSize: isMobile ? 11 : 12, color: "#fecaca", minWidth: 0, flex: "1 1 120px",
+                overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+              }}>{names.join(", ")}</span>
+              {!isMobile && (
+                <span style={{ fontSize: 11, color: "#94a3b8" }}>
+                  off and on at the fixture usually brings it back
+                </span>
+              )}
+            </div>
+          );
+        })()}
+
         {/* Surface openers */}
         <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 6 : 8, flexWrap: "wrap" }}>
           {openerBtn("lightning", lightningActive ? "⚡ Storm" : "⚡ Lightning", lightningActive ? "#fbbf24" : "#94a3b8")}

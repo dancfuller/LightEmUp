@@ -177,6 +177,50 @@ function DeliveryHealthCard({ isMobile }) {
           landed on the first try.
         </div>
       )}
+
+      {/* Dropouts (v3.68.0): the Pi checks the bridge once a minute, so this knows
+          how LONG a light was lost and whether it came back by itself, which the
+          re-send count above can't. */}
+      <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.5, marginTop: 18,
+                    textTransform: "uppercase", color: "#64748b", marginBottom: 8 }}>
+        Lost from the Hue bridge · {data.window_days} days
+      </div>
+      {(data.dropouts || []).length > 0 ? (
+        <div style={{ display: "grid", gap: 4 }}>
+          {data.dropouts.map(d => (
+            <div key={d.key + d.start} title={d.blips
+                ? `Came back and was lost again ${d.blips} more time${d.blips === 1 ? "" : "s"} within a few minutes`
+                : undefined}
+              style={{
+                display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
+                padding: "6px 9px", background: "#0a0f1e", borderRadius: 8,
+                border: d.open ? "1px solid #7f1d1d" : "1px solid #1e293b",
+              }}>
+              <span style={{ flex: "1 1 120px", fontSize: 12, color: "#e2e8f0", minWidth: 0,
+                             overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {d.label || d.key}
+              </span>
+              <span style={{ fontSize: 11, color: "#64748b" }}>{relativeTime(d.start)}</span>
+              <span style={{ fontSize: 12, fontWeight: 700, whiteSpace: "nowrap",
+                             color: d.open ? "#f87171" : "#94a3b8" }}>
+                {d.open ? `still lost · ${formatMinutes(d.minutes)}` : formatMinutes(d.minutes)}
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.5 }}>
+          No light has dropped off the Hue bridge in the last {data.window_days} days.
+        </div>
+      )}
     </div>
   );
+}
+
+function formatMinutes(m) {
+  if (m < 1) return "under a minute";
+  if (m < 60) return `${m} min`;
+  const h = Math.floor(m / 60), r = m % 60;
+  if (h >= 48) return `${Math.round(h / 24)} days`;
+  return r ? `${h} h ${r} min` : `${h} h`;
 }

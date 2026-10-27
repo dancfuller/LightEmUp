@@ -800,6 +800,32 @@ onto the Zigbee channel, and neither number diagnoses anything alone. A bridge t
 can't be read just omits the field — a diagnostic that fails is not an error worth
 surfacing.
 
+### Dropouts — how long a Hue light stays lost (v3.68.0)
+The repair log only sees a light when a command is sent to it. The Driveway sat
+unreachable through a whole evening, and the only trace was a burst of re-sends when
+someone applied a look. So whether a lost light **comes back on its own, and after how
+long**, was unanswerable. That is the question that decides between waiting it out,
+power-cycling it and moving a router bulb.
+- **`_track_hue_dropouts(states)`** runs once a minute at the end of the scheduler
+  loop, on one bridge read (`_hue_states_by_id(quiet=True)`). It opens an entry when a
+  room light reads `reachable: false` and closes it when the light reads reachable
+  again. Config key `hue_dropouts` holds `{key, label, start, end, blips}` entries
+  (internal; kept for 60 days, at most 300).
+- **The rules, each of which keeps it honest:**
+  - An empty read records nothing; a bridge that's down is not every light lost.
+  - A light absent from the read is a phantom, not a dropout.
+  - Losing a light again within `HUE_DROPOUT_MERGE_S` (3 min) reopens the last
+    entry and counts a `blip`. The flag flaps on a marginal link, and one entry per
+    flap would bury the real ones.
+  - A light moved out of every room while lost is closed.
+- The house's sockets are always powered, so here unreachable means radio trouble.
+  The code doesn't assume that: anywhere else, a dropout may be a wall switch.
+- `GET /api/health/delivery` returns `dropouts`: the newest 20 within the 14-day
+  window, with `minutes` (running to now while `open`).
+- **No alerts, on purpose.** The fix is a walk to the fixture either way, and an
+  alert about a light you can see is noise. The room header's "Unreachable" row
+  (`static/js/CLAUDE.md`) covers the moment it matters: when a look was just applied.
+
 ### The config key
 
 `repair_log` is a list of `{at, key, label, kind}`, bounded **twice**: `REPAIR_LOG_MAX`
