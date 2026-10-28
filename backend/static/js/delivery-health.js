@@ -187,6 +187,14 @@ function DeliveryHealthCard({ isMobile }) {
       </div>
       {(data.dropouts || []).length > 0 ? (
         <div style={{ display: "grid", gap: 4 }}>
+          {/* Column labels: two bare times side by side ("13m ago 1 min") read as
+              one muddle. Widths match the row cells below so they line up. */}
+          <div style={{ display: "flex", gap: 8, padding: "0 9px", fontSize: 10,
+                        color: "#64748b", fontWeight: 600 }}>
+            <span style={{ flex: "1 1 120px" }}>Light</span>
+            <span style={{ width: 64, textAlign: "right" }}>Lost</span>
+            <span style={{ width: isMobile ? 104 : 120, textAlign: "right" }}>Unreachable for</span>
+          </div>
           {data.dropouts.map(d => (
             <div key={d.key + d.start} title={d.blips
                 ? `Came back and was lost again ${d.blips} more time${d.blips === 1 ? "" : "s"} within a few minutes`
@@ -200,8 +208,11 @@ function DeliveryHealthCard({ isMobile }) {
                              overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                 {d.label || d.key}
               </span>
-              <span style={{ fontSize: 11, color: "#64748b" }}>{relativeTime(d.start)}</span>
-              <span style={{ fontSize: 12, fontWeight: 700, whiteSpace: "nowrap",
+              <span style={{ width: 64, textAlign: "right", fontSize: 11, color: "#64748b" }}>
+                {relativeTime(d.start)}
+              </span>
+              <span style={{ minWidth: isMobile ? 104 : 120, textAlign: "right", fontSize: 12,
+                             fontWeight: 700, whiteSpace: "nowrap",
                              color: d.open ? "#f87171" : "#94a3b8" }}>
                 {d.open ? `still lost · ${formatMinutes(d.minutes)}` : formatMinutes(d.minutes)}
               </span>
