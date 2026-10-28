@@ -338,10 +338,10 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
     return () => window.removeEventListener("lightemup-scene-apply", onProgress);
   }, [name]);
 
-  const allLights = [
+  const allLights = sortLightsByName([
     ...hueLights.map(l => ({ ...l, _controlFn: onControlHue })),
     ...goveeDevices.map(d => ({ ...d, _controlFn: onControlGovee })),
-  ];
+  ], nicknames);
   const anyOn = allLights.some(l => l.state?.on);
   const anyColor = allLights.some(l => l.capabilities?.has_color);
   // A white needs a light that can show one: any color light (by RGB if not

@@ -1122,6 +1122,17 @@ Apply skips them; the Light Show panel lists them as "excluded in the room".
   room (so "Schedule this look" captures every light) and the backend drops excluded
   lights at apply time.
 
+## Lists of lights are alphabetical (v3.68.3)
+`sortLightsByName(lights, nicknames)` (utils.js) orders lights by the name their
+card shows (nickname, else the product name), with Hue and Govee mixed. Before, every
+list followed the Hue bridge's id order and then Govee discovery order, which nobody
+could predict. It's used by the room grid (via `allLights`, so the Light Show panel's
+light list and the header's excluded/unreachable names follow), All Lights, Assign
+Rooms (room and Unassigned lists), `DevicePickerModal`, and Settings' Hue/Govee device
+lists. **The exception is the Favorites list:** its order is the user's, set by
+arranging it, and is never sorted. A new list of lights should use the helper rather
+than render in fetch order.
+
 ## Unreachable lights in the room header (v3.68.0)
 A red **"Unreachable · names"** row sits under the excluded row, outside the
 collapsed gate, for any of the room's Hue lights reading `reachable: false`. Before

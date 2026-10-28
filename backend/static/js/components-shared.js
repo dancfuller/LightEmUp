@@ -943,7 +943,7 @@ function DevicePickerModal({ title, devices, onSelect, onClose, nicknames }) {
         </div>
         <div style={{ flex: 1, overflow: "auto", padding: "12px 20px" }}>
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {devices.map((d, i) => {
+            {sortLightsByName(devices, nicknames).map((d, i) => {
               const key = getKey(d);
               const isSelected = selected.has(key);
               const isHue = d.type === "hue";

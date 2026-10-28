@@ -1854,8 +1854,7 @@ function App() {
 
         {activeTab === "all lights" && (
           <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fill, minmax(260px, 1fr))", gap: 12 }}>
-            {hueLights.map(renderLightCard)}
-            {goveeDevices.map(renderLightCard)}
+            {sortLightsByName([...hueLights, ...goveeDevices], nicknames).map(l => renderLightCard(l))}
           </div>
         )}
 
@@ -1956,7 +1955,7 @@ function App() {
                       </div>
                     );
                   })()}
-                  {hueLights.map(light => {
+                  {sortLightsByName(hueLights, nicknames).map(light => {
                     const dk = `hue:${light.id}`;
                     const friendlyName = light.product_name || light.name || light.model || `Light ${light.id}`;
                     const model = light.product_name || light.model || "Unknown";
@@ -1999,7 +1998,7 @@ function App() {
                       <span style={{ color: "#f87171", marginLeft: 8 }}>· {missingGovee.length} not responding</span>
                     )}
                   </div>
-                  {goveeDevices.filter(d => d.responding !== false).map(device => {
+                  {sortLightsByName(goveeDevices.filter(d => d.responding !== false), nicknames).map(device => {
                     const dk = `govee:${goveeSlug(device)}`;
                     const friendlyName = GOVEE_SKU_NAMES[device.sku] || device.name || device.sku || "Unknown";
                     const meta = [device.sku, device.ip, device.mac].filter(Boolean).join(" · ");

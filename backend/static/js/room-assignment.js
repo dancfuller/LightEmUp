@@ -180,7 +180,7 @@ function RoomCard({ roomName, devices, allRoomNames, unassigned, onMoveDevice, o
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {devices.map((d, i) => (
+            {sortLightsByName(devices, nicknames).map((d, i) => (
               <DeviceRow
                 key={`${d.type}-${d.id || d.ip}-${i}`}
                 device={d}
@@ -419,7 +419,7 @@ function RoomAssignment({ hueLights, goveeDevices, rooms, onRoomsChange, onRenam
             }}>{unassigned.length}</span>
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {unassigned.map((d, i) => {
+            {sortLightsByName(unassigned, nicknames).map((d, i) => {
               const isHue = d.type === "hue";
               const { nickname, friendlyName } = getDeviceDisplayName(d, nicknames);
               const subtitle = isHue ? (d.product_name || d.model || "Hue") : (d.sku || d.ip);

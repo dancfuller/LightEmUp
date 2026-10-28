@@ -528,6 +528,20 @@ function getDeviceDisplayName(device, nicknames) {
   return { nickname, friendlyName, deviceKey: deviceKey_ };
 }
 
+// A copy of `lights` in alphabetical order of the name each card shows (v3.68.3).
+// Lists used to follow the Hue bridge's id order and then Govee discovery order,
+// which nobody could predict. `numeric` puts "Light 2" before "Light 10". Hue and
+// Govee are mixed: what a person scans for is the name, not the brand. NOT for the
+// Favorites list, whose order the user sets.
+function sortLightsByName(lights, nicknames) {
+  const nameOf = (l) => {
+    const d = getDeviceDisplayName(l, nicknames);
+    return d.nickname || d.friendlyName || "";
+  };
+  return [...(lights || [])].sort((a, b) =>
+    nameOf(a).localeCompare(nameOf(b), undefined, { numeric: true, sensitivity: "base" }));
+}
+
 // ─── Color Conversion Helpers ───────────────────────────────────────────────
 
 function hueXYToRGB(xy, bri) {
