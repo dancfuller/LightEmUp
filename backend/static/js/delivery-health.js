@@ -195,26 +195,43 @@ function DeliveryHealthCard({ isMobile }) {
             <span style={{ width: 64, textAlign: "right" }}>Lost</span>
             <span style={{ width: isMobile ? 104 : 120, textAlign: "right" }}>Unreachable for</span>
           </div>
-          {data.dropouts.map(d => (
-            <div key={d.key + d.start} title={d.blips
+          {/* A light that hasn't come back is the one row that needs doing
+              something about, so it leads the list and looks like a problem;
+              the rest is history. */}
+          {[...data.dropouts.filter(d => d.open), ...data.dropouts.filter(d => !d.open)].map(d => (
+            <div key={d.key + d.start} title={d.open
+                ? "The Hue bridge still can't reach this light. Turning it off for ten seconds and on again at the fixture usually brings it back."
+                : d.blips
                 ? `Came back and was lost again ${d.blips} more time${d.blips === 1 ? "" : "s"} within a few minutes`
                 : undefined}
               style={{
                 display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
-                padding: "6px 9px", background: "#0a0f1e", borderRadius: 8,
-                border: d.open ? "1px solid #7f1d1d" : "1px solid #1e293b",
+                padding: "6px 9px", borderRadius: 8,
+                background: d.open ? "rgba(69,10,10,0.55)" : "#0a0f1e",
+                border: d.open ? "1px solid #b91c1c" : "1px solid #1e293b",
               }}>
-              <span style={{ flex: "1 1 120px", fontSize: 12, color: "#e2e8f0", minWidth: 0,
-                             overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {d.label || d.key}
+              <span style={{ flex: "1 1 120px", minWidth: 0 }}>
+                <span style={{ display: "block", fontSize: 12, minWidth: 0,
+                               fontWeight: d.open ? 700 : 400,
+                               color: d.open ? "#f87171" : "#e2e8f0",
+                               overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {d.open ? "⚠ " : ""}{d.label || d.key}
+                </span>
+                {d.open && (
+                  <span style={{ display: "block", fontSize: 10, fontWeight: 700, color: "#fca5a5",
+                                 textTransform: "uppercase", letterSpacing: 0.5, marginTop: 1 }}>
+                    Not reconnected yet
+                  </span>
+                )}
               </span>
-              <span style={{ width: 64, textAlign: "right", fontSize: 11, color: "#64748b" }}>
+              <span style={{ width: 64, textAlign: "right", fontSize: 11,
+                             color: d.open ? "#fca5a5" : "#64748b" }}>
                 {relativeTime(d.start)}
               </span>
               <span style={{ minWidth: isMobile ? 104 : 120, textAlign: "right", fontSize: 12,
                              fontWeight: 700, whiteSpace: "nowrap",
                              color: d.open ? "#f87171" : "#94a3b8" }}>
-                {d.open ? `still lost · ${formatMinutes(d.minutes)}` : formatMinutes(d.minutes)}
+                {d.open ? `${formatMinutes(d.minutes)} so far` : formatMinutes(d.minutes)}
               </span>
             </div>
           ))}

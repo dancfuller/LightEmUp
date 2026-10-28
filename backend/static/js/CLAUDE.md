@@ -1241,8 +1241,10 @@ backend kind degrades rather than breaking.
 **"Lost from the Hue bridge" (v3.68.0)** lists the `dropouts` the endpoint returns:
 the light, when it was lost, and for how long, under **column labels** (Light · Lost ·
 Unreachable for; v3.68.1, because two bare times side by side read as one muddle,
-"13m ago 1 min"). The label widths match the cells. A light still lost gets a red border
-and reads "still lost · 42 min". `blips` (it came back and was lost again within a
+"13m ago 1 min"). The label widths match the cells. **A light still lost (`open`) is
+the one row that needs action (v3.68.2):** it sorts to the top, gets a red tint and
+border and a red "⚠ name" with **NOT RECONNECTED YET** under it, and its time reads
+"42 min so far". Its tooltip gives the off-and-on fix. `blips` (it came back and was lost again within a
 few minutes) goes in the tooltip only. `formatMinutes` lives in this file.
 
 **`by_kind` is summed by PHRASE, not by key.** A Hue light that wouldn't switch (`on`)
