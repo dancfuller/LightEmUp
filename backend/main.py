@@ -943,6 +943,27 @@ if not any(isinstance(h, logging.StreamHandler) and not isinstance(h, TimedRotat
     _ch = logging.StreamHandler()
     _ch.setFormatter(_log_formatter)
     _root_logger.addHandler(_ch)
+# httpx logs every request URL at INFO, and a Hue v1 URL carries the bridge's
+# username, a credential (v3.68.5). Hide it in every line, and drop the plain
+# reads (GET): they're the once-a-minute dropout check and the verifies, pure
+# noise. Writes (PUT) stay: "PUT .../lights/28/state" is the record of what was
+# actually sent, and it's how a missed command gets traced afterwards.
+class _HttpxLogFilter(logging.Filter):
+    import re as _re
+    _user = _re.compile(r"(/api/)[A-Za-z0-9_-]{20,}")
+
+    def filter(self, record):
+        try:
+            msg = record.getMessage()
+        except Exception:
+            return True
+        if '"GET http' in msg or "Request: GET " in msg:
+            return False
+        record.msg, record.args = self._user.sub(r"\1<user>", msg), None
+        return True
+
+
+logging.getLogger("httpx").addFilter(_HttpxLogFilter())
 
 log = logging.getLogger("lightemup.main")
 

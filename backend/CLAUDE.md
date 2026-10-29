@@ -13,6 +13,16 @@ manual hard-refresh (and the footer version comes from the API, so it *looked* u
 `GIT_HASH` is resolved at import, so it changes when the service restarts — which every
 deploy does — auto-busting the cache. CDN `<script src="https://…">` tags are left alone.
 
+## The httpx log lines (v3.68.5)
+httpx logs every request URL at INFO, and a Hue v1 URL carries the bridge
+username, which is a credential. `_HttpxLogFilter` (set up next to the log handlers in
+main.py) replaces it with `<user>` in every line and drops GETs: the once-a-minute
+dropout check and the verifies, pure noise. **PUTs stay on purpose**: `PUT
+…/lights/28/state` is the record of what was actually sent, and it's how a missed
+command is traced after the fact (the Exterior Front miss of 2026-10-29 was). Don't
+silence the logger wholesale. Lines written before v3.68.5 still hold the username
+until they age out of the journal and the 48-hour log files.
+
 ## Config persistence
 - `config.json` (gitignored; template `config.json.example`) is read at startup and
   rewritten on every mutation. Use the existing save helper in `main.py` — don't
