@@ -5530,7 +5530,8 @@ async def _hue_room_group_power(room_name: str, room: dict, on: bool, ip: str,
     Each member is counted as written (so the checks and early repeats know the
     newest intention), recorded for power recovery, and handed to the same
     verifies as before. Uncertified (Innr) members still get their early repeats,
-    one bulb at a time, on top of the groupcast."""
+    one bulb at a time, on top of the groupcast, and since v3.68.4 every other
+    member gets one on/off of its own (discovery.HUE_GROUP_FOLLOW_S)."""
     lights = [str(x) for x in room.get("hue_light_ids", [])]
     if len(lights) < 2:
         return False
@@ -5556,7 +5557,7 @@ async def _hue_room_group_power(room_name: str, room: dict, on: bool, ip: str,
         record_hue_state(lid, state)
         hue_sent[lid] = state
         results["hue"].append({"light_id": lid, "success": True, "group": gid})
-        schedule_hue_echo(ip, username, lid, state)
+        schedule_hue_echo(ip, username, lid, state, group=True)
     return True
 
 

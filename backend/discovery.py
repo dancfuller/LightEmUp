@@ -423,10 +423,23 @@ def _start_hue_echo(ip, username, light_id, state, delays):
                         name="hue-early-repeat")
 
 
-def schedule_hue_echo(ip: str, username: str, light_id, state: dict):
+# After a GROUP command every member also gets its own on/off (v3.68.4), not just
+# the uncertified ones. A groupcast has no per-bulb acknowledgment, so a bulb that
+# misses it gets no retry, and the bridge still records it as switched. 2026-10-29
+# 07:29: the sunrise off reached Exterior Front as one group command; the Driveway
+# (a Philips, so no early repeats) kept last night's colors while every check read
+# it as off. A command to one light is acknowledged and retried by the radio.
+HUE_GROUP_FOLLOW_S = (1.5,)
+
+
+def schedule_hue_echo(ip: str, username: str, light_id, state: dict, group: bool = False):
     """The early repeats for a light that was written some OTHER way than
-    set_hue_light_state — a group command (v3.61.1). Same rules."""
+    set_hue_light_state — a group command (v3.61.1). Same rules. With `group`, a
+    light that would get no repeats still gets one on/off of its own."""
     delays = _hue_echo_delays(light_id, state)
+    if (not delays and group and "on" in state and not
+            (_hue_repair_write.get() or _hue_unpaced.get() or _hue_no_echo.get())):
+        delays = HUE_GROUP_FOLLOW_S
     if delays:
         _start_hue_echo(ip, username, light_id, state, delays)
 

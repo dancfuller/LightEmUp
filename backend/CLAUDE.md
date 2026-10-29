@@ -393,6 +393,16 @@ rooms exactly — 81 "Living room" (10,13,16,17,18,19,22,23,24), 82 "Bedroom"
   recorded for power recovery, handed to the same verifies and backstop checks, and
   uncertified members still get their per-bulb early repeats on top. All lights
   off, zones, schedules and Ask reach it through `control_room`.
+- **Every member also gets its own on/off after the group command (v3.68.4)**,
+  `HUE_GROUP_FOLLOW_S` (1.5s) later, via `schedule_hue_echo(..., group=True)`. A
+  groupcast gets no per-bulb acknowledgment, so a bulb that misses it is never
+  retried, and the bridge records it as switched anyway: every check then reads the
+  lie. 2026-10-29 07:29, the sunrise off went to Exterior Front as group 4. The
+  TV-side Innr got its early repeats and was re-sent. The Driveway, a Philips and
+  so certified, got nothing and kept last night's colors while three checks read
+  it off. A one-light command is acknowledged and retried by the radio itself.
+  Uncertified bulbs keep their two repeats (not three); the same scopes and the
+  newer-command rule apply. Scratch test (7 assertions).
 - Covered by a scratch test (12 assertions) through the real `control_room` with a
   fake bridge: one group command for off and on, Innr repeats after it, verifies
   armed for every light, colors / pending levels / one-light rooms / no matching
