@@ -9440,12 +9440,56 @@ async def _ask_set_power(targets: list, on: bool, except_rooms: Optional[list] =
     return f"{', '.join(done)} {'on' if on else 'off'}{left}"
 
 
-async def _ask_set_white(targets: list, kelvin: int, brightness: int = 100) -> str:
+async def _ask_level(room_name: str, keys: Optional[set] = None) -> Optional[int]:
+    """The level a room (or just `keys` in it) is showing now, in percent, or None
+    when it's off or nothing reports one. A new look asked for with no level keeps
+    this one (v3.68.6): "living room 60%", then "a Halloween scene" used to jump
+    back to 100%. Hue lights are read from the bridge; a Govee light only says what
+    it was last sent. Excluded lights don't count — the look won't touch them."""
+    room = (config.get("rooms", {}) or {}).get(room_name) or {}
+    skip = _room_excluded(room_name)
+    want = lambda k: (keys is None or k in keys) and k not in skip
+    hue_states = await _hue_states_by_id()
+    hue = [hue_states.get(str(lid)) or {} for lid in room.get("hue_light_ids", [])
+           if want(f"hue:{lid}")]
+    levels = [round(int(s.get("brightness") or 0) * 100 / 254) for s in hue
+              if s.get("on") and s.get("reachable", True)]
+    if not levels and not any(s.get("on") for s in hue):
+        dev = config.get("device_state", {}) or {}
+        for slug in room.get("govee_devices", []):
+            d = dev.get(f"govee:{slug}") or {}
+            if want(f"govee:{slug}") and d.get("on") is not False and d.get("brightness") is not None:
+                levels.append(int(d["brightness"]))
+    if not levels:
+        return None
+    return max(1, min(100, round(sum(levels) / len(levels))))
+
+
+async def _ask_level_for(room_name: str, brightness: Optional[int],
+                         keys: Optional[set] = None) -> tuple:
+    """(level, kept): the level asked for, else the one showing, else 100."""
+    if brightness is not None:
+        return max(1, min(100, int(brightness))), False
+    now = await _ask_level(room_name, keys)
+    return (now, True) if now is not None else (100, False)
+
+
+def _ask_levels_note(levels: dict) -> str:
+    """" at 40%", or per room when they differ, so the result says the level used
+    and the model can't report a level it didn't set."""
+    vals = set(levels.values())
+    if len(vals) == 1:
+        return f" at {vals.pop()}%"
+    return " (" + ", ".join(f"{r} at {b}%" for r, b in levels.items()) + ")"
+
+
+async def _ask_set_white(targets: list, kelvin: int, brightness: Optional[int] = None) -> str:
     rooms = _ask_targets(targets)
-    k, b = max(2000, min(6500, int(kelvin))), max(1, min(100, int(brightness)))
+    k, levels = max(2000, min(6500, int(kelvin))), {}
     for r in rooms:
-        await _apply_room_white(r, k, b, source=ASK_SOURCE, source_detail="Ask")
-    return f"{', '.join(rooms)} to {k}K at {b}%" + _ask_excluded_note(rooms)
+        levels[r], _ = await _ask_level_for(r, brightness)
+        await _apply_room_white(r, k, levels[r], source=ASK_SOURCE, source_detail="Ask")
+    return f"{', '.join(rooms)} to {k}K{_ask_levels_note(levels)}" + _ask_excluded_note(rooms)
 
 
 async def _ask_set_color(targets: list, red: int, green: int, blue: int,
@@ -9487,7 +9531,7 @@ def _ask_swatch_hex(entry: dict) -> str:
 
 async def _ask_apply_palette(targets: list, palette: Optional[str] = None,
                              category: Optional[str] = None, preset: Optional[str] = None,
-                             brightness: int = 100, lights: Optional[list] = None,
+                             brightness: Optional[int] = None, lights: Optional[list] = None,
                              colors: Optional[list] = None) -> str:
     rooms = _ask_targets(targets)
     picked = []
@@ -9529,13 +9573,18 @@ async def _ask_apply_palette(targets: list, palette: Optional[str] = None,
         if not found:
             raise ask.AskError(f"No team, college or country called {preset!r}.")
         chosen = {"name": found[1]["name"], "colors": found[1]["colors"]}
-    b = max(1, min(100, int(brightness or 100)))
+    levels = {}
     if picked:
         done = []
         for r in rooms:
             keys = {l["key"] for l in picked if l["room"] == r}
             if not keys:
                 continue
+            # Those lights' own level if they report one, else the room's.
+            b, kept = await _ask_level_for(r, brightness, keys)
+            if brightness is None and not kept:
+                b, _ = await _ask_level_for(r, None)
+            levels[r] = b
             req = _build_palette_scene(r, chosen, b)
             if req is None:
                 raise ask.AskError(f"{r} has no lights a palette can use.")
@@ -9546,12 +9595,15 @@ async def _ask_apply_palette(targets: list, palette: Optional[str] = None,
             req.label, req.source, req.source_detail = f"Palette · {chosen['name']}", ASK_SOURCE, "Ask"
             await scene_room_apply(req)
             done.extend(l["name"] for l in picked if l["room"] == r)
-        return f"{', '.join(done)} to {chosen['name']} (rest of the room unchanged)"
+        return (f"{', '.join(done)} to {chosen['name']}{_ask_levels_note(levels)} "
+                "(rest of the room unchanged)")
     # One palette for every room, like a zone schedule: a coherent look, not a
-    # different random pick per room.
+    # different random pick per room. Each room keeps its own level unless one was asked.
     for r in rooms:
-        await _apply_room_palette(r, chosen, b, source=ASK_SOURCE, source_detail="Ask")
-    return f"{', '.join(rooms)} to {chosen['name']}" + _ask_excluded_note(rooms)
+        levels[r], _ = await _ask_level_for(r, brightness)
+        await _apply_room_palette(r, chosen, levels[r], source=ASK_SOURCE, source_detail="Ask")
+    return (f"{', '.join(rooms)} to {chosen['name']}{_ask_levels_note(levels)}"
+            + _ask_excluded_note(rooms))
 
 
 async def _ask_start_light_show(room: str, mode: Optional[str] = None) -> str:

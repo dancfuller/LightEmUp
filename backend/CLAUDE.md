@@ -2498,7 +2498,20 @@ the light-show rules for free, and it can't do anything the app can't.
   on the broken code).
 - **Memory**: per `X-Client-Id`, `CONVO_TTL_S` (3 min), so "which lamp?" → "the left
   one" and "go ahead?" → "yes" work. In memory only; a failed or step-exhausted
-  request forgets it so a dangling tool call can't poison the next turn.
+  request forgets it so a dangling tool call can't poison the next turn. **Nothing
+  about the house depends on it**: levels and colors come from the state block,
+  read fresh every turn, so "60%" an hour ago is still known — it's on the bridge.
+- **A new look keeps the room's level (v3.68.6).** `set_white`, `set_color` and
+  `apply_palette` take brightness as optional; omitted, `_ask_level_for` uses the
+  level the room shows now (`_ask_level`: lit, reachable, non-excluded Hue lights
+  from the bridge; else Govee "last sent"; for `apply_palette` with `lights`, those
+  lights first), and 100% only when the room is off. Live: "living room 40%" then
+  "a Halloween scene" went to 100%, because `apply_palette` defaulted to 100 — the
+  model had correctly left the level out. The prompt and the `_KEEP_LEVEL` schema
+  description tell the model not to fill in 100%, and each result names the level
+  it used ("Living Room to Halloween at 40%"), so the journal's `Ask … ->` line
+  shows it. **The level is decided in code, not by the model**: don't "fix" a
+  level bug with prompt text alone.
 - **Haiku 5.5 (v3.62.1).** Same tools and prompt; what changed and why:
   - **Thinking is ON at `low` effort** (`THINKING`, `EFFORT`, sent as
     `output_config`). With it off, 5.5 reasoned IN its reply — "The user says 'make

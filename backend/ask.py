@@ -75,6 +75,9 @@ _RGB = {
     "blue": {"type": "integer", "minimum": 0, "maximum": 255},
 }
 _BRIGHTNESS = {"type": "integer", "minimum": 1, "maximum": 100, "description": "Percent."}
+# On a new look, leaving the level out keeps the one the room shows (v3.68.6).
+_KEEP_LEVEL = {**_BRIGHTNESS, "description": "Percent. Omit unless a level was asked for: "
+               "the room then keeps the level it shows now (100% if it's off)."}
 
 
 def _tool(name, description, properties, required):
@@ -95,10 +98,10 @@ def build_tools(mode_keys: list) -> list:
         _tool("set_white", "Set rooms to a white. 2700 is incandescent/soft white; \"cool white\" and daylight are 6500 (the app's Cool White button).",
               {"targets": _TARGETS,
                "kelvin": {"type": "integer", "minimum": 2000, "maximum": 6500},
-               "brightness": _BRIGHTNESS, "confirmed": _CONFIRMED},
-              ["targets", "kelvin", "brightness"]),
+               "brightness": _KEEP_LEVEL, "confirmed": _CONFIRMED},
+              ["targets", "kelvin"]),
         _tool("set_color", "Set every light in rooms to one solid color.",
-              {"targets": _TARGETS, **_RGB, "brightness": _BRIGHTNESS, "confirmed": _CONFIRMED},
+              {"targets": _TARGETS, **_RGB, "brightness": _KEEP_LEVEL, "confirmed": _CONFIRMED},
               ["targets", "red", "green", "blue"]),
         _tool("set_brightness", "Change the brightness of rooms without changing their colors.",
               {"targets": _TARGETS, "brightness": _BRIGHTNESS, "confirmed": _CONFIRMED},
@@ -116,7 +119,7 @@ def build_tools(mode_keys: list) -> list:
                "lights": {"type": "array", "minItems": 1, "items": {"type": "string"},
                           "description": "Only these lights (exact names, in the target "
                                          "rooms); every other light keeps what it shows."},
-               "brightness": _BRIGHTNESS, "confirmed": _CONFIRMED},
+               "brightness": _KEEP_LEVEL, "confirmed": _CONFIRMED},
               ["targets"]),
         _tool("start_light_show", "Start a light show in a room, or switch the mode of one "
               "that's already running. Handles a room that's off by itself.",
@@ -201,6 +204,9 @@ Not set_power — that only resumes the last look.
 - Levels: "dim" is never a question — it is set_brightness, 30% with no number. "Full"/"max" = 100%. RELATIVE changes start \
 from the room's current level in the state: "brighter"/"dimmer" = 20 points, "a bit" \
 or "a little" = 10, "a lot"/"much" = 40; keep it within 1-100.
+- A new look (a color, white, palette or scene) with NO level said keeps the level \
+the room is at: leave brightness out and the hub keeps it. Don't fill in 100%. Give \
+brightness only when they say a level, or a rule here sets one (moods, "<room> on").
 - "Warmer"/"cooler" on a room showing a white: set_white 500K lower (warmer, not below \
 2200) or higher (cooler, not above 6500) than its current white, keeping its level. \
 On a room showing colors, say that warmer/cooler applies to whites and offer a warm \
