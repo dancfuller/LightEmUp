@@ -294,18 +294,49 @@ function hsvToRgb(h, s, v) {
 let API_LAST_WRITE_AT = 0;
 function apiLastWriteAt() { return API_LAST_WRITE_AT; }
 
+// Can this page reach the Pi at all (v3.68.7)? Controls are optimistic, so a phone
+// that isn't on the home Wi-Fi showed every tap "working" while nothing left it:
+// 2026-10-31, the dining lamp "wasn't replying" and the Pi's log had no request from
+// that phone all day. Any answer from the Pi, even an error, means it's reachable;
+// only a request that never got one (network failure) means it isn't. app.js's
+// event stream reports too. `useApiReach()` re-renders on a change.
+let API_REACH_OK = true;
+function setApiReach(ok) {
+  if (ok === API_REACH_OK) return;
+  API_REACH_OK = ok;
+  window.dispatchEvent(new CustomEvent("leu-reach", { detail: ok }));
+}
+function useApiReach() {
+  const [ok, setOk] = useState(API_REACH_OK);
+  useEffect(() => {
+    const on = (e) => setOk(e.detail);
+    window.addEventListener("leu-reach", on);
+    setOk(API_REACH_OK);
+    return () => window.removeEventListener("leu-reach", on);
+  }, []);
+  return ok;
+}
+
 async function api(path, options = {}) {
   if (options.method && options.method !== "GET") API_LAST_WRITE_AT = Date.now();
   try {
     const { headers: optHeaders, ...rest } = options;
-    const res = await fetch(`${API}${path}`, {
-      ...rest,
-      headers: {
-        "Content-Type": "application/json",
-        "X-Client-Id": CLIENT_ID,
-        ...(optHeaders || {}),
-      },
-    });
+    let res;
+    try {
+      res = await fetch(`${API}${path}`, {
+        ...rest,
+        headers: {
+          "Content-Type": "application/json",
+          "X-Client-Id": CLIENT_ID,
+          ...(optHeaders || {}),
+        },
+      });
+    } catch (netErr) {
+      // No answer at all. A caller's own abort is not the network's fault.
+      if (netErr && netErr.name !== "AbortError") setApiReach(false);
+      throw netErr;
+    }
+    setApiReach(true);
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.detail || `HTTP ${res.status}`);

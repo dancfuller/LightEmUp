@@ -1122,6 +1122,19 @@ Apply skips them; the Light Show panel lists them as "excluded in the room".
   room (so "Schedule this look" captures every light) and the backend drops excluded
   lights at apply time.
 
+## "Can't reach LightEmUp" (v3.68.7)
+Optimistic UI's blind spot: on a device that can't reach the Pi (off the home Wi-Fi),
+every tap looks like it worked and nothing happens. `api()` (utils.js) now calls
+`setApiReach(false)` when a request gets NO answer (a network failure, not an HTTP
+error, and not the caller's own abort) and `setApiReach(true)` on any answer; the
+event stream does the same in app.js after 8 s down (longer than a deploy's restart).
+`ReachBanner` (components-shared.js) sits first in the sticky header, so it's on
+screen while scrolled, and says to check the Wi-Fi; app.js re-checks `/version`
+every 8 s while it shows and runs `loadAll()` when the Pi answers again. The usage
+log's own `fetch` is deliberately outside this. Express shows its own error already
+and now ends with the version line, like the app. Verified with every `/api` request
+aborted in the browser (`tools/preview/_shoot_reach.mjs`, scratch) at 1440 and 402px.
+
 ## Lists of lights are alphabetical (v3.68.3)
 `sortLightsByName(lights, nicknames)` (utils.js) orders lights by the name their
 card shows (nickname, else the product name), with Hue and Govee mixed. Before, every

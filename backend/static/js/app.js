@@ -750,12 +750,34 @@ function App() {
       if (syncTimer.current) clearTimeout(syncTimer.current);
       syncTimer.current = setTimeout(() => { loadAll(); }, 400);
     };
-    es.onerror = () => { /* EventSource auto-reconnects */ };
+    // EventSource reconnects by itself. Still down after 8s (longer than a deploy's
+    // restart) means the Pi can't be reached: say so (v3.68.7, ReachBanner).
+    let downTimer = null;
+    es.onopen = () => { clearTimeout(downTimer); downTimer = null; setApiReach(true); };
+    es.onerror = () => {
+      if (downTimer) return;
+      downTimer = setTimeout(() => {
+        downTimer = null;
+        if (es.readyState !== EventSource.OPEN) setApiReach(false);
+      }, 8000);
+    };
     return () => {
       if (syncTimer.current) clearTimeout(syncTimer.current);
+      clearTimeout(downTimer);
       es.close();
     };
   }, [loadAll]);
+
+  // While the Pi can't be reached, check every 8s, and re-read everything the
+  // moment it answers: whatever was tapped meanwhile never happened.
+  const reachOk = useApiReach();
+  useEffect(() => {
+    if (reachOk) return;
+    const t = setInterval(() => {
+      api("/version").then(() => loadAll()).catch(() => {});
+    }, 8000);
+    return () => clearInterval(t);
+  }, [reachOk, loadAll]);
 
   // Fetch version once on boot — cheap, doesn't change without a restart.
   useEffect(() => {
@@ -1515,6 +1537,7 @@ function App() {
         position: "sticky", top: 0, background: "rgba(10,15,30,0.95)",
         backdropFilter: "blur(12px)", zIndex: 100,
       }}>
+        <ReachBanner onRetry={() => loadAll()} isMobile={isMobile} />
         <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 8 : 12 }}>
           <span style={{ fontSize: isMobile ? 22 : 28 }}>🔆</span>
           <h1 style={{ fontSize: isMobile ? 18 : 22, fontWeight: 800, margin: 0, letterSpacing: -0.5 }}>LightEmUp</h1>

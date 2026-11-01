@@ -54,6 +54,7 @@
     #retry { display: block; margin: 16px auto 0; padding: 12px 24px; border-radius: 999px;
       border: 1px solid #334155; background: #1e293b; color: #e2e8f0; font: inherit; font-weight: 600; }
     [hidden] { display: none !important; }
+    #ver { margin-top: 28px; font-size: 12px; color: #475569; text-align: center; }
     /* Ask (v3.67.0): the same /api/ask as the app's Ask bar, in plain JS. */
     #ask { margin-bottom: 18px; }
     #ask form { display: flex; gap: 10px; }
@@ -109,6 +110,7 @@
   <div id="buttons"></div>
   <div id="msg">Loading…</div>
   <button id="retry" hidden>Try again</button>
+  <footer id="ver"></footer>
 </main>
 <script>
 (function () {
@@ -264,6 +266,11 @@
   // keyboard) instead of doing nothing — same as the app.
   go.onclick = function (e) { if (!busy && !input.value.trim()) { e.preventDefault(); input.focus(); } };
   input.oninput = paintGo;
+
+  // Which build this is, as at the bottom of the app (v3.68.7).
+  fetch("/api/version").then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (v) { if (v) document.getElementById("ver").textContent =
+      "LightEmUp " + (v.display || ("v" + v.version)); }, function () {});
 
   fetch("/api/ask/status").then(function (r) { return r.ok ? r.json() : null; })
     .then(function (s) { if (s && !s.enabled) askBox.hidden = true; }, function () {});

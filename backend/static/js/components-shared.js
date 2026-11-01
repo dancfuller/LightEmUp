@@ -1019,3 +1019,40 @@ function DevicePickerModal({ title, devices, onSelect, onClose, nicknames }) {
     </div>
   );
 }
+// ─── "Can't reach LightEmUp" (v3.68.7) ──────────────────────────────────────
+// Every control is optimistic, so on a phone that can't reach the Pi (not on the
+// home Wi-Fi, usually) a tap LOOKS like it worked and nothing happens. This sits
+// in the sticky header, so it's on screen wherever you are, and renders nothing
+// while the Pi answers. `onRetry` re-reads everything; app.js also re-checks on
+// its own every few seconds while this shows.
+function ReachBanner({ onRetry, isMobile }) {
+  const ok = useApiReach();
+  const [trying, setTrying] = useState(false);
+  if (ok) return null;
+  const retry = () => {
+    setTrying(true);
+    Promise.resolve(onRetry?.()).catch(() => {}).finally(() => setTrying(false));
+  };
+  return (
+    <div role="alert" style={{
+      flex: "1 1 100%", order: -1,
+      display: "flex", alignItems: "center", gap: isMobile ? 10 : 14, flexWrap: "wrap",
+      padding: isMobile ? "10px 12px" : "10px 16px", borderRadius: 12,
+      background: "rgba(127,29,29,0.92)", border: "1px solid #f87171",
+    }}>
+      <div style={{ flex: "1 1 220px", minWidth: 0 }}>
+        <div style={{ fontSize: isMobile ? 14 : 15, fontWeight: 800, color: "#fecaca" }}>
+          Can't reach LightEmUp
+        </div>
+        <div style={{ fontSize: isMobile ? 12 : 13, color: "#fca5a5", lineHeight: 1.4 }}>
+          Nothing you tap is getting to the lights. Check this {isMobile ? "phone" : "device"} is on the home Wi-Fi.
+        </div>
+      </div>
+      <button onClick={retry} disabled={trying} style={{
+        padding: isMobile ? "10px 16px" : "8px 16px", minHeight: isMobile ? 44 : 36,
+        borderRadius: 10, border: "1px solid #fca5a5", background: "#dc2626", color: "#fff",
+        fontSize: 13, fontWeight: 800, cursor: trying ? "default" : "pointer", whiteSpace: "nowrap",
+      }}>{trying ? "Trying…" : "Try again"}</button>
+    </div>
+  );
+}
