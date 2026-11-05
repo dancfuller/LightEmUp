@@ -1087,6 +1087,53 @@ def govee_repair_scope():
         _govee_repair_write.reset(token)
 
 
+# ─── A level sent with an "on" is lost (v3.68.8) ─────────────────────────────
+# A Govee light switched on comes back at the level IT remembers, and a level
+# command arriving in the same instant is dropped. 2026-11-05: Express sent
+# "Inside · Incandescent 100%"; the Rope Light and Stairway Light came on at their
+# old levels (the Stairway at 68%) while the color took. Reproduced on the Rope
+# Light: off at 40%, then on + color + 100% back to back, still 40% eight seconds
+# later; the same 100% sent 0.3s or more after the on stuck every time.
+#
+# So a level sent within GOVEE_ON_WINDOW_S of an "on" is sent once more,
+# GOVEE_ON_LEVEL_ECHO_S after that on. Here, at the one call every LAN command
+# goes through, so power recovery, identify, the room toggle, whites, scenes and
+# Ask all get it. Only the LEVEL: the color sent with the same on took, and a
+# repeated color would wipe a segmented light's segment colors (a level doesn't).
+# The repeat only ever restates the LATEST level while the light is still meant
+# on: any newer level, or any newer on/off, cancels it.
+GOVEE_ON_WINDOW_S = 0.5
+GOVEE_ON_LEVEL_ECHO_S = 1.0
+_govee_on_at: dict = {}        # ip -> monotonic time of the last "on" sent
+_govee_level_seq: dict = {}    # ip -> how many levels it has been sent
+_govee_level_sent: dict = {}   # ip -> (level, that count, monotonic time sent)
+
+
+def govee_level_sent(ip) -> Optional[tuple]:
+    """The last level this device was sent: (level, count, monotonic time), or None."""
+    return _govee_level_sent.get(str(ip))
+
+
+def govee_level_seq(ip) -> int:
+    """How many level commands this device has been sent (0 if none)."""
+    return _govee_level_seq.get(str(ip), 0)
+
+
+async def _govee_level_echo(ip: str, level: int, level_seq: int, power_seq: int,
+                            delay: float):
+    try:
+        await asyncio.sleep(max(0.0, delay))
+        if govee_level_seq(ip) != level_seq or govee_write_seq(ip) != power_seq:
+            return
+        # A restatement, not a new level: it mustn't count or schedule itself.
+        with govee_repair_scope():
+            await govee_lan_send(ip, "brightness", {"value": level})
+    except asyncio.CancelledError:
+        pass
+    except Exception:
+        pass   # a lost repeat must never surface as an error
+
+
 async def govee_lan_send(ip: str, cmd: str, data: dict, repeat: bool = True) -> Optional[dict]:
     """Fire-and-forget LAN control command. Govee control commands don't send a
     reply, so we don't wait for one — waiting blocked up to 3s per command,
@@ -1098,6 +1145,21 @@ async def govee_lan_send(ip: str, cmd: str, data: dict, repeat: bool = True) -> 
     # lands, and a pending power check must not reverse it either way.
     if cmd == "turn" and not _govee_repair_write.get():
         _govee_write_seq[str(ip)] = _govee_write_seq.get(str(ip), 0) + 1
+    if cmd == "turn":
+        if data.get("value") == 1:
+            _govee_on_at[str(ip)] = time.monotonic()
+        else:
+            _govee_on_at.pop(str(ip), None)
+    elif cmd == "brightness" and not _govee_repair_write.get():
+        ip_s, now = str(ip), time.monotonic()
+        seq = _govee_level_seq.get(ip_s, 0) + 1
+        _govee_level_seq[ip_s] = seq
+        _govee_level_sent[ip_s] = (data.get("value"), seq, now)
+        on_at = _govee_on_at.get(ip_s)
+        if on_at is not None and now - on_at <= GOVEE_ON_WINDOW_S:
+            asyncio.create_task(_govee_level_echo(
+                ip_s, data.get("value"), seq, govee_write_seq(ip_s),
+                on_at + GOVEE_ON_LEVEL_ECHO_S - now))
     loop = asyncio.get_event_loop()
 
     def _send():

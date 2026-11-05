@@ -190,6 +190,43 @@ looking for one next time.
   `room_last_applied[room]`** — stored ON the entry so it dies the moment a new look is
   recorded. A stale "didn't take" outliving the problem would be its own lie.
 
+### A Govee light switched on keeps its OWN level — re-send it (v3.68.8)
+2026-11-05 09:08, Express "Inside · Incandescent 100%": the Rope Light and the
+Stairway Light came on at their old levels (the Stairway at 68%), and the check
+above said "5 already correct", because it only judged power. Reproduced on the
+Rope Light: at 40%, off, then on + color + 100% back to back, it read 40% eight
+seconds later. The color took. The same 100% sent 0.3s or more after the on
+stuck every time. **A Govee light coming on restores the level it remembers, and
+a level arriving in the same instant as the on is dropped.**
+- **`discovery.govee_lan_send` re-sends it**: a `brightness` sent within
+  `GOVEE_ON_WINDOW_S` (0.5s) of a `turn` on goes once more at
+  `GOVEE_ON_LEVEL_ECHO_S` (1s) after that on. It sits in the one call every LAN
+  command goes through, so power recovery, identify, the room toggle, whites,
+  scenes and Ask all get it with no caller changes. Only the LEVEL: the color
+  took, and a repeated `colorwc` would wipe a segmented light's segment colors (a
+  level doesn't). It restates only the LATEST level while the light is still
+  meant on: a newer level or any newer on/off cancels it (an off must, since a
+  Govee level command wakes the light). It runs in `govee_repair_scope`, so it
+  isn't counted as a new level and can't repeat itself.
+- **The verify checks the level too, when the command set one.**
+  `schedule_govee_verify` takes the level from `govee_level_sent(ip)` (what was
+  SENT, so no caller passes it) when it is under `GOVEE_LEVEL_FRESH_S` (5s) old
+  and the expectation is "on"; an older level isn't this command's, and checking
+  it would undo a level Google Home set since. The read waits until
+  `GOVEE_LEVEL_VERIFY_S` (3s) after the level, past the 1s re-send.
+  `_govee_level_check` re-sends a wrong level once (±1 counts as right), re-reads,
+  and records kind `brightness` in Delivery health; a newer level since is left
+  alone. A light whose power had to be re-sent comes on at its own level, so its
+  level is checked straight after.
+- devStatus reports the level exactly, which is what makes the check possible: the
+  Govee status check had read the Stairway at 68% while this check passed it.
+- Verified live on the Living Room's Rope, Globe and Hex (40%, off, then on at
+  100%: all read 100%, where the Rope stayed at 40% before), and by a scratch test
+  (12 checks): the re-send timing, an off / a newer level / a newer on cancelling
+  it, no re-send without an on or 0.7s after it, and the verify repairing a wrong
+  level, passing a right one, leaving a newer or an old level alone, skipping an
+  off, and reading after the re-send.
+
 ### Every Hue color goes out as xy — the room Controls color too (v3.57.2)
 `control_room` (the room's Controls color, `POST /api/rooms/control` with r/g/b)
 sent Hue **hue/sat** from its own "simplified" conversion. No check in this app

@@ -37,6 +37,8 @@ from discovery import (
     hue_supported_state,
     govee_write_seq,
     govee_repair_scope,
+    govee_level_sent,
+    govee_level_seq,
     discover_govee_lan,
     govee_lan_turn,
     govee_lan_brightness,
@@ -5167,12 +5169,21 @@ async def _hue_verify_repair(expectations: dict, compare_color: bool = False,
 # `onOff` reliably; color it does not, and a Govee-app animation isn't a static
 # state at all (see `rooms_status`). Verifying color would manufacture the false
 # confidence this is meant to remove. Power is the one claim we can prove.
+#
+# LEVEL too, since v3.68.8, when the same command set one: devStatus reports the
+# level exactly (the status check is what caught the Stairway at 68% after a
+# 100% Express press, while this check said "already correct"). See
+# GOVEE_ON_WINDOW_S in discovery.py for why a level sent with an "on" gets lost.
 GOVEE_VERIFY_SETTLE_S = 1.5    # let both copies of the double-send land first
+GOVEE_LEVEL_VERIFY_S = 3.0     # a level is read this long after it was sent (past
+                               # discovery's re-send, which goes at 1s)
+GOVEE_LEVEL_FRESH_S = 5.0      # a level older than this wasn't part of this command
 
 # Verification is COALESCED like Hue's: a zone off spanning several rooms
 # registers into one pending map and costs a single pass.
 _govee_verify_pending: dict = {}
 _govee_verify_since: dict = {}   # ip -> its power-write count when the expectation was made
+_govee_verify_level: dict = {}   # ip -> (level, level count, sent at) the command set
 _govee_verify_task: Optional[asyncio.Task] = None
 
 
@@ -5188,8 +5199,17 @@ def schedule_govee_verify(expectations: dict, since: Optional[dict] = None):
     if not expectations:
         return
     _govee_verify_pending.update(expectations)
-    for ip in expectations:
+    now = time.monotonic()
+    for ip, (want_on, _room) in expectations.items():
         _govee_verify_since[str(ip)] = (since or {}).get(str(ip), govee_write_seq(ip))
+        # The level this command set, if it set one. Taken from what was SENT, so
+        # no caller has to pass it; one sent minutes ago isn't this command's, and
+        # checking it would undo a level set since by Google Home or the Govee app.
+        lv = govee_level_sent(ip)
+        if want_on and lv and lv[0] is not None and now - lv[2] <= GOVEE_LEVEL_FRESH_S:
+            _govee_verify_level[str(ip)] = lv
+        else:
+            _govee_verify_level.pop(str(ip), None)
     if _govee_verify_task is None or _govee_verify_task.done():
         _govee_verify_task = asyncio.create_task(_govee_verify_drain())
 
@@ -5202,9 +5222,16 @@ async def _govee_verify_drain(settle_s: float = GOVEE_VERIFY_SETTLE_S):
             await asyncio.sleep(settle_s)
             batch = dict(_govee_verify_pending)
             since = {str(k): _govee_verify_since.get(str(k)) for k in batch}
+            levels = {str(k): _govee_verify_level[str(k)] for k in batch
+                      if str(k) in _govee_verify_level}
             _govee_verify_pending.clear()
             _govee_verify_since.clear()
-            await _govee_verify_repair(batch, since=since)
+            _govee_verify_level.clear()
+            if levels:
+                # Read levels only once discovery's own re-send has landed.
+                newest = max(lv[2] for lv in levels.values())
+                await asyncio.sleep(max(0.0, newest + GOVEE_LEVEL_VERIFY_S - time.monotonic()))
+            await _govee_verify_repair(batch, since=since, levels=levels)
     except asyncio.CancelledError:
         pass
     except Exception:
@@ -5226,7 +5253,37 @@ def _govee_label(ip: str) -> str:
     return ip
 
 
-async def _govee_verify_repair(expectations: dict, since: Optional[dict] = None):
+async def _govee_level_check(ip: str, label: str, room_name: str, state: dict,
+                             level: tuple, failed: dict):
+    """The level half of the verify (v3.68.8). `state` is a fresh read of a light
+    that is on as asked; `level` is (level, level count, sent at) from the command.
+    Re-sends ONCE if it's wrong, then re-reads."""
+    want, seq, _at = level
+    if govee_level_seq(ip) != seq:
+        return "superseded"      # a newer level since; that one is the intent now
+    got = state.get("brightness")
+    if got is None or abs(int(got) - int(want)) <= 1:
+        return "correct"
+    log.info("Govee verify: %s (%s) is at %s%%, not %s%% — re-sending the level",
+             label, ip, got, want)
+    try:
+        with govee_repair_scope():
+            await govee_lan_brightness(ip, int(want))
+        await asyncio.sleep(GOVEE_VERIFY_SETTLE_S)
+        again = await govee_lan_get_state(ip)
+    except Exception:
+        again = None
+    if again is not None and abs(int(again.get("brightness") or 0) - int(want)) <= 1:
+        log.info("Govee verify: %s level repaired", label)
+        record_repair(gv_key_for_ip(ip), label, "brightness")
+        return "repaired"
+    log.warning("Govee verify: %s is still not at %s%% after a re-send", label, want)
+    failed.setdefault(room_name, []).append(label)
+    return "stuck"
+
+
+async def _govee_verify_repair(expectations: dict, since: Optional[dict] = None,
+                               levels: Optional[dict] = None):
     """expectations: {ip: (want_on, room_name)}. Reads each device back and
     re-sends once to any that didn't take. Queries are SEQUENTIAL — every Govee
     device answers on port 4002 and only one socket may hold it (discovery.py
@@ -5271,8 +5328,14 @@ async def _govee_verify_repair(expectations: dict, since: Optional[dict] = None)
             record_repair(gv_key_for_ip(ip), label, "unreachable")
             failed.setdefault(room_name, []).append(label)
             continue
+        level = (levels or {}).get(str(ip))
         if bool(state.get("on")) == bool(want_on):
-            tally["correct"] += 1
+            if level:
+                outcome = await _govee_level_check(ip, label, room_name, state, level,
+                                                   failed)
+                tally["correct" if outcome == "superseded" else outcome] += 1
+            else:
+                tally["correct"] += 1
             continue
         # ...and again right before re-sending (v3.51.2). The check above runs
         # before the LAN read, and a command landing DURING that read was still
@@ -5299,6 +5362,11 @@ async def _govee_verify_repair(expectations: dict, since: Optional[dict] = None)
             log.info("Govee verify: %s repaired", label)
             tally["repaired"] += 1
             record_repair(gv_key_for_ip(ip), label, "power")
+            if level:
+                # It has just come on at its OWN level (the re-sent on carried
+                # none), so the command's level needs restating too.
+                await _govee_level_check(ip, label, room_name, again, level,
+                                         failed)
             continue
         log.warning("Govee verify: %s is still not %s after a re-send", label, want_word)
         tally["stuck"] += 1
