@@ -719,19 +719,30 @@ def pending_brightness(key: str) -> Optional[int]:
         return None
 
 
-def set_pending_brightness(key: str, pct: Optional[int]):
+def set_pending_brightness(key: str, pct: Optional[int], applied: bool = False):
     """Remember (or clear) a level for the next power-on.
 
     Cleared whenever a real brightness reaches the device, so it can never
-    resurrect an old level after a scene or a preset has set a new one."""
+    resurrect an old level after a scene or a preset has set a new one.
+    `applied` says the level is being sent with a power-on right now.
+
+    Every change is logged (v3.68.9): rooms were reported coming on at 75%,
+    which is what an OFF room's slider shows, and a brush of that slider saves
+    a level silently. The log is how to tell whether that's where it came from."""
     store = config.setdefault("pending_brightness", {})
     if pct is None:
-        if store.pop(key, None) is None:
+        old = store.pop(key, None)
+        if old is None:
             return
+        if applied:
+            log.info("Saved level: %s turned on at its saved %s%%", key, old)
+        else:
+            log.info("Saved level: %s's %s%% dropped, a newer level reached it", key, old)
     else:
         if store.get(key) == int(pct):
             return
         store[key] = int(pct)
+        log.info("Saved level: %s will come on at %d%% (set while it was off)", key, int(pct))
     schedule_save()
 
 
@@ -4576,7 +4587,7 @@ async def control_hue_light(req: HueLightStateRequest):
         want = pending_brightness(key)
         if want is not None:
             state["bri"] = max(1, min(254, round(want * 254 / 100)))
-            set_pending_brightness(key, None)
+            set_pending_brightness(key, None, applied=True)
     if req.hue is not None:
         state["hue"] = req.hue
     if req.saturation is not None:
@@ -5431,7 +5442,7 @@ async def control_govee(req: GoveeCommandRequest):
         want = pending_brightness(_key)
         if want is not None:
             req = req.model_copy(update={"brightness": want})
-            set_pending_brightness(_key, None)
+            set_pending_brightness(_key, None, applied=True)
 
     # Whole-device command on this IP overrides any razer segment state we
     # were keeping refreshed — cancel before sending so a stale refresh
@@ -5650,6 +5661,16 @@ async def _hue_room_group_power(room_name: str, room: dict, on: bool, ip: str,
     return True
 
 
+# A room LEVEL is latest-wins (v3.68.9). The header slider commits every 180ms,
+# but since v3.60.4 every Hue send is spaced 0.15s, so one level over a nine-bulb
+# room takes ~1.4s of bridge time. Each commit used to run to the end, so a
+# two-second drag queued ~100 sends and the lights kept stepping through old
+# levels for 10-15s after the finger lifted (Living Room, 2026-11-07 21:23). Now
+# a level-only command stops at its next light once a newer level for the same
+# room has arrived; the newer one covers every light anyway.
+_room_level_gen: dict = {}
+
+
 @app.post("/api/rooms/control")
 async def control_room(req: RoomStateRequest):
     """Control all lights in a room at once."""
@@ -5666,6 +5687,10 @@ async def control_room(req: RoomStateRequest):
     # it (v3.53.2) — dimming an animation is not a request to stop animating.
     # Anything else (an on/off, a color) is still a look of its own and retires it.
     level_only = (req.brightness is not None and req.on is None and req.r is None)
+    # Any room command takes a turn, so a level still in flight also yields to an
+    # off or a color pressed mid-drag; only a level checks for being superseded.
+    gen = _room_level_gen[req.room_name] = _room_level_gen.get(req.room_name, 0) + 1
+    superseded = lambda: level_only and _room_level_gen.get(req.room_name) != gen
     if not (level_only and _retune_lightshow_brightness(req.room_name, int(req.brightness))):
         await stop_lightshow(req.room_name, "room controlled directly")
     # ...and so is a lightning storm (v3.50.0), which nothing but its own Stop
@@ -5692,6 +5717,8 @@ async def control_room(req: RoomStateRequest):
                                                 ip, username, results, hue_sent))
     if ip and username and not by_group:
         for light_id in room.get("hue_light_ids", []):
+            if superseded():
+                break
             if f"hue:{light_id}" in skip:
                 results["hue"].append({"light_id": light_id, "success": True,
                                        "skipped": "excluded"})
@@ -5710,7 +5737,7 @@ async def control_room(req: RoomStateRequest):
                 _want = pending_brightness(f"hue:{light_id}")
                 if _want is not None:
                     state["bri"] = max(1, min(254, round(_want * 254 / 100)))
-                    set_pending_brightness(f"hue:{light_id}", None)
+                    set_pending_brightness(f"hue:{light_id}", None, applied=True)
             if req.r is not None and req.g is not None and req.b is not None:
                 # xy, not hue/sat (v3.57.2): the same conversion control_hue_light
                 # uses, and the only color form the verifies can judge. A hue/sat
@@ -5747,6 +5774,8 @@ async def control_room(req: RoomStateRequest):
     # current IP to actually address the device over LAN).
     govee_sent = {}
     for slug in room.get("govee_devices", []):
+        if superseded():
+            break
         if f"govee:{slug}" in skip:
             results["govee"].append({"slug": slug, "success": True, "skipped": "excluded"})
             continue
@@ -5767,7 +5796,7 @@ async def control_room(req: RoomStateRequest):
         elif req.on is True:
             _bri = pending_brightness(f"govee:{slug}")
             if _bri is not None:
-                set_pending_brightness(f"govee:{slug}", None)
+                set_pending_brightness(f"govee:{slug}", None, applied=True)
         if _bri is not None:
             await govee_lan_brightness(device_ip, _bri)
         if req.r is not None and req.g is not None and req.b is not None:

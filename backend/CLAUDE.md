@@ -367,6 +367,16 @@ sending them bursts and stop giving up after one try.
   explicitly**; everything else gets the spacing for free.
 - A nine-light room now takes ~1.25s to send instead of <1s. The light show's own
   0.12s sleep plus the request time already exceeds 0.15s, so shows are unchanged.
+- **…which made the room level slider back up, so a room LEVEL is latest-wins
+  (v3.68.9).** The header slider commits every 180ms and each commit is ~1.4s of
+  bridge time, so every commit running to the end queued ~100 sends for a 2s drag;
+  the lights kept stepping through old levels for 10-15s after the finger lifted
+  (Living Room, 2026-11-07 21:23, and reproduced: 99 sends, last at 15.3s). Every
+  `control_room` call bumps `_room_level_gen[room]`, and a level-only call stops
+  before its next light once the count has moved: 23 sends, last 1.4s after the
+  drag. An off or a color pressed mid-drag stops the level too. **A new caller that
+  fires repeatedly at a room-wide path needs the same treatment** — the pacing
+  makes any fan-out ~0.15s per light, and nothing upstream waits for it.
 - **A missed on/off is re-sent `HUE_POWER_REPAIR_SENDS` (3) times in all,
   `HUE_POWER_REPAIR_GAP_S` (2s) apart** (`_hue_repeat_power`, a background task from
   `_hue_verify_repair`). NOT read back in between: the bridge records a command as
@@ -480,6 +490,12 @@ then cleared.
   backend now also asks the bridge (see "The Fable review's first five").
 - **An explicit level always supersedes a pending one** and clears it, so a scene
   or a white preset can never be undone by a level chosen hours earlier.
+- **Every save, apply and drop is logged as `Saved level: …` (v3.68.9).** Rooms
+  were reported coming on at 75%, which is what an OFF room's header slider shows,
+  and the usage log has brushes of that slider on off rooms (`level-while-off`, two
+  commits, often a second before Soft White beside it). The value was never
+  recorded, so it couldn't be proved. A power-on that consumes one passes
+  `applied=True`; `grep "Saved level"` in the journal answers it next time.
 - **`control_room` needed the consume logic separately**, because it drives
   `set_hue_light_state` / `govee_lan_*` directly instead of going through
   `control_hue_light` / `control_govee`. Without that, "set the level, then turn
