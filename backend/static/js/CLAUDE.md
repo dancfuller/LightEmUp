@@ -797,7 +797,7 @@ add/edit form; `LocationCard` renders in Settings.
     the button says so.
 - **`palette-library.js` is GENERATED — never hand-edit it.** Source of truth is
   `backend/palette_library.json`; regenerate with `python tools/build-palette-library.py`
-  and commit both. It defines `PALETTE_LIBRARY` (144 palettes, variable 2–8 colors) and
+  and commit both. It defines `PALETTE_LIBRARY` (145 palettes, variable 2–8 colors) and
   `PALETTE_CATEGORIES`, and must load **before** `color-mode.js` and `schedules.js`.
 - **Switching action type REBUILDS the action, it doesn't merge (v3.19.1).**
   `setActionType(type, override)` keeps the target and takes that type's own fields from

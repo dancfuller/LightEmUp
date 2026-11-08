@@ -5,7 +5,7 @@
 // The curated palette library, shared by the browser (the room color tool's
 // palette picker) and the Pi (the scheduler's "random palette" action, which
 // fires with no browser attached). It lived inline in color-mode.js until
-// v3.17.0; two copies of 660 colors would
+// v3.17.0; two copies of 666 colors would
 // drift the first time someone added a palette, so both sides now read one file.
 //
 // A palette's `also` lists categories it is ALSO offered under (a holiday in its
@@ -69,6 +69,7 @@ const PALETTE_LIBRARY = [
   { name: "Day of the Dead", category: "Holidays", also: ["Autumn"], colors: [{r:255,g:140,b:0},{r:255,g:30,b:160},{r:120,g:30,b:200},{r:255,g:230,b:80},{r:30,g:200,b:160},{r:200,g:30,b:80}] },
   { name: "Diwali", category: "Holidays", also: ["Autumn"], colors: [{r:255,g:180,b:30},{r:255,g:60,b:80},{r:200,g:60,b:160},{r:255,g:120,b:30}] },
   { name: "Lunar New Year", category: "Holidays", also: ["Winter"], colors: [{r:220,g:30,b:30},{r:255,g:215,b:0},{r:255,g:80,b:80},{r:255,g:160,b:60},{r:255,g:230,b:120}] },
+  { name: "Thanksgiving", category: "Holidays", also: ["Autumn"], colors: [{r:255,g:122,b:0},{r:255,g:74,b:0},{r:255,g:154,b:0},{r:255,g:192,b:0},{r:224,g:26,b:0},{r:255,g:224,b:0}] },
   // Warm
   { name: "Warm", category: "Warm", colors: [{r:255,g:80,b:40},{r:255,g:160,b:30},{r:200,g:60,b:60},{r:218,g:165,b:32}] },
   { name: "Sunset", category: "Warm", featured: true, colors: [{r:255,g:94,b:77},{r:255,g:154,b:0},{r:255,g:206,b:84},{r:200,g:50,b:100},{r:255,g:180,b:120},{r:255,g:130,b:160}] },
