@@ -4235,6 +4235,18 @@ def _govee_status_minutes() -> int:
     return v if v in GOVEE_STATUS_CHOICES else 5
 
 
+# When each light stopped answering the status check (v3.68.11), so a light
+# that comes back can say how long it was gone. A light that went silent and
+# came back ON lost power (a Govee bulb powers up at its last setting); one that
+# answered throughout and changed was switched by Google Home / Alexa / the
+# Govee app. Lives in memory only: a restart forgets an outage in progress.
+_govee_silent_since: dict = {}
+
+
+def _onoff(on) -> str:
+    return "unknown" if on is None else ("on" if on else "off")
+
+
 async def _govee_status_check() -> dict:
     if scene_manager.get_active_rooms():
         return {"at": _now_iso(), "skipped": "a lightning storm is running"}
@@ -4250,10 +4262,21 @@ async def _govee_status_check() -> dict:
             state = None
         if not state:
             silent.append(name)
+            if mac not in _govee_silent_since:     # log the start of an outage once
+                _govee_silent_since[mac] = time.time()
+                log.info("Govee status check: %s stopped answering", name)
             continue
         read += 1
+        gone_since = _govee_silent_since.pop(mac, None)
+        prev = (config.get("device_state", {}).get(gv_key_for_ip(ip, mac)) or {}).get("on")
         if _remember_observed_govee({"ip": ip, "mac": mac}, state):
-            changed.append(name)
+            changed.append(f"{name}: {_onoff(prev)} → {_onoff(state.get('on'))}")
+        if gone_since is not None:
+            log.info("Govee status check: %s answering again after %d min "
+                     "(silent since %s), now %s", name,
+                     round((time.time() - gone_since) / 60),
+                     time.strftime("%H:%M", time.localtime(gone_since)),
+                     _onoff(state.get("on")))
     if changed:
         log.info("Govee status check: %d changed outside LightEmUp (%s)",
                  len(changed), ", ".join(changed))

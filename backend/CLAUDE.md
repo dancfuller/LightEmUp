@@ -1231,6 +1231,14 @@ not in the browser (v2.14.0):
   Settings → Govee Devices "Check status" row.
   What's still possible: a change made outside LightEmUp within the last interval
   shows on the first paint until the page's own scan lands.
+- **The status check tells a power cut from a remote command (v3.68.11).** A light
+  that stops answering is logged once (`Lampost stopped answering`, start time kept
+  in `_govee_silent_since`, memory only); when it answers again the log says how
+  long it was gone and whether it's on. A changed light is logged as `Name: off → on`.
+  Why: the Lampost twice came back on mid-day after the sunrise schedule turned it
+  off. A Govee bulb powers up at its last setting, so "silent, then back on" = it
+  lost power (the lamppost's taped-over light sensor); "answered throughout, then
+  on" = Google Home / Alexa / the Govee app. `grep "Govee status check"`.
 - `GET /api/hue/lights` attaches `state.color` (RGB from the reported xy via
   `_hue_xy_to_rgb`) so the frontend paints the current color from backend data.
 - `GET /api/govee/segment-state` returns the UI shape directly:

@@ -352,16 +352,19 @@ function RoomSection({ name, hueLights, goveeDevices, onControlHue, onControlGov
   // light's remembered brightness isn't what you're looking at. Hue reports
   // 1–254, Govee 0–100, so they're normalized before averaging. Used until you
   // drag, after which your own value stands (it's what was sent, so it matches).
-  const litPcts = allLights
-    .filter(l => l.state?.on)
-    .map(l => l.type === "hue"
-      ? Math.round(((l.state.brightness ?? 0) / 254) * 100)
-      : Math.round(l.state.brightness ?? 0));
-  const avgBrightness = litPcts.length
-    ? Math.round(litPcts.reduce((a, b) => a + b, 0) / litPcts.length)
-    : null;
-  const shownBrightness = roomBrightness != null ? roomBrightness
-    : (avgBrightness != null ? avgBrightness : 75);
+  const pctOf = l => l.type === "hue"
+    ? Math.round(((l.state.brightness ?? 0) / 254) * 100)
+    : Math.round(l.state.brightness ?? 0);
+  const avgOf = pcts => pcts.length
+    ? Math.round(pcts.reduce((a, b) => a + b, 0) / pcts.length) : null;
+  const avgBrightness = avgOf(allLights.filter(l => l.state?.on).map(pctOf));
+  // An off room shows the level its lights come back on at — each one's
+  // remembered brightness (v3.68.11). It showed a made-up 75%, which read as a
+  // saved level, and the Whole Room panel's White → Apply SENT it, turning an
+  // off room on at 75%.
+  const offBrightness = anyOn ? null
+    : avgOf(allLights.filter(l => l.state?.brightness > 0).map(pctOf));
+  const shownBrightness = roomBrightness ?? avgBrightness ?? offBrightness ?? 100;
   // Your dragged value stands only while it is the freshest thing known (v3.50.0).
   // It used to stand for the rest of the session, so after one drag the header
   // kept claiming that level through schedules, scenes and other apps. Four

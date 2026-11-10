@@ -1188,9 +1188,13 @@ and a header row can't afford a label per group.
   still reads "On" is two controls disagreeing about one fact.
 - **The percentage is derived, not invented.** `roomBrightness` starts `null` and the
   displayed value is the average of the lights that are **on** (Hue 1–254 and Govee 0–100
-  normalized first); it only becomes your own value once you drag. An all-off room falls
-  back to 75. Don't reintroduce a hardcoded default as the *displayed* value — it made the
-  slider claim 75% over a dim room.
+  normalized first); it only becomes your own value once you drag. **An all-off room
+  shows its lights' remembered levels (v3.68.11)** — what they come back on at (Hue keeps
+  `bri` while off; Govee's comes from `device_state`), 100 only if there's none. It
+  showed a hardcoded 75, which looked like a saved level on every dark room, and the
+  Whole Room panel's White → Apply sends `shownBrightness`, so applying a white to an
+  off room turned it on at 75%. Don't reintroduce a hardcoded default as the
+  *displayed* value — it's also a value that gets sent.
 - **Your value lets go again (v3.50.0).** Four seconds after the last drag, while the room
   is on, `roomBrightness` resets to `null` and the header shows what the lights report
   again. It used to hold the dragged value for the rest of the session, through
