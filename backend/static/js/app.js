@@ -150,6 +150,7 @@ function GoveeStatusCheck({ isMobile }) {
   else if (last) {
     const bits = [`${last.read} read`];
     bits.push(last.changed.length ? `${last.changed.length} had changed (${last.changed.join(", ")})` : "none had changed");
+    if (last.missed?.length) bits.push(`${last.missed.length} didn't take LightEmUp's last command (${last.missed.join(", ")})`);
     if (last.silent.length) bits.push(`${last.silent.length} didn't answer`);
     summary = `Last check ${relativeTime(last.at)}: ${bits.join(" · ")}.`;
   }

@@ -4243,14 +4243,59 @@ def _govee_status_minutes() -> int:
 _govee_silent_since: dict = {}
 
 
+# When the previous check started (v3.68.12): a command LightEmUp sent after it
+# is one no check has seen yet. None until the first check after a restart.
+_govee_status_prev_at = None
+
+
 def _onoff(on) -> str:
     return "unknown" if on is None else ("on" if on else "off")
 
 
+def _govee_look(st: dict) -> str:
+    """'on 84%' / 'off' — a light's power, plus its level while on."""
+    if st.get("on") and st.get("brightness"):
+        return f"on {int(st['brightness'])}%"
+    return _onoff(st.get("on"))
+
+
+def _govee_missed_command(name: str, sent: dict, seen: dict, since) -> Optional[str]:
+    """The log line for a light that isn't showing LightEmUp's own last command,
+    or None when the change can't be pinned on that (v3.68.12).
+
+    The status check used to call every difference "changed outside LightEmUp",
+    including the 3:30 schedule's 84% that the Hex Lights and Rope Light didn't
+    take as they powered on (the miss v3.68.8 fixed). It's a miss only when the
+    command came AFTER the previous check: that check saw the light as it was,
+    so LightEmUp's command is the last thing anyone set. A command the previous
+    check already saw, followed by a difference now, is still an outside change."""
+    at = sent.get("updated_at")
+    if since is None or not at:
+        return None
+    from datetime import datetime
+    try:
+        t = datetime.fromisoformat(at).timestamp()
+    except ValueError:
+        return None
+    if t <= since:
+        return None
+    if sent.get("on") is not None and bool(sent["on"]) != bool(seen.get("on")):
+        what, now = _onoff(sent["on"]), _onoff(seen.get("on"))
+    elif (sent.get("brightness") and seen.get("brightness")
+          and int(sent["brightness"]) != int(seen["brightness"])):
+        what, now = f"{int(sent['brightness'])}%", f"at {int(seen['brightness'])}%"
+    else:
+        return None
+    return (f"{name}: LightEmUp's {what} at {time.strftime('%H:%M', time.localtime(t))} "
+            f"didn't land. It's {now}, and nothing else has set it since")
+
+
 async def _govee_status_check() -> dict:
+    global _govee_status_prev_at
     if scene_manager.get_active_rooms():
         return {"at": _now_iso(), "skipped": "a lightning storm is running"}
-    read, changed, silent = 0, [], []
+    since, _govee_status_prev_at = _govee_status_prev_at, time.time()
+    read, changed, missed, silent = 0, [], [], []
     for mac, info in list(_known_govee().items()):
         ip = info.get("ip")
         if not ip:
@@ -4268,9 +4313,17 @@ async def _govee_status_check() -> dict:
             continue
         read += 1
         gone_since = _govee_silent_since.pop(mac, None)
-        prev = (config.get("device_state", {}).get(gv_key_for_ip(ip, mac)) or {}).get("on")
+        # A copy: _remember_observed_govee overwrites the entry with what it saw.
+        prev = dict(config.get("device_state", {}).get(gv_key_for_ip(ip, mac)) or {})
         if _remember_observed_govee({"ip": ip, "mac": mac}, state):
-            changed.append(f"{name}: {_onoff(prev)} → {_onoff(state.get('on'))}")
+            # A light that was gone lost power; that's not a command missing.
+            miss = None if gone_since is not None else \
+                _govee_missed_command(name, prev, state, since)
+            if miss:
+                missed.append(name)
+                log.info("Govee status check: %s", miss)
+            else:
+                changed.append(f"{name}: {_govee_look(prev)} → {_govee_look(state)}")
         if gone_since is not None:
             log.info("Govee status check: %s answering again after %d min "
                      "(silent since %s), now %s", name,
@@ -4280,8 +4333,10 @@ async def _govee_status_check() -> dict:
     if changed:
         log.info("Govee status check: %d changed outside LightEmUp (%s)",
                  len(changed), ", ".join(changed))
+    if changed or missed:
         publish_event("govee")
-    return {"at": _now_iso(), "read": read, "changed": changed, "silent": silent}
+    return {"at": _now_iso(), "read": read, "changed": changed, "missed": missed,
+            "silent": silent}
 
 
 async def _govee_status_loop():

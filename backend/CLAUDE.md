@@ -1239,6 +1239,16 @@ not in the browser (v2.14.0):
   off. A Govee bulb powers up at its last setting, so "silent, then back on" = it
   lost power (the lamppost's taped-over light sensor); "answered throughout, then
   on" = Google Home / Alexa / the Govee app. `grep "Govee status check"`.
+- **A command of LightEmUp's own that didn't land is not "outside" (v3.68.12).** If a
+  light differs from `device_state` and LightEmUp's last command to it
+  (`updated_at`) came after the PREVIOUS check started (`_govee_status_prev_at`),
+  `_govee_missed_command` logs `Hex Lights: LightEmUp's 84% at 15:30 didn't land.
+  It's at 40%, and nothing else has set it since` and lists it under `missed`, not
+  `changed`. Why: every weekday until v3.68.8, the 3:30 schedule's level didn't take
+  as the Hex and Rope Light powered on, and the log blamed "outside LightEmUp" for
+  it. A light coming back from silence is never a miss (it lost power), and the
+  first check after a restart has no previous check, so it never claims one.
+  Outside changes now show the level too: `Hex Lights: on 40% → on 20%`.
 - `GET /api/hue/lights` attaches `state.color` (RGB from the reported xy via
   `_hue_xy_to_rgb`) so the frontend paints the current color from backend data.
 - `GET /api/govee/segment-state` returns the UI shape directly:
