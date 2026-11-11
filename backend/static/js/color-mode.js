@@ -1229,8 +1229,22 @@ function ColorMode({ roomName, hueLights, goveeDevices, onControlHue, onControlG
     };
     // A violation between mates outranks a merely-spatial one by this much.
     const FIXTURE_VIOL_COST = 100;
+    // ...and costs MORE the closer the two mates sit on the map (v3.69.0). A
+    // fixture's mates are all "must differ", so with fewer colors than bulbs (two
+    // colors, the three-bulb Triple Lamp) every assignment breaks exactly one pair
+    // and they all cost the same — the dealer was indifferent between red, green,
+    // red and red, green, green, and shipped the second. Weighting by closeness
+    // makes an unavoidable repeat land on the two bulbs farthest apart. Mates with
+    // no position keep the flat cost.
+    const posOf = {};
+    anchored.forEach(d => { posOf[d.key] = d; });
+    const mateWeight = (a, b) => {
+      const pa = posOf[a], pb = posOf[b];
+      if (!pa || !pb || pa.x == null || pb.x == null) return 1;
+      return 1 + 1 / (1 + Math.hypot(pa.x - pb.x, pa.y - pb.y));
+    };
     const pairCost = (a, b, ca, cb) =>
-      (mustBeDistinct(a, b) ? FIXTURE_VIOL_COST : 1) * conflict(ca, cb);
+      (mustBeDistinct(a, b) ? FIXTURE_VIOL_COST * mateWeight(a, b) : 1) * conflict(ca, cb);
 
     // ─── Greedy seed: most-constrained entry first ────────────────────
     const sorted = [...anchored].sort((a, b) =>

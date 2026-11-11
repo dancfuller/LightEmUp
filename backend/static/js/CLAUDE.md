@@ -605,6 +605,14 @@ Assigns colors/temperatures across a room's devices and applies them.
     colors.* It is what makes three colors across three bulbs win when the palette holds
     no perfect answer, which is the normal case. `pairCost` multiplies by
     `FIXTURE_VIOL_COST` (100) for fixture mates / segment siblings.
+  - **Fixture mates are weighted by closeness on the map (v3.69.1):**
+    `FIXTURE_VIOL_COST × (1 + 1/(1 + distance))`. With fewer colors than bulbs (two
+    colors on the three-bulb Triple Lamp) every assignment breaks exactly one mate pair,
+    and at a flat 100 they all cost the same — so the dealer gave red, green, green
+    (the two side-by-side arms matching) as often as red, green, red: 10 of 50 shuffles
+    on the real Living Room were red-green-red. Now the unavoidable repeat lands on the
+    two bulbs farthest apart (50 of 50). This relies on the members' map positions
+    following the lamp's real arrangement; mates with no position keep the flat cost.
   - Consequences worth knowing: usage balance is now a **tie-break, not the outer loop**
     (balanced-but-ugly used to beat slightly-lopsided-but-clean); the greedy pass can
     never run out of candidates, so relax-1/relax-2 are gone; and the repair takes the
