@@ -46,4 +46,4 @@ backend/usage_devices.json*
 docs/fable-review/bundles/
 
 # Hex Lights calibration results (tools/hex_calibration.py), personal measurements
-tools/hex_calibration.csv
+tools/hex_calibration*.csv

@@ -273,11 +273,11 @@ tools/
   build-location-data.py # Regenerates backend/static/js/location-data.js from the
                        # public-domain US Census ZCTA gazetteer (+ a curated city list).
                        # Self-verifying: sanity/spot checks, exits non-zero on bad data.
-  hex_calibration.py   # Interactive: sets the Living Room to ROYGBIV at 75/50/25/5%,
-                       # you dim the Hex Lights to taste, it reads their level back
-                       # and writes hex_calibration.csv. Drives REAL lights; run it
-                       # from a terminal. Puts the room's previous look back at the end
-  preview/             # Read-only harness to SEE the web UI without deploying:
+  hex_calibration.py   # Interactive: sets the Living Room to ROYGBIV at 75/50/25/5%
+                       # (--low: 5 colors at 10/5/2%), you dim the Hex Lights to
+                       # taste, it reads their level back and writes
+                       # hex_calibration*.csv (gitignored). Drives REAL lights; run
+                       # it from a terminal. Puts the room's previous look back at the end  preview/             # Read-only harness to SEE the web UI without deploying:
                        # serves the working-tree frontend + proxies /api to the Pi,
                        # then screenshots it headlessly (Edge via Playwright). See
                        # tools/preview/README.md.
@@ -499,6 +499,11 @@ All endpoints are under `/api/`. Key groups:
   `govee_status_refresh_min`, default 5, 0 = off), so changes made by Alexa / Google
   Home are on the first paint. Settings → Govee Devices. See `backend/CLAUDE.md`
   "Render-ready state"
+- `/api/govee/color-calibration` — which Govee lights are "Calibrated" for color:
+  some colors are brighter than others on them, so green → violet are sent toned
+  down to match the Hue lights (v3.69.0, config key `govee_color_calibrated`; on for
+  the Hex Lights). Same ◐ badge as white-balance calibration. See
+  `backend/CLAUDE.md` "Color calibration"
 - `/api/govee/segment-*` — per-segment mode and count config (the `segment-mode` one is
   the **lightning** scene's switch, not the color tool's)
 - `/api/govee/scene-address` — per-device "do room scenes paint this as segments or as

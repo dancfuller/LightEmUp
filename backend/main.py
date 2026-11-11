@@ -106,6 +106,11 @@ DEFAULT_CONFIG = {
                                 # scheduler's palette action, so a scheduled look
                                 # matches a hand-applied one. Absent = "segments"
                                 # for any device with >1 segment (the old default).
+    "govee_color_calibrated": {},  # govee slug → true (v3.69.0): "Calibrated" — some
+                             # colors are brighter than others on this light, so
+                             # green → violet are sent toned down where Hue is weak
+                             # and the light doesn't outshine the Hue lights around
+                             # it. See _color_cal_share
     "segment_fill_modes": {},  # device_key → "follow" | "solid" | "shades"
                                 # how the device's segments are filled by room scenes
     "known_devices": {  # devices we've seen before; surface as "missing" when absent
@@ -774,6 +779,93 @@ def record_govee_state(ip: str, mac: str = None, **fields):
     store[key] = entry
     schedule_save()
     publish_event("govee", key=key)
+
+
+# ─── Color calibration for Govee lights next to Hue (v3.69.0) ───────────────
+# Hue color bulbs are weak in green, blue and violet; a Govee light runs its
+# LEDs at full output in every color. So in a blue look the Hex Lights, seen up
+# close, outshone the rest of the Living Room at the same level. Measured by eye
+# with tools/hex_calibration.py (2026-11-10): the Hex's level as a share of the
+# room's that looked right, by hue —
+#               room 75%   room 10%
+#   red/orange    100%       100%     (no gap at any level)
+#   yellow         61%       100%
+#   green          33%        50%
+#   blue           25%        30%
+#   indigo/violet  15%        30%
+# and no gap at all at a room level of 2%. Mixed looks (orange + blue hexagons)
+# can't be fixed by the light's one level, so the calibration goes into each COLOR as
+# it's sent: the three send functions below are wrapped, which covers every path
+# in this file (light card, room color, schedules, scenes, segments, light
+# shows, Ask, power recovery). device_state and segment_state keep the color
+# that was ASKED for, so the page, "Now showing" and the verify are unaffected.
+_CAL_HUES = [  # (hue°, share at room 75%, share at room 10%)
+    (0, 1.0, 1.0), (30, 1.0, 1.0), (60, 0.61, 1.0), (120, 0.33, 0.50),
+    (240, 0.25, 0.30), (260, 0.15, 0.30), (280, 0.15, 0.30), (360, 1.0, 1.0)]
+# How a level share becomes a color multiplier: share ** (1 / _CAL_GAMMA). 2.2 is
+# the curve _scale_colors uses for the Hex's own dimming (blue at 75% → 136/255).
+# NOT measured for this: lower it toward 1.0 for a stronger cut (1.0 sends that
+# blue at 64/255), raise it for a gentler one.
+_CAL_GAMMA = 2.2
+
+
+def _color_cal_share(rgb, level) -> float:
+    """The level share (0–1] this color should have, from the table above:
+    interpolated by hue, then by the light's level, then weighted by saturation
+    (white is never toned down; a pastel only partly)."""
+    r, g, b = (max(0, min(255, int(c))) for c in rgb)
+    mx, mn = max(r, g, b), min(r, g, b)
+    if mx == 0 or mx == mn or (level is not None and level <= 2):
+        return 1.0
+    sat = (mx - mn) / mx
+    d = mx - mn
+    if mx == r:
+        hue = (60 * (g - b) / d) % 360
+    elif mx == g:
+        hue = 60 * (b - r) / d + 120
+    else:
+        hue = 60 * (r - g) / d + 240
+    for (h0, hi0, lo0), (h1, hi1, lo1) in zip(_CAL_HUES, _CAL_HUES[1:]):
+        if h0 <= hue <= h1:
+            t = (hue - h0) / (h1 - h0)
+            at75, at10 = hi0 + (hi1 - hi0) * t, lo0 + (lo1 - lo0) * t
+            break
+    lv = 75 if level is None else max(10, min(75, level))
+    share = at10 + (at75 - at10) * (lv - 10) / 65
+    return 1 - sat * (1 - share)
+
+
+def _color_calibrate(key: str, rgb):
+    """The color to SEND a light: toned down when the light is color-calibrated, else
+    unchanged. The share is a share of LEVEL; sent as a color it goes through the
+    same perceptual curve as _scale_colors (a Govee level of p looks like color
+    values × p^(1/2.2)). The light's level is the last one recorded, so a color
+    sent with a new level is toned down for the previous one — it only matters for
+    yellow and green, whose share depends on the level."""
+    if not (config.get("govee_color_calibrated") or {}).get(key.split(":", 1)[-1]):
+        return tuple(rgb)
+    level = (config.get("device_state", {}).get(key) or {}).get("brightness")
+    f = _color_cal_share(rgb, level) ** (1 / _CAL_GAMMA)
+    return tuple(round(c * f) for c in rgb)
+
+
+_raw_lan_color = govee_lan_color
+_raw_v2_segment_color = govee_v2_segment_color
+_raw_v2_segments_color = govee_v2_segments_color
+
+
+async def govee_lan_color(ip, r, g, b):
+    return await _raw_lan_color(ip, *_color_calibrate(gv_key_for_ip(ip), (r, g, b)))
+
+
+async def govee_v2_segment_color(api_key, sku, device_mac, segment_idx, r, g, b):
+    return await _raw_v2_segment_color(api_key, sku, device_mac, segment_idx,
+                                       *_color_calibrate(gv_key(device_mac), (r, g, b)))
+
+
+async def govee_v2_segments_color(api_key, sku, device_mac, segments, r, g, b):
+    return await _raw_v2_segments_color(api_key, sku, device_mac, segments,
+                                        *_color_calibrate(gv_key(device_mac), (r, g, b)))
 
 
 def record_hue_state(light_id: str, state: dict):
@@ -6791,6 +6883,34 @@ async def set_scene_address(req: SceneAddressRequest):
     return {"success": True, "govee_scene_address": store}
 
 
+class ColorCalibrationRequest(BaseModel):
+    slug: str        # govee slug, e.g. "2d3acc323233095a"
+    enabled: bool
+
+
+@app.get("/api/govee/color-calibration")
+async def get_color_calibration():
+    """Which Govee lights are color-calibrated (v3.69.0): some colors are brighter
+    than others on them, so those are sent toned down to match the Hue lights."""
+    return {"lights": sorted(k for k, v in (config.get("govee_color_calibrated") or {}).items() if v)}
+
+
+@app.post("/api/govee/color-calibration")
+async def set_color_calibration(req: ColorCalibrationRequest):
+    """Turn color calibration on or off for one Govee light. Takes effect on the next
+    color it's sent; what it's showing now isn't re-sent."""
+    s = gv_slug(req.slug)
+    store = config.setdefault("govee_color_calibrated", {})
+    if req.enabled:
+        store[s] = True
+    else:
+        store.pop(s, None)
+    save_config(config)
+    log.info("Color calibration %s for %s", "on" if req.enabled else "off",
+             (config.get("nicknames", {}) or {}).get(gv_key(s)) or s)
+    return await get_color_calibration()
+
+
 @app.post("/api/govee/segment-mode")
 async def set_govee_segment_mode(req: GoveeSegmentModeRequest):
     """Toggle per-segment mode for a Govee device in a room.
@@ -8125,6 +8245,7 @@ async def get_config():
         "ct_rgb": config.get("ct_rgb", {}),
         "device_modes": config.get("device_modes", {}),
         "govee_scene_address": config.get("govee_scene_address", {}),
+        "govee_color_calibrated": config.get("govee_color_calibrated", {}),
         "segment_fill_modes": config.get("segment_fill_modes", {}),
         "ui_prefs": config.get("ui_prefs", {}),
         "power_recovery": config.get("power_recovery", {}),
@@ -8238,6 +8359,7 @@ _SETTING_LABELS = {
     "ct_rgb": "White calibration (RGB)",
     "ct_correction": "White calibration (legacy)",
     "govee_scene_address": "Segments-or-whole per device",
+    "govee_color_calibrated": "Color-calibrated lights",
     "govee_segment_counts": "Segment counts set by hand",
     "govee_segment_mode": "Lightning per-segment",
     "segment_fill_modes": "Segment fill modes",

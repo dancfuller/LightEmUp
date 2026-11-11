@@ -1,6 +1,6 @@
 // ─── Light Card Component ───────────────────────────────────────────────────
 
-function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, onNicknameChange, roomName, segmentColors, segmentInfo, segmentBrightness, onSegmentStateRefresh, controlMode, onControlModeChange, segmentFillMode, onSegmentFillModeChange, onSegmentCountChange, ctCorrection, onRecheck, isFavorite, onToggleFavorite, excluded, onToggleExclude }) {
+function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, onNicknameChange, roomName, segmentColors, segmentInfo, segmentBrightness, onSegmentStateRefresh, controlMode, onControlModeChange, segmentFillMode, onSegmentFillModeChange, onSegmentCountChange, calibration, onRecheck, isFavorite, onToggleFavorite, excluded, onToggleExclude }) {
   const isMobile = useIsMobile();
   // An UNKNOWN level is unknown for both vendors (v3.51.6). It read as 0% for Hue
   // and 50% for Govee: two different, confident numbers for the same "we don't
@@ -90,7 +90,14 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
     ? `Hue · ${light.product_name || light.model}`
     : `Govee · ${light.sku}`;
   const displayName = nickname || friendlyName;
-  const isCalibrated = light.type !== "hue" && !!ctCorrection?.[deviceKey];
+  // What this light is calibrated for (v3.69.0 adds color): white balance (the
+  // Globe Lights) and/or colors (the Hex Lights). One badge, one note per kind.
+  const cal = light.type !== "hue" ? calibration?.[deviceKey] : null;
+  const isCalibrated = !!(cal?.white || cal?.color);
+  const calibrationNotes = [
+    cal?.white && "White balance: its whites are corrected to match the Hue lights.",
+    cal?.color && "Colors: some colors are brighter than others on this light, so green, blue and violet are toned down to match the Hue lights.",
+  ].filter(Boolean);
   const dotColor = (hasColor && lightColor)
     ? `rgb(${lightColor.r},${lightColor.g},${lightColor.b})`
     : "#fbbf24";
@@ -204,7 +211,7 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
           >{isFavorite ? "★" : "☆"}</button>
         )}
         {isCalibrated && (
-          <span title="White-balance calibrated" style={{
+          <span title={`Calibrated\n${calibrationNotes.join("\n")}`} style={{
             flexShrink: 0, fontSize: 13, color: "#fbbf24", lineHeight: 1, cursor: "default",
           }}>&#x25D0;</span>
         )}
@@ -579,6 +586,15 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
           </div>
           {light.ip && <div style={{ fontSize: 10, color: "#475569", marginTop: 1, fontFamily: "monospace" }}>{light.ip}</div>}
           {light.mac && <div style={{ fontSize: 10, color: "#475569", marginTop: 1, fontFamily: "monospace" }}>{light.mac}</div>}
+          {/* Spelled out here as well as in the ◐ badge's tooltip: a phone has no hover. */}
+          {isCalibrated && (
+            <div style={{ marginTop: 8 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#fbbf24" }}>&#x25D0; Calibrated</div>
+              {calibrationNotes.map(n => (
+                <div key={n} style={{ fontSize: 11, color: "#94a3b8", marginTop: 2, lineHeight: 1.4 }}>{n}</div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>

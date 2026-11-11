@@ -70,6 +70,39 @@ until they age out of the journal and the 48-hour log files.
   applied once. Anything in the UI offering a brightness control for a segmented device
   should call this — **never** re-run a scene to change brightness.
 
+## Color calibration: "Calibrated" for colors (v3.69.0)
+Hue color bulbs are weak in green, blue and violet; Govee LEDs aren't. Up close,
+the Hex Lights outshone the Living Room's Hue lights in any blue look at the same
+level. `tools/hex_calibration.py` measured by eye how far down the Hex had to go
+(table in `_CAL_HUES`): none for red/orange, ~60% for yellow at a bright room,
+a quarter to a third for green → violet, nothing at a room level of 2%.
+- **The name is "Calibrated"**, the same word and ◐ badge as white-balance
+  calibration (the Globe Lights). The light card's details say which kind:
+  "Colors: some colors are brighter than others on this light, so green, blue and
+  violet are toned down to match the Hue lights." Not "trim".
+- **Per light, opt-in:** config key `govee_color_calibrated` (slug → true),
+  `GET/POST /api/govee/color-calibration {slug, enabled}`. On for the Hex Lights
+  only. `/api/config` carries it; app.js folds it and the white calibrations into
+  one `calibration` map (device key → `{white, color}`) for the badge.
+- **It's in the COLOR, not the level,** because Hex looks mix colors (orange +
+  blue hexagons) and the light has one level. `govee_lan_color`,
+  `govee_v2_segment_color` and `govee_v2_segments_color` are re-defined in main.py
+  as wrappers over the discovery originals (`_raw_*`) that run `_color_calibrate`,
+  so every path in main.py is covered without touching it. **Add a new Govee color
+  send through these names, never the `_raw_*` ones,** or it skips calibration.
+  scenes.py (lightning) imports the originals and is deliberately left alone.
+- **What's recorded is what was asked for:** `device_state`/`segment_state` keep the
+  uncalibrated color, so the page, "Now showing", Ask and power recovery all see the
+  real look; recovery replays it through the wrapper and is calibrated again.
+- **Saturation-weighted:** white is never toned down, a pastel partly.
+- **Level:** the share depends on level (yellow especially), read from the light's
+  last recorded level, so a color sent together with a NEW level is calibrated for
+  the previous one, and a level change alone doesn't recalibrate. Fine for blue
+  (25% vs 30%); yellow can be off until the next look.
+- **`_CAL_GAMMA` is a guess:** the table is in LEVEL units, and how a Govee level
+  maps to a color value wasn't measured; 2.2 matches `_scale_colors`. If blue
+  still looks strong, lower it (1.0 = a straight multiply, much darker).
+
 ## Govee discovery reliability & device identity (v2.16.0)
 A single UDP scan burst is lossy — Govee devices routinely miss one — so discovery
 is built to tolerate that, and to treat IP as ephemeral:

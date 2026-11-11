@@ -448,9 +448,16 @@ function App() {
   const [ctCorrection, setCtCorrection] = useState({});
   // ctRgb: RGB-space white calibration (takes precedence over ctCorrection).
   const [ctRgb, setCtRgb] = useState({});
-  // Union of both calibration types — drives the "calibrated" badge anywhere a
-  // device name is shown (the kind of calibration doesn't matter for the badge).
-  const ctCalibrated = { ...ctCorrection, ...ctRgb };
+  // Govee slug → true: "Calibrated" for color (v3.69.0) — some colors are
+  // brighter than others on this light, so the Pi tones those down as it sends them.
+  const [colorCalibrated, setColorCalibrated] = useState({});
+  // device key → { white, color }: what each light is calibrated for. Drives the
+  // ◐ badge anywhere a device name is shown, and the card's note saying which.
+  const calibration = {};
+  for (const k of Object.keys({ ...ctCorrection, ...ctRgb })) calibration[k] = { white: true };
+  for (const [s, on] of Object.entries(colorCalibrated)) {
+    if (on) calibration[`govee:${s}`] = { ...calibration[`govee:${s}`], color: true };
+  }
   // deviceModes: persisted LightCard preference per device_key.
   // "whole" or "segments". Loaded from config, updated on toggle.
   const [deviceModes, setDeviceModes] = useState({});
@@ -622,6 +629,7 @@ function App() {
       setRoomExcluded(cfg.room_excluded || {});
       setCtCorrection(cfg.ct_correction || {});
       setCtRgb(cfg.ct_rgb || {});
+      setColorCalibrated(cfg.govee_color_calibrated || {});
       setDeviceModes(cfg.device_modes || {});
       setSegmentFillModes(cfg.segment_fill_modes || {});
       setSceneAddress(cfg.govee_scene_address || {});
@@ -1520,7 +1528,7 @@ function App() {
         segmentFillMode={segmentFillModes?.[devKey]}
         onSegmentFillModeChange={(m) => updateSegmentFillMode && updateSegmentFillMode(devKey, m)}
         onSegmentCountChange={updateSegmentCount}
-        ctCorrection={ctCalibrated} />
+        calibration={calibration} />
     );
   };
 
@@ -1845,7 +1853,7 @@ function App() {
                   onReleaseExcluded={() => releaseExcluded(roomName)}
                   lastStatus={roomStatus[roomName]}
                   onReapply={reapplyRoom}
-                  ctCorrection={ctCalibrated}
+                  calibration={calibration}
                   onRecheck={recheckDevice}
                   onScheduleLook={handleScheduleLook}
                   onRoomWhite={roomWhite}
@@ -1869,7 +1877,7 @@ function App() {
                 }}
                 favorites={favoriteColors} onFavoritesChange={updateFavorites}
                 nicknames={nicknames} onNicknameChange={updateNickname}
-                ctCorrection={ctCalibrated}
+                calibration={calibration}
                 onRecheck={recheckDevice}
               />
             )}
@@ -2031,7 +2039,7 @@ function App() {
                         deviceKey={dk} nickname={nicknames?.[dk]} friendlyName={friendlyName}
                         meta={meta}
                         statusColor="#4ade80" statusOpacity={0.8}
-                        statusLabel={ctCalibrated?.[dk] ? "◐ calibrated" : null}
+                        statusLabel={calibration?.[dk] ? "◐ calibrated" : null}
                         flashBody={{ ip: device.ip, mac: device.mac }}
                         onNicknameChange={updateNickname} isMobile={isMobile}
                         /* Segmented devices get their scene addressing here, so

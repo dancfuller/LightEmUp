@@ -1,22 +1,30 @@
 """Hex Lights calibration: how much dimmer should the Hex Lights be than the rest
 of the Living Room, per color and level?
 
-For each room level (75, 50, 25, 5%) and each color of the rainbow (ROYGBIV), it
-sets the whole Living Room to that color at that level, Hex Lights included. You
-then adjust the Hex Lights (their card in LightEmUp, or the Govee app) until they
-sit right with the room and press Enter. The script reads the Hex Lights' level
-back from the Pi, so there's nothing to type. You can also type a number to
-record that level instead, or "s" to skip a step.
+For each room level and each color, it sets the whole Living Room to that color
+at that level, Hex Lights included. You then adjust the Hex Lights (their card in
+LightEmUp, or the Govee app) until they sit right with the room and press Enter.
+The script reads the Hex Lights' level back from the Pi, so there's nothing to
+type. You can also type a number to record that level instead, "m" when the Hex
+Lights are still too bright at their lowest (1%), or "s" to skip a step.
 
-Results go to hex_calibration.csv beside this script, plus a summary at the end.
-When you finish or quit, the room is put back to the look it had before.
+Two runs:
+    python tools/hex_calibration.py          ROYGBIV at 75, 50, 25, 5%  (28 steps)
+    python tools/hex_calibration.py --low    red, yellow, green, blue, violet at
+                                             10, 5, 2%  (15 steps). Red is the
+                                             reference: it matched at 75%, so it
+                                             shows whether the room and the Hex
+                                             still agree this low.
 
-Run it from a real terminal (it waits for you between steps):
-    python tools/hex_calibration.py
-Uses only the standard library. Talks to http://lightemup:8420 by default; pass
-another base URL as the first argument.
+Results go to hex_calibration.csv (hex_calibration_low.csv for --low) beside this
+script, plus a summary at the end. When you finish or quit, the room is put back
+to the look it had before.
+
+Run it from a real terminal (it waits for you between steps). Uses only the
+standard library. Talks to http://lightemup:8420 unless --base says otherwise.
 """
 
+import argparse
 import csv
 import json
 import sys
@@ -24,23 +32,28 @@ import time
 import urllib.request
 from pathlib import Path
 
-BASE = (sys.argv[1] if len(sys.argv) > 1 else "http://lightemup:8420").rstrip("/")
 ROOM = "Living Room"
 HEX_SLUG = "2d3acc323233095a"          # govee:2d3acc323233095a = "Hex Lights"
-LEVELS = [75, 50, 25, 5]
 # Fully saturated, brightest channel at 255 for every color, so a Govee light (which
 # takes raw RGB) isn't dimmed by the color itself: a dark-looking RGB like the usual
 # indigo (75,0,130) would skew the comparison.
-COLORS = [
-    ("Red",    (255,   0,   0)),
-    ("Orange", (255, 128,   0)),
-    ("Yellow", (255, 255,   0)),
-    ("Green",  (  0, 255,   0)),
-    ("Blue",   (  0,   0, 255)),
-    ("Indigo", ( 85,   0, 255)),
-    ("Violet", (170,   0, 255)),
-]
-OUT = Path(__file__).with_name("hex_calibration.csv")
+COLORS = {
+    "Red":    (255,   0,   0),
+    "Orange": (255, 128,   0),
+    "Yellow": (255, 255,   0),
+    "Green":  (  0, 255,   0),
+    "Blue":   (  0,   0, 255),
+    "Indigo": ( 85,   0, 255),
+    "Violet": (170,   0, 255),
+}
+RUNS = {
+    # 2026-11-10 at 75%: red/orange 100%, yellow 61%, green 33%, blue 25%,
+    # indigo/violet 15% of the room's level.
+    "full": ([75, 50, 25, 5], list(COLORS), "hex_calibration.csv"),
+    "low":  ([10, 5, 2], ["Red", "Yellow", "Green", "Blue", "Violet"],
+             "hex_calibration_low.csv"),
+}
+BASE = "http://lightemup:8420"
 
 
 def api(path, body=None, timeout=30):
@@ -90,46 +103,63 @@ def set_step(hue_ids, govee, rgb, level):
                                    "r": r, "g": g, "b": b, "brightness": level})
 
 
-def summary(rows):
+def summary(rows, levels, colors, out):
     if not rows:
         return
-    print("\nHex Lights level as a share of the room's level:")
-    print(f"{'':8}" + "".join(f"{lv:>7}%" for lv in LEVELS) + "   average")
-    for name, _ in COLORS:
+    print("\nHex Lights level as a share of the room's level (* = still too bright at 1%):")
+    print(f"{'':8}" + "".join(f"{lv:>9}%" for lv in levels) + "   average")
+    for name in colors:
         cells, shares = [], []
-        for lv in LEVELS:
+        for lv in levels:
             hit = [r for r in rows if r["color"] == name and r["room_level"] == lv]
             if hit:
                 s = hit[0]["hex_level"] / lv
                 shares.append(s)
-                cells.append(f"{hit[0]['hex_level']:>4} {round(s * 100):>2}%"[-8:])
+                mark = "*" if hit[0]["too_bright_at_1"] else " "
+                cells.append(f"{hit[0]['hex_level']:>4}{mark}{round(s * 100):>3}%"[-10:].rjust(10))
             else:
-                cells.append(f"{'-':>8}")
+                cells.append(f"{'-':>10}")
         avg = f"{round(sum(shares) / len(shares) * 100)}%" if shares else "-"
         print(f"{name:8}" + "".join(cells) + f"   {avg:>6}")
-    print(f"\nSaved to {OUT}")
+    print(f"\nSaved to {out}")
 
 
 def main():
+    global BASE
+    ap = argparse.ArgumentParser(description="Hex Lights calibration for the Living Room.")
+    ap.add_argument("--low", action="store_true",
+                    help="very low room levels (10, 5, 2%%) for five colors")
+    ap.add_argument("--base", default=BASE, help="LightEmUp's address (default %(default)s)")
+    args = ap.parse_args()
+    BASE = args.base.rstrip("/")
+    levels, colors, out_name = RUNS["low" if args.low else "full"]
+    out = Path(__file__).with_name(out_name)
+
     if ((api("/api/lightshow").get("shows") or {}).get(ROOM) or {}).get("running"):
         sys.exit("The Living Room has a light show running. Stop it first, or it "
                  "will keep changing the colors under the test.")
     hue_ids, govee = room_lights()
     before = (api("/api/config").get("room_last_applied") or {}).get(ROOM)
-    print(f"Living Room calibration — {len(LEVELS) * len(COLORS)} steps.")
+    print(f"Living Room calibration — {len(levels) * len(colors)} steps.")
     print("At each step: adjust the Hex Lights, then press Enter.")
-    print("Or type a level (e.g. 32) to record that, 's' to skip, 'q' to quit.\n")
+    print("Or type a level (e.g. 32) to record that, 'm' if they're still too bright")
+    print("at their lowest (1%), 's' to skip, 'q' to quit.\n")
     rows = []
     try:
-        for level in LEVELS:
-            for name, rgb in COLORS:
+        for level in levels:
+            for name in colors:
+                rgb = COLORS[name]
                 set_step(hue_ids, govee, rgb, level)
+                floor = False
                 while True:
                     ans = input(f"[room {level:>2}%] {name:<7} — adjust the Hex Lights, then Enter: ").strip().lower()
                     if ans == "q":
                         raise KeyboardInterrupt
                     if ans == "s":
                         hex_level = None
+                        break
+                    if ans == "m":
+                        hex_level, floor = 1, True
                         break
                     if ans.isdigit() and 1 <= int(ans) <= 100:
                         hex_level = int(ans)
@@ -142,20 +172,21 @@ def main():
                             break
                         print(" no answer — try Enter again, or type the level.")
                         continue
-                    print("   Enter, a number 1–100, 's' or 'q'.")
+                    print("   Enter, a number 1–100, 'm', 's' or 'q'.")
                 if hex_level is None:
                     continue
                 rows.append({"color": name, "rgb": "%d,%d,%d" % rgb, "room_level": level,
                              "hex_level": hex_level,
                              "share_pct": round(hex_level / level * 100),
+                             "too_bright_at_1": floor,
                              "at": time.strftime("%Y-%m-%d %H:%M:%S")})
-                with OUT.open("w", newline="") as f:      # rewritten every step
+                with out.open("w", newline="") as f:      # rewritten every step
                     w = csv.DictWriter(f, fieldnames=list(rows[0]))
                     w.writeheader()
                     w.writerows(rows)
     except (KeyboardInterrupt, EOFError):
         print("\nStopped.")
-    summary(rows)
+    summary(rows, levels, colors, out)
     if before:
         try:
             api("/api/rooms/reapply", {"room_name": ROOM})
