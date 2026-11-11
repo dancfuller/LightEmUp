@@ -273,6 +273,10 @@ tools/
   build-location-data.py # Regenerates backend/static/js/location-data.js from the
                        # public-domain US Census ZCTA gazetteer (+ a curated city list).
                        # Self-verifying: sanity/spot checks, exits non-zero on bad data.
+  hex_calibration.py   # Interactive: sets the Living Room to ROYGBIV at 75/50/25/5%,
+                       # you dim the Hex Lights to taste, it reads their level back
+                       # and writes hex_calibration.csv. Drives REAL lights; run it
+                       # from a terminal. Puts the room's previous look back at the end
   preview/             # Read-only harness to SEE the web UI without deploying:
                        # serves the working-tree frontend + proxies /api to the Pi,
                        # then screenshots it headlessly (Edge via Playwright). See
