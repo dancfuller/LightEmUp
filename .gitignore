@@ -44,3 +44,6 @@ backend/usage_devices.json*
 
 # Fable review bundles — derived from the code by tools/fable-review/build_bundles.py
 docs/fable-review/bundles/
+
+# Hex Lights calibration results (tools/hex_calibration.py), personal measurements
+tools/hex_calibration.csv
