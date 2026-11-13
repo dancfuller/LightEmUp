@@ -12,7 +12,7 @@
 // out-warm the device's native CT, which is the whole point of this approach.
 const CT_RGB_MIN_K = 1200;
 
-function CTCalibrationPanel({ hueLights, goveeDevices, nicknames, ctRgb, onControlHue, onControlGovee, onSaved }) {
+function CTCalibrationPanel({ hueLights, goveeDevices, nicknames, ctRgb, onControlHue, onControlGovee, onSaved, highlight, focusKey }) {
   const isMobile = useIsMobile();
 
   const ctHueLights = (hueLights || []).filter(l => l.capabilities?.has_color_temp);
@@ -33,6 +33,8 @@ function CTCalibrationPanel({ hueLights, goveeDevices, nicknames, ctRgb, onContr
 
   const [referenceId, setReferenceId] = useState(defaultRef);
   const [selectedKeys, setSelectedKeys] = useState(ctGoveeDevices.map(goveeKey));
+  // Arrived from a light's ◐ badge: start with just that light picked.
+  useEffect(() => { if (focusKey) setSelectedKeys([focusKey]); }, [focusKey]);
   const [active, setActive] = useState(false);
   const [stepIndex, setStepIndex] = useState(0);
 
@@ -151,7 +153,10 @@ function CTCalibrationPanel({ hueLights, goveeDevices, nicknames, ctRgb, onContr
   const swatch = (k) => { const { r, g, b } = kelvinToRGB(k); return `rgb(${r},${g},${b})`; };
 
   return (
-    <div style={card}>
+    <div id="settings-white-calibration" style={{
+      ...card, transition: "background 0.8s",
+      ...(highlight ? { background: "#3a3524" } : {}),
+    }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
         <h3 style={{ fontSize: isMobile ? 14 : 15, fontWeight: 600, color: "#e2e8f0", margin: 0 }}>White Calibration (RGB)</h3>
         {Object.keys(ctRgb || {}).length > 0 && (

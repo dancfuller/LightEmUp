@@ -299,7 +299,10 @@ function SettingsDeviceRow({ deviceKey, nickname, friendlyName, meta, statusColo
       {whiteCalibrated && (
         <div style={{ fontSize: 10, color: "#64748b", marginTop: 4, marginLeft: 14, lineHeight: 1.4 }}>
           <span style={{ color: "#94a3b8", fontWeight: 600 }}>&#x25D0; White balance calibrated</span>
-          {" "}— its whites are corrected to match the Hue lights. Change it in White Calibration below.
+          {" "}— its whites are corrected to match the Hue lights. Change it in{" "}
+          <button onClick={() => document.getElementById("settings-white-calibration")?.scrollIntoView({ block: "start", behavior: "smooth" })}
+            style={{ padding: 0, background: "none", border: "none", color: "#a5b4fc", fontSize: 10, fontWeight: 600, cursor: "pointer" }}>
+            White Calibration ↓</button>
         </div>
       )}
       {meta && (
@@ -493,8 +496,10 @@ function App() {
   for (const [s, on] of Object.entries(colorCalibrated)) {
     if (on) calibration[`govee:${s}`] = { ...calibration[`govee:${s}`], color: true };
   }
-  // Tapping a ◐ badge opens Settings at that light's row, where calibration is
-  // turned on or off. Held here until the Settings tab has rendered the row.
+  // Tapping a ◐ badge opens Settings where that calibration is changed: a light
+  // calibrated for color goes to its row in Govee Devices (the On/Off), one
+  // calibrated for white balance only goes to White Calibration. { key, id }, held
+  // until the Settings tab has rendered the target.
   const [settingsFocus, setSettingsFocus] = useState(null);
   // deviceModes: persisted LightCard preference per device_key.
   // "whole" or "segments". Loaded from config, updated on toggle.
@@ -1097,17 +1102,18 @@ function App() {
     }
   }, []);
 
-  const openCalibration = useCallback((deviceKey) => {
+  const openCalibration = (deviceKey) => {
+    const id = calibration[deviceKey]?.color ? `settings-device-${deviceKey}` : "settings-white-calibration";
     setActiveTab("settings");
-    setSettingsFocus(deviceKey);
-  }, [setActiveTab]);
+    setSettingsFocus({ key: deviceKey, id });
+  };
 
   // setActiveTab scrolls to the top first; once the row exists, bring it to the
   // middle of the screen and let its highlight fade.
   useEffect(() => {
     if (activeTab !== "settings" || !settingsFocus) return;
     const raf = requestAnimationFrame(() => {
-      document.getElementById(`settings-device-${settingsFocus}`)
+      document.getElementById(settingsFocus.id)
         ?.scrollIntoView({ block: "center", behavior: "smooth" });
     });
     const t = setTimeout(() => setSettingsFocus(null), 2500);
@@ -2111,7 +2117,7 @@ function App() {
                         meta={meta}
                         statusColor="#4ade80" statusOpacity={0.8}
                         statusLabel={calibration?.[dk] ? "◐ calibrated" : null}
-                        highlight={settingsFocus === dk}
+                        highlight={settingsFocus?.id === `settings-device-${dk}`}
                         whiteCalibrated={!!calibration?.[dk]?.white}
                         colorCalibrated={!!calibration?.[dk]?.color}
                         onColorCalibratedChange={(on) => updateColorCalibration(goveeSlug(device), on)}
@@ -2171,6 +2177,8 @@ function App() {
               nicknames={nicknames} ctRgb={ctRgb}
               onControlHue={controlHueLight} onControlGovee={controlGoveeDevice}
               onSaved={setCtRgb}
+              highlight={settingsFocus?.id === "settings-white-calibration"}
+              focusKey={settingsFocus?.id === "settings-white-calibration" ? settingsFocus.key : null}
             />
 
             {/* UI preferences */}
