@@ -842,11 +842,115 @@ def _color_calibrate(key: str, rgb):
     values × p^(1/2.2)). The light's level is the last one recorded, so a color
     sent with a new level is toned down for the previous one — it only matters for
     yellow and green, whose share depends on the level."""
-    if not (config.get("govee_color_calibrated") or {}).get(key.split(":", 1)[-1]):
+    if not _color_calibrated(key):
         return tuple(rgb)
-    level = (config.get("device_state", {}).get(key) or {}).get("brightness")
+    level = _cal_level(key)
+    _cal_toned_at[key] = level
     f = _color_cal_share(rgb, level) ** (1 / _CAL_GAMMA)
     return tuple(round(c * f) for c in rgb)
+
+
+def _color_calibrated(key: str) -> bool:
+    return bool((config.get("govee_color_calibrated") or {}).get(key.split(":", 1)[-1]))
+
+
+def _cal_level(key: str):
+    """The light's level now: the last one SENT (a segmented light's dimmer
+    records none in device_state), else the recorded one."""
+    ip = gv_ip_for_slug(key.split(":", 1)[-1])
+    sent = govee_level_sent(ip) if ip else None
+    if sent:
+        return sent[0]
+    return (config.get("device_state", {}).get(key) or {}).get("brightness")
+
+
+# ─── Re-toning after a level change (v3.70.2) ───────────────────────────────
+# How far a color is toned down depends on the level (yellow 61% at a bright
+# room, none at 10%; nothing at all at 2%). A level change alone sends no color,
+# so a look applied at 80% and dragged down to 10% kept its 80% toning: blues
+# and greens on the Hex ended up dimmer than the Hue lights. So once a calibrated
+# light's level has been still for CAL_RETONE_SETTLE_S, its current colors are
+# sent again toned for the new level — only when that changes some color by
+# CAL_RETONE_MIN or more (80% → 50% doesn't; 80% → 10% or 2% does), never
+# mid-drag, and not while a scene, storm or light show is painting it (those
+# send their own colors through the same wrappers). Segmented lights go as a
+# scoped scene apply, so the cloud pacing and the card's progress come with it.
+CAL_RETONE_SETTLE_S = 2.0
+CAL_RETONE_MIN = 0.05
+_cal_toned_at: dict = {}      # device key → the level its last colors were toned for
+_cal_retone_tasks: dict = {}  # device key → pending re-tone
+
+
+def _cal_retone_soon(ip):
+    key = gv_key_for_ip(ip)
+    if not _color_calibrated(key) or key not in _cal_toned_at:
+        return
+    old = _cal_retone_tasks.get(key)
+    if old and not old.done():
+        old.cancel()
+    _cal_retone_tasks[key] = asyncio.create_task(_cal_retone(key))
+
+
+def _cal_room_of(slug: str):
+    for name, room in (config.get("rooms") or {}).items():
+        if slug in room.get("govee_devices", []):
+            return name
+    return None
+
+
+async def _cal_retone(key: str):
+    slug = key.split(":", 1)[-1]
+    try:
+        await asyncio.sleep(CAL_RETONE_SETTLE_S)
+        room = _cal_room_of(slug)
+        for _ in range(60):                     # wait out an apply that's painting
+            show = _lightshow_tasks.get(room) if room else None
+            if (show and not show.done()) or (room and scene_manager.active_scenes.get(room)):
+                return                          # it repaints its own colors
+            if not any(t and not t.done() for t in _scene_tasks.values()):
+                break
+            await asyncio.sleep(CAL_RETONE_SETTLE_S)
+        else:
+            return
+        ip = gv_ip_for_slug(slug)
+        ds = config.get("device_state", {}).get(key) or {}
+        if not ip or ds.get("on") is False or not _color_calibrated(key):
+            return
+        old, new = _cal_toned_at.get(key), _cal_level(key)
+        entry = segment_state.get(ip)
+        seg_colors = (entry or {}).get("colors") or {}
+        if seg_colors:
+            colors = set(tuple(c[:3]) for c in seg_colors.values())
+        elif all(ds.get(c) is not None for c in "rgb"):
+            colors = {(ds["r"], ds["g"], ds["b"])}
+        else:
+            return
+        f = lambda c, lv: _color_cal_share(c, lv) ** (1 / _CAL_GAMMA)
+        if not any(abs(f(c, new) / f(c, old) - 1) >= CAL_RETONE_MIN for c in colors):
+            return
+        label = _device_label(key, slug)
+        log.info("Calibrated colors: %s re-toned for %s%% (they were toned for %s%%)",
+                 label, new, old)
+        if not seg_colors:
+            await govee_lan_color(ip, *next(iter(colors)))
+            return
+        dev = next((d for d in _lightshow_segmented_devices(room) if d["key"] == key), None) if room else None
+        if not dev or dev["protocol"] != "cloud_v2":
+            return
+        by_color: dict = {}
+        for i in sorted(seg_colors):
+            by_color.setdefault(tuple(seg_colors[i][:3]), []).append(int(i))
+        await scene_room_apply(SceneApplyRequest(
+            room=room, scope=key, label="Calibrated colors for the new level",
+            cloud=[SceneCloudDevice(
+                ip=ip, sku=dev["sku"], device_mac=dev["mac"], label=dev["label"],
+                unit="panel" if dev["sku"] == "H6061" else "segment",
+                groups=[SceneCloudGroup(segments=idx, r=c[0], g=c[1], b=c[2])
+                        for c, idx in by_color.items()])]))
+    except asyncio.CancelledError:
+        pass
+    except Exception as e:
+        log.warning("Calibrated colors: re-toning %s failed: %s", key, e)
 
 
 _raw_lan_color = govee_lan_color
@@ -866,6 +970,17 @@ async def govee_v2_segment_color(api_key, sku, device_mac, segment_idx, r, g, b)
 async def govee_v2_segments_color(api_key, sku, device_mac, segments, r, g, b):
     return await _raw_v2_segments_color(api_key, sku, device_mac, segments,
                                         *_color_calibrate(gv_key(device_mac), (r, g, b)))
+
+
+# Every level change in this file goes through here too, so a calibrated light's
+# colors can follow it (see "Re-toning after a level change" above).
+_raw_lan_brightness = govee_lan_brightness
+
+
+async def govee_lan_brightness(ip, brightness):
+    res = await _raw_lan_brightness(ip, brightness)
+    _cal_retone_soon(ip)
+    return res
 
 
 def record_hue_state(light_id: str, state: dict):

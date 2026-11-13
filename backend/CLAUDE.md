@@ -99,10 +99,24 @@ a quarter to a third for green → violet, nothing at a room level of 2%.
   uncalibrated color, so the page, "Now showing", Ask and power recovery all see the
   real look; recovery replays it through the wrapper and is calibrated again.
 - **Saturation-weighted:** white is never toned down, a pastel partly.
-- **Level:** the share depends on level (yellow especially), read from the light's
-  last recorded level, so a color sent together with a NEW level is calibrated for
-  the previous one, and a level change alone doesn't recalibrate. Fine for blue
-  (25% vs 30%); yellow can be off until the next look.
+- **Level:** the share depends on level (yellow especially; nothing at all at 2%),
+  read from the light's last SENT level (`govee_level_sent`, else device_state).
+  **A level change re-tones the colors (v3.70.2).** `govee_lan_brightness` is
+  wrapped too: on a calibrated light it schedules `_cal_retone`, which waits until
+  the level has been still `CAL_RETONE_SETTLE_S` (2s, so a drag costs one re-send,
+  after it) and then re-sends the light's current colors (segment_state, else
+  device_state's r/g/b — the ASKED colors, toned again by the wrappers) when some
+  color's multiplier moves by `CAL_RETONE_MIN` (5%) or more versus the level it was
+  last toned for (`_cal_toned_at`, set in `_color_calibrate`). Blue 80% → 50% is
+  ~3% and isn't re-sent; 80% → 10% or 2% is. Segmented lights go as a scoped scene
+  apply (scope = the device key, cloud groups by color, no base seed — a whole
+  color would wipe the segments), so the pacing and the card's progress come with
+  it. It skips a light that's off, and a room running a light show or a storm
+  (they send their own colors); it waits while any scene apply is running (the
+  cloud limit is per account), which also fixes a look whose colors went out
+  before its new level. Memory only: after a restart nothing is known to be toned
+  until the next color is sent, so no re-tone happens before that. Scratch test
+  (19 checks, sends faked).
 - **`_CAL_GAMMA` is a guess:** the table is in LEVEL units, and how a Govee level
   maps to a color value wasn't measured; 2.2 matches `_scale_colors`. If blue
   still looks strong, lower it (1.0 = a straight multiply, much darker).
