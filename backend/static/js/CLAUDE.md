@@ -1660,7 +1660,7 @@ return the state from just before it and flip the card back. The page doesn't po
 Govee: the Pi does (v3.65.0, the background status check), and its `govee` SSE event
 triggers the usual debounced `loadAll`. Its interval is the "Check status" row
 (`GoveeStatusCheck`, app.js) at the top of Settings → Govee Devices. A defer answer saying the light
-was actually on (`was_on`, or a room's `live`) triggers the same Hue re-read. `calibration` (device key → `{white, color}`: the ct_correction + ct_rgb white calibrations and, v3.69.0, `govee_color_calibrated`) drives the ◐ "Calibrated" badges; the light card's details spell out which kind.
+was actually on (`was_on`, or a room's `live`) triggers the same Hue re-read. `calibration` (device key → `{white, color}`: the ct_correction + ct_rgb white calibrations and, v3.69.0, `govee_color_calibrated`) drives the ◐ "Calibrated" badges; the light card's details spell out which kind. The badge is a button (v3.70.0): `onOpenCalibration(deviceKey)` (app.js `openCalibration`, threaded through RoomSection) switches to Settings and sets `settingsFocus`; an effect scrolls `#settings-device-<key>` (set on every `SettingsDeviceRow`) to the middle and highlights it for 2.5s. That row carries the "◐ Calibrated colors" On/Off (`updateColorCalibration` → `POST /api/govee/color-calibration`); white balance only gets a pointer to White Calibration.
 - **Global master control (v3.4.0, backend-driven v3.43.0):** a bar under the nav
   (visible on every tab) with **just "All Off"**. `controlAll(on)` now makes ONE
   `POST /api/all/control` and paints the optimistic state locally; it used to issue

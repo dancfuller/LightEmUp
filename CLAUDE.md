@@ -502,7 +502,8 @@ All endpoints are under `/api/`. Key groups:
 - `/api/govee/color-calibration` — which Govee lights are "Calibrated" for color:
   some colors are brighter than others on them, so green → violet are sent toned
   down to match the Hue lights (v3.69.0, config key `govee_color_calibrated`; on for
-  the Hex Lights). Same ◐ badge as white-balance calibration. See
+  the Hex Lights). Same ◐ badge as white-balance calibration. On/Off per light in
+  Settings → Govee Devices; tapping a ◐ badge jumps there (v3.70.0). See
   `backend/CLAUDE.md` "Color calibration"
 - `/api/govee/segment-*` — per-segment mode and count config (the `segment-mode` one is
   the **lightning** scene's switch, not the color tool's)

@@ -1,6 +1,6 @@
 // ─── Light Card Component ───────────────────────────────────────────────────
 
-function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, onNicknameChange, roomName, segmentColors, segmentInfo, segmentBrightness, onSegmentStateRefresh, controlMode, onControlModeChange, segmentFillMode, onSegmentFillModeChange, onSegmentCountChange, calibration, onRecheck, isFavorite, onToggleFavorite, excluded, onToggleExclude }) {
+function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, onNicknameChange, roomName, segmentColors, segmentInfo, segmentBrightness, onSegmentStateRefresh, controlMode, onControlModeChange, segmentFillMode, onSegmentFillModeChange, onSegmentCountChange, calibration, onOpenCalibration, onRecheck, isFavorite, onToggleFavorite, excluded, onToggleExclude }) {
   const isMobile = useIsMobile();
   // An UNKNOWN level is unknown for both vendors (v3.51.6). It read as 0% for Hue
   // and 50% for Govee: two different, confident numbers for the same "we don't
@@ -210,10 +210,16 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
             }}
           >{isFavorite ? "★" : "☆"}</button>
         )}
+        {/* Tapping it opens Settings at this light, where calibration is turned on or off. */}
         {isCalibrated && (
-          <span title={`Calibrated\n${calibrationNotes.join("\n")}`} style={{
-            flexShrink: 0, fontSize: 13, color: "#fbbf24", lineHeight: 1, cursor: "default",
-          }}>&#x25D0;</span>
+          <button
+            onClick={(e) => { e.stopPropagation(); onOpenCalibration?.(deviceKey); }}
+            title={`Calibrated\n${calibrationNotes.join("\n")}${onOpenCalibration ? "\nTap to change it in Settings" : ""}`}
+            aria-label="Calibrated — open in Settings"
+            style={{
+              flexShrink: 0, fontSize: 13, color: "#fbbf24", lineHeight: 1, padding: "0 2px",
+              background: "none", border: "none", cursor: onOpenCalibration ? "pointer" : "default",
+            }}>&#x25D0;</button>
         )}
         {/* The OFFLINE badge is itself the recheck control. A Hue light on a wall
             switch reports unreachable while the switch is off; flip it back and the
@@ -589,7 +595,15 @@ function LightCard({ light, onControl, favorites, onFavoritesChange, nicknames, 
           {/* Spelled out here as well as in the ◐ badge's tooltip: a phone has no hover. */}
           {isCalibrated && (
             <div style={{ marginTop: 8 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: "#fbbf24" }}>&#x25D0; Calibrated</div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#fbbf24" }}>
+                &#x25D0; Calibrated
+                {onOpenCalibration && (
+                  <button onClick={(e) => { e.stopPropagation(); onOpenCalibration(deviceKey); }} style={{
+                    marginLeft: 8, padding: 0, background: "none", border: "none",
+                    color: "#a5b4fc", fontSize: 11, fontWeight: 600, cursor: "pointer",
+                  }}>Change in Settings →</button>
+                )}
+              </div>
               {calibrationNotes.map(n => (
                 <div key={n} style={{ fontSize: 11, color: "#94a3b8", marginTop: 2, lineHeight: 1.4 }}>{n}</div>
               ))}

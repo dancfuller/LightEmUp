@@ -84,6 +84,9 @@ a quarter to a third for green → violet, nothing at a room level of 2%.
   `GET/POST /api/govee/color-calibration {slug, enabled}`. On for the Hex Lights
   only. `/api/config` carries it; app.js folds it and the white calibrations into
   one `calibration` map (device key → `{white, color}`) for the badge.
+  **Turned on or off in Settings → Govee Devices** (v3.70.0): every responding
+  Govee row has a "◐ Calibrated colors" On/Off. Tapping a light's ◐ badge (or
+  "Change in Settings →" in its card details) opens Settings at that row.
 - **It's in the COLOR, not the level,** because Hex looks mix colors (orange +
   blue hexagons) and the light has one level. `govee_lan_color`,
   `govee_v2_segment_color` and `govee_v2_segments_color` are re-defined in main.py

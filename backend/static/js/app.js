@@ -186,7 +186,7 @@ function GoveeStatusCheck({ isMobile }) {
 // /identify), and inline nickname editing (reuses the same nickname API as the
 // light cards). `flashBody` is the /identify payload ({light_id} or {ip}); pass
 // null to hide Flash (e.g. unreachable/missing devices).
-function SettingsDeviceRow({ deviceKey, nickname, friendlyName, meta, statusColor, statusOpacity, statusLabel, flashBody, onNicknameChange, isMobile, dim, italicName, extra, segmentCount, sceneAddressValue, onSceneAddressChange }) {
+function SettingsDeviceRow({ deviceKey, nickname, friendlyName, meta, statusColor, statusOpacity, statusLabel, flashBody, onNicknameChange, isMobile, dim, italicName, extra, segmentCount, sceneAddressValue, onSceneAddressChange, highlight, whiteCalibrated, colorCalibrated, onColorCalibratedChange }) {
   const [editing, setEditing] = useState(false);
   const [val, setVal] = useState(nickname || "");
   const [flashing, setFlashing] = useState(false);
@@ -215,9 +215,12 @@ function SettingsDeviceRow({ deviceKey, nickname, friendlyName, meta, statusColo
   );
 
   return (
-    <div style={{
+    <div id={`settings-device-${deviceKey}`} style={{
       padding: "7px 0", borderBottom: "1px solid rgba(51,65,85,0.4)",
       opacity: dim ? 0.6 : 1,
+      /* Arrived here from a light's ◐ badge: mark the row it meant. */
+      background: highlight ? "rgba(251,191,36,0.12)" : "transparent",
+      transition: "background 0.8s",
     }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <span style={{
@@ -265,6 +268,38 @@ function SettingsDeviceRow({ deviceKey, nickname, friendlyName, meta, statusColo
           <span style={{ fontSize: 10, color: "#64748b" }}>
             {segmentCount} segments · also in the room's Scenes panel
           </span>
+        </div>
+      )}
+      {/* Color calibration (v3.69.0) is per light, on or off here. The tones
+          were measured on the Hex Lights; the note says so for any other light. */}
+      {onColorCalibratedChange && (
+        <div style={{ marginTop: 6, marginLeft: 14 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600 }}>&#x25D0; Calibrated colors</span>
+            <div style={{ display: "flex", gap: 2, background: "#0f172a", borderRadius: 6, padding: 2, border: "1px solid #1e293b" }}>
+              {[[true, "On"], [false, "Off"]].map(([on, label]) => (
+                <button key={label} onClick={() => on !== !!colorCalibrated && onColorCalibratedChange(on)}
+                  aria-pressed={on === !!colorCalibrated}
+                  style={{
+                    padding: "2px 10px", borderRadius: 5, border: "none", fontSize: 11, fontWeight: 600,
+                    cursor: "pointer",
+                    background: on === !!colorCalibrated ? (on ? "#b45309" : "#334155") : "transparent",
+                    color: on === !!colorCalibrated ? "#fff" : "#64748b",
+                  }}>{label}</button>
+              ))}
+            </div>
+          </div>
+          {colorCalibrated && <div style={{ fontSize: 10, color: "#64748b", marginTop: 3, lineHeight: 1.4 }}>
+            Some colors are brighter than others on this light, so green, blue and violet are
+            toned down to match the Hue lights. Measured on the Hex Lights. Takes effect on the
+            next color sent.
+          </div>}
+        </div>
+      )}
+      {whiteCalibrated && (
+        <div style={{ fontSize: 10, color: "#64748b", marginTop: 4, marginLeft: 14, lineHeight: 1.4 }}>
+          <span style={{ color: "#94a3b8", fontWeight: 600 }}>&#x25D0; White balance calibrated</span>
+          {" "}— its whites are corrected to match the Hue lights. Change it in White Calibration below.
         </div>
       )}
       {meta && (
@@ -458,6 +493,9 @@ function App() {
   for (const [s, on] of Object.entries(colorCalibrated)) {
     if (on) calibration[`govee:${s}`] = { ...calibration[`govee:${s}`], color: true };
   }
+  // Tapping a ◐ badge opens Settings at that light's row, where calibration is
+  // turned on or off. Held here until the Settings tab has rendered the row.
+  const [settingsFocus, setSettingsFocus] = useState(null);
   // deviceModes: persisted LightCard preference per device_key.
   // "whole" or "segments". Loaded from config, updated on toggle.
   const [deviceModes, setDeviceModes] = useState({});
@@ -1043,6 +1081,39 @@ function App() {
     }
   }, []);
 
+  const updateColorCalibration = useCallback(async (slug, enabled) => {
+    setColorCalibrated(prev => {
+      const next = { ...prev };
+      if (enabled) next[slug] = true; else delete next[slug];
+      return next;
+    });
+    try {
+      await api("/govee/color-calibration", {
+        method: "POST",
+        body: JSON.stringify({ slug, enabled }),
+      });
+    } catch (e) {
+      console.warn("Failed to save color calibration:", e);
+    }
+  }, []);
+
+  const openCalibration = useCallback((deviceKey) => {
+    setActiveTab("settings");
+    setSettingsFocus(deviceKey);
+  }, [setActiveTab]);
+
+  // setActiveTab scrolls to the top first; once the row exists, bring it to the
+  // middle of the screen and let its highlight fade.
+  useEffect(() => {
+    if (activeTab !== "settings" || !settingsFocus) return;
+    const raf = requestAnimationFrame(() => {
+      document.getElementById(`settings-device-${settingsFocus}`)
+        ?.scrollIntoView({ block: "center", behavior: "smooth" });
+    });
+    const t = setTimeout(() => setSettingsFocus(null), 2500);
+    return () => { cancelAnimationFrame(raf); clearTimeout(t); };
+  }, [activeTab, settingsFocus]);
+
   const updateSegmentFillMode = useCallback(async (deviceKey, mode) => {
     setSegmentFillModes(prev => ({ ...prev, [deviceKey]: mode }));
     try {
@@ -1528,7 +1599,7 @@ function App() {
         segmentFillMode={segmentFillModes?.[devKey]}
         onSegmentFillModeChange={(m) => updateSegmentFillMode && updateSegmentFillMode(devKey, m)}
         onSegmentCountChange={updateSegmentCount}
-        calibration={calibration} />
+        calibration={calibration} onOpenCalibration={openCalibration} />
     );
   };
 
@@ -1853,7 +1924,7 @@ function App() {
                   onReleaseExcluded={() => releaseExcluded(roomName)}
                   lastStatus={roomStatus[roomName]}
                   onReapply={reapplyRoom}
-                  calibration={calibration}
+                  calibration={calibration} onOpenCalibration={openCalibration}
                   onRecheck={recheckDevice}
                   onScheduleLook={handleScheduleLook}
                   onRoomWhite={roomWhite}
@@ -1877,7 +1948,7 @@ function App() {
                 }}
                 favorites={favoriteColors} onFavoritesChange={updateFavorites}
                 nicknames={nicknames} onNicknameChange={updateNickname}
-                calibration={calibration}
+                calibration={calibration} onOpenCalibration={openCalibration}
                 onRecheck={recheckDevice}
               />
             )}
@@ -2040,6 +2111,10 @@ function App() {
                         meta={meta}
                         statusColor="#4ade80" statusOpacity={0.8}
                         statusLabel={calibration?.[dk] ? "◐ calibrated" : null}
+                        highlight={settingsFocus === dk}
+                        whiteCalibrated={!!calibration?.[dk]?.white}
+                        colorCalibrated={!!calibration?.[dk]?.color}
+                        onColorCalibratedChange={(on) => updateColorCalibration(goveeSlug(device), on)}
                         flashBody={{ ip: device.ip, mac: device.mac }}
                         onNicknameChange={updateNickname} isMobile={isMobile}
                         /* Segmented devices get their scene addressing here, so
