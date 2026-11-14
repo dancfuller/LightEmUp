@@ -1290,6 +1290,16 @@ not in the browser (v2.14.0):
   off. A Govee bulb powers up at its last setting, so "silent, then back on" = it
   lost power (the lamppost's taped-over light sensor); "answered throughout, then
   on" = Google Home / Alexa / the Govee app. `grep "Govee status check"`.
+- **The cached list badges a silent light (v3.70.3).** `/discover/govee/cached` used
+  to mark every light `responding: True`. It's the first paint AND every
+  SSE-triggered reload, so a patio light silent since 11:00 showed no "not
+  responding" badge at night, and the badge the live scan put up vanished at the
+  next change anywhere. Now `_govee_known_silent(mac)`: silent per the status check
+  (`_govee_silent_since`) and not heard by a live scan since (`_govee_scan_heard`,
+  stamped for every light that replies to `/discover/govee`). The status check also
+  publishes `govee` when a light goes silent or comes back, so open pages repaint
+  the badge. Both dicts are memory only: after a restart every light reads answering
+  until the first check (≤ one interval).
 - **A command of LightEmUp's own that didn't land is not "outside" (v3.68.12).** If a
   light differs from `device_state` and LightEmUp's last command to it
   (`updated_at`) came after the PREVIOUS check started (`_govee_status_prev_at`),

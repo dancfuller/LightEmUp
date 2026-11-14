@@ -4359,6 +4359,7 @@ def _govee_cached_devices():
     devices = []
     for mac, entry in known.items():
         sku = entry.get("sku")
+        answering = not _govee_known_silent(mac)
         dev = {
             "ip": entry.get("ip"),
             "device": mac,
@@ -4367,9 +4368,9 @@ def _govee_cached_devices():
             "type": "govee",
             "name": entry.get("name") or sku or "Govee Device",
             "capabilities": {"has_color": True, "has_brightness": True, "has_segments": False},
-            "responding": True,
+            "responding": answering,
             "last_seen": entry.get("last_seen"),
-            "state": {"on": None, "brightness": None, "reachable": True},
+            "state": {"on": None, "brightness": None, "reachable": answering},
         }
         stored = device_state.get(gv_key(mac))
         if stored:
@@ -4449,6 +4450,20 @@ def _govee_status_minutes() -> int:
 # Govee app. Lives in memory only: a restart forgets an outage in progress.
 _govee_silent_since: dict = {}
 
+# When the live scan last heard each light (v3.70.3). The cached list is what the
+# page paints first AND what every SSE-triggered reload paints, so it used to call
+# every light answering: a light that had been silent since morning showed no
+# badge, and a badge the live scan put up vanished at the next change anywhere.
+# Now a light is "not responding" there when the status check found it silent and
+# no live scan has heard it since — the status check reads each light directly,
+# which the lossy broadcast scan can't overrule, but a reply to either is proof.
+_govee_scan_heard: dict = {}
+
+
+def _govee_known_silent(mac) -> bool:
+    since = _govee_silent_since.get(mac)
+    return since is not None and _govee_scan_heard.get(mac, 0) < since
+
 
 # When the previous check started (v3.68.12): a command LightEmUp sent after it
 # is one no check has seen yet. None until the first check after a restart.
@@ -4503,6 +4518,7 @@ async def _govee_status_check() -> dict:
         return {"at": _now_iso(), "skipped": "a lightning storm is running"}
     since, _govee_status_prev_at = _govee_status_prev_at, time.time()
     read, changed, missed, silent = 0, [], [], []
+    answering_changed = False      # a light went silent or came back: repaint badges
     for mac, info in list(_known_govee().items()):
         ip = info.get("ip")
         if not ip:
@@ -4516,6 +4532,7 @@ async def _govee_status_check() -> dict:
             silent.append(name)
             if mac not in _govee_silent_since:     # log the start of an outage once
                 _govee_silent_since[mac] = time.time()
+                answering_changed = True
                 log.info("Govee status check: %s stopped answering", name)
             continue
         read += 1
@@ -4532,6 +4549,7 @@ async def _govee_status_check() -> dict:
             else:
                 changed.append(f"{name}: {_govee_look(prev)} → {_govee_look(state)}")
         if gone_since is not None:
+            answering_changed = True
             log.info("Govee status check: %s answering again after %d min "
                      "(silent since %s), now %s", name,
                      round((time.time() - gone_since) / 60),
@@ -4540,7 +4558,7 @@ async def _govee_status_check() -> dict:
     if changed:
         log.info("Govee status check: %d changed outside LightEmUp (%s)",
                  len(changed), ", ".join(changed))
-    if changed or missed:
+    if changed or missed or answering_changed:
         publish_event("govee")
     return {"at": _now_iso(), "read": read, "changed": changed, "missed": missed,
             "silent": silent}
@@ -4667,8 +4685,11 @@ async def discover_govee():
     # fire-and-forget UDP to the stored IP, so these stay fully controllable —
     # the UI just badges them "not responding now". `missing` is still returned
     # for the Settings forget/re-scan affordance.
+    heard_at = time.time()
     for dev in devices:
         dev["responding"] = True
+        if dev.get("mac"):
+            _govee_scan_heard[dev["mac"]] = heard_at
 
     missing = []
     for mac, entry in known.items():
